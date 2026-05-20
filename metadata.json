@@ -1,0 +1,6 @@
+{
+  "name": "Sistema de Tickets y Turnos",
+  "description": "Sistema interactivo para la gestión de turnos, llamado de clientes por nombre y administración de cubículos de atención.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
