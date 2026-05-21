@@ -35,62 +35,134 @@ const INITIAL_CUBICLES: Cubicle[] = [
   },
   {
     id: "CUB-3",
-    name: "Caja 3 (Tríada y Fotografía)",
+    name: "Caja 3",
     agentName: "Carlos Sánchez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-4",
-    name: "Caja 4 (Tríada y Fotografía)",
+    name: "Caja 4",
     agentName: "Ana Rodríguez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-5",
-    name: "Caja 5 (Tríada y Fotografía)",
+    name: "Caja 5",
     agentName: "Pedro Gómez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-6",
-    name: "Caja 6 (Tríada y Fotografía)",
+    name: "Caja 6",
     agentName: "Sofía Díaz",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-7",
-    name: "Caja 7 (Tríada y Fotografía)",
+    name: "Caja 7",
     agentName: "Diego Torres",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-8",
-    name: "Caja 8 (Tríada y Fotografía)",
+    name: "Caja 8",
     agentName: "Camila Ríos",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.CAJA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-9",
+    name: "Caja 9",
+    agentName: "Mateo Vargas",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.CAJA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-10",
+    name: "Tríada / Foto 1",
+    agentName: "Lucas Silva",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
-    id: "CUB-9",
-    name: "Caja 9 (Tríada y Fotografía)",
-    agentName: "Mateo Vargas",
+    id: "CUB-11",
+    name: "Tríada / Foto 2",
+    agentName: "Elena Rocha",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-12",
+    name: "Tríada / Foto 3",
+    agentName: "Facundo Ortiz",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-13",
+    name: "Tríada / Foto 4",
+    agentName: "Valentina Luna",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-14",
+    name: "Tríada / Foto 5",
+    agentName: "Thiago Medina",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-15",
+    name: "Tríada / Foto 6",
+    agentName: "Isabella Castro",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-16",
+    name: "Tríada / Foto 7",
+    agentName: "Nicolás Peña",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-17",
+    name: "Tríada / Foto 8",
+    agentName: "Martina Paz",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
@@ -120,7 +192,12 @@ export function useTicketSystem() {
         setTickets(JSON.parse(storedTickets));
       }
       if (storedCubicles) {
-        setCubicles(JSON.parse(storedCubicles));
+        const parsed = JSON.parse(storedCubicles);
+        if (parsed.length !== INITIAL_CUBICLES.length) {
+          setCubicles(INITIAL_CUBICLES);
+        } else {
+          setCubicles(parsed);
+        }
       }
       if (storedAutoAssign !== null) {
         setIsAutoAssignActive(JSON.parse(storedAutoAssign));
