@@ -228,6 +228,25 @@ export default function WelcomeKiosk({ onCreateTicket }: WelcomeKioskProps) {
                     {new Date(printedTicket.createdAt).toLocaleTimeString()}
                   </span>
                 </div>
+                
+                {/* Visual indicator of the continuous workflow */}
+                <div className="mt-2.5 pt-2 border-t border-slate-200 text-center space-y-1">
+                  <span className="text-[8px] font-bold text-indigo-700 bg-indigo-50 px-1 py-0.5 tracking-wider uppercase inline-block">
+                    FLUJO SEGUIDO DE TURNOS
+                  </span>
+                  <div className="flex items-center justify-around text-[9px] font-bold pt-1 text-slate-800">
+                    <span className="bg-emerald-100 text-emerald-950 px-1">1. Caja</span>
+                    <span className="text-xs">➔</span>
+                    <span className="bg-cyan-100 text-cyan-950 px-1">2. Tríada</span>
+                    <span className="text-xs">➔</span>
+                    <span className="bg-purple-100 text-purple-950 px-1">3. Foto</span>
+                    <span className="text-xs">➔</span>
+                    <span className="bg-blue-100 text-blue-950 px-1">4. Trámite</span>
+                  </div>
+                  <p className="text-[7.5px] text-slate-500 uppercase">
+                    ¡Su mismo Ticket #{printedTicket.numberCode} continuará en cada paso!
+                  </p>
+                </div>
               </div>
 
               {/* Barcode representation */}

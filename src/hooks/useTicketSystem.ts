@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Ticket, TicketStatus, Cubicle, CubicleStatus, ServiceType, SERVICES_CONFIG } from "../types";
+import { Ticket, TicketStatus, TicketPhase, Cubicle, CubicleStatus, ServiceType, SERVICES_CONFIG } from "../types";
 import { announceAndCall } from "../utils/audio";
 
 const STORAGE_KEYS = {
@@ -17,34 +17,83 @@ const STORAGE_KEYS = {
 const INITIAL_CUBICLES: Cubicle[] = [
   {
     id: "CUB-1",
-    name: "Cubículo 1 (Caja & Soporte)",
+    name: "Caja 1",
     agentName: "Juan Pérez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedServices: [ServiceType.CAJA, ServiceType.SOPORTE],
+    supportedPhases: [TicketPhase.CAJA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-2",
-    name: "Cubículo 2 (Caja & Asesoría)",
+    name: "Caja 2",
     agentName: "Laura Martínez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedServices: [ServiceType.CAJA, ServiceType.ASESORIA],
+    supportedPhases: [TicketPhase.CAJA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-3",
-    name: "Cubículo 3 (Asesoría & Reclamos)",
+    name: "Caja 3 (Tríada y Fotografía)",
     agentName: "Carlos Sánchez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedServices: [ServiceType.ASESORIA, ServiceType.RECLAMOS],
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-4",
-    name: "Cubículo 4 (Soporte & Reclamos)",
+    name: "Caja 4 (Tríada y Fotografía)",
     agentName: "Ana Rodríguez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedServices: [ServiceType.SOPORTE, ServiceType.RECLAMOS],
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-5",
+    name: "Caja 5 (Tríada y Fotografía)",
+    agentName: "Pedro Gómez",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-6",
+    name: "Caja 6 (Tríada y Fotografía)",
+    agentName: "Sofía Díaz",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-7",
+    name: "Caja 7 (Tríada y Fotografía)",
+    agentName: "Diego Torres",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-8",
+    name: "Caja 8 (Tríada y Fotografía)",
+    agentName: "Camila Ríos",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-9",
+    name: "Caja 9 (Tríada y Fotografía)",
+    agentName: "Mateo Vargas",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   }
 ];
@@ -132,6 +181,8 @@ export function useTicketSystem() {
       name: cleanName,
       serviceType,
       status: TicketStatus.WAITING,
+      currentPhase: TicketPhase.CAJA,
+      phaseHistory: [{ phase: TicketPhase.CAJA, timestamp: Date.now() }],
       createdAt: Date.now(),
       priority
     };
@@ -154,11 +205,11 @@ export function useTicketSystem() {
       return;
     }
 
-    // Get all candidates that are in WAITING status and whose serviceType is supported by this cubicle
-    const candidates = tickets.filter(t => 
-      t.status === TicketStatus.WAITING && 
-      targetCubicle.supportedServices.includes(t.serviceType)
-    );
+    // Get all candidates that are in WAITING status and whose currentPhase is supported by this cubicle
+    const candidates = tickets.filter(t => {
+      if (t.status !== TicketStatus.WAITING) return false;
+      return targetCubicle.supportedPhases.includes(t.currentPhase);
+    });
 
     if (candidates.length === 0) return;
 
@@ -171,10 +222,54 @@ export function useTicketSystem() {
 
     const chosenTicket = candidates[0];
 
-    // If there was an existing ticket being attended at this cubicle, transition it to COMPLETED first
+    // If there was an existing ticket being attended at this cubicle, transition/complete it first based on phase pipeline
     let updatedTickets = tickets.map(t => {
       if (t.assignedCubicleId === cubicleId && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING)) {
-        return { ...t, status: TicketStatus.COMPLETED, completedAt: Date.now() };
+        let nextPhase: TicketPhase | null = null;
+        let nextStatus = TicketStatus.WAITING;
+        let finalCompletedAt: number | undefined = undefined;
+
+        if (t.currentPhase === TicketPhase.CAJA) {
+          nextPhase = TicketPhase.TRIADA;
+        } else {
+          nextStatus = TicketStatus.COMPLETED;
+          finalCompletedAt = Date.now();
+        }
+
+        const updatedHistory = t.phaseHistory.map(h => {
+          if (h.phase === t.currentPhase && !h.completedAt) {
+            return {
+              ...h,
+              completedAt: Date.now(),
+              cubicleId: cubicleId,
+              agentName: targetCubicle.agentName
+            };
+          }
+          return h;
+        });
+
+        if (nextPhase) {
+          updatedHistory.push({
+            phase: nextPhase,
+            timestamp: Date.now()
+          });
+          return {
+            ...t,
+            currentPhase: nextPhase,
+            status: nextStatus,
+            phaseHistory: updatedHistory,
+            assignedCubicleId: undefined,
+            calledAt: undefined
+          };
+        } else {
+          return {
+            ...t,
+            status: nextStatus,
+            completedAt: finalCompletedAt,
+            phaseHistory: updatedHistory,
+            assignedCubicleId: undefined
+          };
+        }
       }
       return t;
     });
@@ -231,7 +326,55 @@ export function useTicketSystem() {
 
     setTickets(prev => prev.map(t => {
       if (t.id === targetCubicle.currentTicketId) {
-        return { ...t, status: TicketStatus.COMPLETED, completedAt: Date.now() };
+        let nextPhase: TicketPhase | null = null;
+        let nextStatus = TicketStatus.WAITING;
+        let finalCompletedAt: number | undefined = undefined;
+
+        if (t.currentPhase === TicketPhase.CAJA) {
+          nextPhase = TicketPhase.TRIADA;
+        } else {
+          // TRIADA is final step
+          nextStatus = TicketStatus.COMPLETED;
+          finalCompletedAt = Date.now();
+        }
+
+        // Close the current phase history object
+        const updatedHistory = t.phaseHistory.map(h => {
+          if (h.phase === t.currentPhase && !h.completedAt) {
+            return {
+              ...h,
+              completedAt: Date.now(),
+              cubicleId: cubicleId,
+              agentName: targetCubicle.agentName
+            };
+          }
+          return h;
+        });
+
+        if (nextPhase) {
+          // Add the next phase to the history
+          updatedHistory.push({
+            phase: nextPhase,
+            timestamp: Date.now()
+          });
+          
+          return {
+            ...t,
+            currentPhase: nextPhase,
+            status: nextStatus,
+            phaseHistory: updatedHistory,
+            assignedCubicleId: undefined, // Clear assignment so others can call it
+            calledAt: undefined
+          };
+        } else {
+          return {
+            ...t,
+            status: nextStatus,
+            completedAt: finalCompletedAt,
+            phaseHistory: updatedHistory,
+            assignedCubicleId: undefined
+          };
+        }
       }
       return t;
     }));
@@ -310,6 +453,20 @@ export function useTicketSystem() {
     }
   }, []);
 
+  // Configures cubicle capabilities dynamically
+  const updateCubicleConfig = useCallback((cubicleId: string, supportedPhases: TicketPhase[], supportedServices: ServiceType[]) => {
+    setCubicles(prev => prev.map(c => {
+      if (c.id === cubicleId) {
+        return {
+          ...c,
+          supportedPhases,
+          supportedServices
+        };
+      }
+      return c;
+    }));
+  }, []);
+
   // Auto Assignment Engine Logic
   const triggerAutoAssignment = useCallback(async (
     currentTickets: Ticket[],
@@ -327,10 +484,10 @@ export function useTicketSystem() {
       }
 
       // Find best candidate for this cubicle
-      const candidates = updatedTickets.filter(t => 
-        t.status === TicketStatus.WAITING && 
-        cubicle.supportedServices.includes(t.serviceType)
-      );
+      const candidates = updatedTickets.filter(t => {
+        if (t.status !== TicketStatus.WAITING) return false;
+        return cubicle.supportedPhases.includes(t.currentPhase);
+      });
 
       if (candidates.length === 0) continue;
 
@@ -403,10 +560,10 @@ export function useTicketSystem() {
     if (!firstFreeCubicle) return;
 
     // Check if there's any WAITING ticket supportable by that cubicle
-    const hasCompatibleWaitingTicket = tickets.some(t => 
-      t.status === TicketStatus.WAITING && 
-      firstFreeCubicle.supportedServices.includes(t.serviceType)
-    );
+    const hasCompatibleWaitingTicket = tickets.some(t => {
+      if (t.status !== TicketStatus.WAITING) return false;
+      return firstFreeCubicle.supportedPhases.includes(t.currentPhase);
+    });
 
     if (!hasCompatibleWaitingTicket) return;
 
@@ -424,10 +581,10 @@ export function useTicketSystem() {
       ];
       
       const services = [
-        ServiceType.CAJA,
-        ServiceType.ASESORIA,
-        ServiceType.SOPORTE,
-        ServiceType.RECLAMOS
+        ServiceType.ELECTORAL,
+        ServiceType.REGISTRO,
+        ServiceType.CEDULACION,
+        ServiceType.EXTRANJERIA
       ];
 
       const generateArrival = () => {
@@ -473,6 +630,7 @@ export function useTicketSystem() {
     markTicketAsMissed,
     recallCurrentTicket,
     changeCubicleStatus,
+    updateCubicleConfig,
     resetSystem
   };
 }

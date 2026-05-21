@@ -45,6 +45,7 @@ export default function App() {
     markTicketAsMissed,
     recallCurrentTicket,
     changeCubicleStatus,
+    updateCubicleConfig,
     resetSystem
   } = useTicketSystem();
 
@@ -72,10 +73,10 @@ export default function App() {
     ];
 
     const randomServices = [
-      ServiceType.CAJA,
-      ServiceType.ASESORIA,
-      ServiceType.SOPORTE,
-      ServiceType.RECLAMOS
+      ServiceType.ELECTORAL,
+      ServiceType.REGISTRO,
+      ServiceType.CEDULACION,
+      ServiceType.EXTRANJERIA
     ];
 
     const randomName = randomNames[Math.floor(Math.random() * randomNames.length)];
@@ -274,6 +275,7 @@ export default function App() {
                     onMiss={markTicketAsMissed}
                     onRecall={recallCurrentTicket}
                     onChangeStatus={changeCubicleStatus}
+                    onUpdateCubicleConfig={updateCubicleConfig}
                   />
                 </div>
 
@@ -330,6 +332,7 @@ export default function App() {
               onMiss={markTicketAsMissed}
               onRecall={recallCurrentTicket}
               onChangeStatus={changeCubicleStatus}
+              onUpdateCubicleConfig={updateCubicleConfig}
             />
           </div>
         )}
