@@ -100,25 +100,13 @@ export default function App() {
       <header className="max-w-7xl mx-auto w-full px-4 md:px-8 pt-6 space-y-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
           
-          <div className="flex items-center gap-4 pl-1">
-            <div className="w-12 h-12 bg-[#122e70] flex items-center justify-center shrink-0 text-white rounded font-sans font-black text-xl shadow-md border border-amber-400 select-none">
-              <span>T</span>
-              <span className="text-amber-400 ml-0.5">E</span>
-            </div>
-            
-            <div className="space-y-0.5">
-              <p className="text-[9px] text-[#122e70] font-black uppercase tracking-wider font-sans leading-none mb-0.5">
-                TRÁMITES OFICIALES
-              </p>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base md:text-xl font-black tracking-tight text-[#122e70] uppercase">
-                  TRIBUNAL ELECTORAL DE PANAMÁ
-                </h1>
-                <span className="hidden sm:inline-block px-1.5 py-0.5 text-[8.5px] font-mono tracking-widest bg-blue-100 text-[#122e70] font-extrabold rounded">
-                  TURNO EXPRESS
-                </span>
-              </div>
-            </div>
+          <div className="flex items-center pl-1">
+            <img 
+              src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/04/WhatsApp-Image-2026-04-30-at-09.45.35.png" 
+              referrerPolicy="no-referrer" 
+              alt="Tribunal Electoral de Panamá" 
+              className="h-16 md:h-20 w-auto object-contain" 
+            />
           </div>
 
           {/* Test Chime and Alerts quick bar */}

@@ -194,7 +194,13 @@ export default function WelcomeKiosk({ onCreateTicket }: WelcomeKioskProps) {
             >
               <div className="absolute top-0 left-0 right-0 h-2 bg-[#122e70] animate-pulse" />
               
-              <div className="text-center pb-3 border-b-2 border-dashed border-slate-200 mt-2">
+              <div className="text-center pb-3 border-b-2 border-dashed border-slate-200 mt-4 flex flex-col items-center justify-center">
+                <img 
+                  src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/04/WhatsApp-Image-2026-04-30-at-09.45.35.png" 
+                  referrerPolicy="no-referrer" 
+                  alt="Tribunal Electoral de Panamá Logo" 
+                  className="h-12 w-auto object-contain mb-2.5" 
+                />
                 <h4 className="font-extrabold text-sm uppercase tracking-wider text-slate-900">TICKET DE TURNO</h4>
                 <p className="text-[9px] text-slate-400 uppercase tracking-widest mt-0.5 font-bold">SISTEMA CONTROL DIGITAL</p>
               </div>
@@ -227,24 +233,7 @@ export default function WelcomeKiosk({ onCreateTicket }: WelcomeKioskProps) {
                   </span>
                 </div>
                 
-                {/* Visual indicator of the continuous workflow */}
-                <div className="mt-2.5 pt-2.5 border-t border-slate-100 text-center space-y-1.5 bg-slate-50/50 p-2 rounded-lg">
-                  <span className="text-[8px] font-black text-[#122e70] bg-blue-50 px-2 py-0.5 tracking-wider uppercase inline-block rounded">
-                    SISTEMA MULTI-TRÁMITE
-                  </span>
-                  <div className="flex items-center justify-around text-[9px] font-bold py-1 text-slate-800">
-                    <span className="bg-emerald-100 text-emerald-950 px-1 rounded">1. Pago</span>
-                    <span className="text-xs text-slate-450 font-normal">➔</span>
-                    <span className="bg-cyan-100 text-cyan-950 px-1 rounded">2. Filtro</span>
-                    <span className="text-xs text-slate-450 font-normal">➔</span>
-                    <span className="bg-purple-100 text-purple-950 px-1 rounded">3. Firma</span>
-                    <span className="text-xs text-slate-450 font-normal">➔</span>
-                    <span className="bg-blue-100 text-blue-950 px-1 rounded">4. Entrega</span>
-                  </div>
-                  <p className="text-[7.5px] text-slate-400 uppercase font-bold leading-normal">
-                    ¡Su mismo Ticket #{printedTicket.numberCode} continuará en cada paso!
-                  </p>
-                </div>
+
               </div>
 
               {/* Barcode representation */}
