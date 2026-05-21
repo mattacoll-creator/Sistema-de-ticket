@@ -51,7 +51,26 @@ export default function AgentConsole({
   const [activeRoleFilter, setActiveRoleFilter] = useState<TicketPhase>(TicketPhase.CAJA);
   const [showConfig, setShowConfig] = useState<boolean>(false);
 
-  const currentCubicle = cubicles.find(c => c.id === activeCubicleId) || cubicles[0];
+  // Guarantee we filter cubicles for active selection:
+  const filteredRoleCubicles = cubicles.filter(c => {
+    if (activeRoleFilter === TicketPhase.CAJA) {
+      // Show ONLY cashiers (Booths with CAJA phase supported, or booths named "Caja")
+      return c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja");
+    } else {
+      // Show ONLY triads (Booths with TRIADA phase supported, or booths named "Tríada" / "Foto")
+      return c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("foto") || c.name.toLowerCase().includes("triada");
+    }
+  });
+
+  // Ensure current cubicle is valid based on selection
+  let currentCubicle = filteredRoleCubicles.find(c => c.id === activeCubicleId);
+  if (!currentCubicle && filteredRoleCubicles.length > 0) {
+    currentCubicle = filteredRoleCubicles[0];
+  }
+  if (!currentCubicle) {
+    currentCubicle = cubicles.find(c => c.id === activeCubicleId) || cubicles[0];
+  }
+
   const activeTicket = tickets.find(t => t.id === currentCubicle.currentTicketId);
 
   // Filter candidates waiting that can be processed by this agent (supports current phase)
@@ -92,101 +111,106 @@ export default function AgentConsole({
   };
 
   return (
-    <div id="agent-console-panel" className="bg-white dark:bg-slate-900 border-4 border-slate-900 dark:border-slate-800 rounded-none p-8 flex flex-col justify-between h-full min-h-[720px] shadow-lg">
+    <div id="agent-console-panel" className="bg-white border border-slate-250 rounded-2xl p-8 flex flex-col justify-between h-full min-h-[820px] shadow-sm">
       <div className="space-y-6">
         {/* Panel Header */}
-        <div className="flex items-center justify-between border-b-4 border-slate-900 dark:border-slate-800 pb-5">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-5">
           <div className="flex items-center gap-4">
-            <div className="p-3.5 bg-indigo-600 text-white rounded-none shadow-md">
+            <div className="p-3.5 bg-[#122e70] text-white rounded-xl shadow-sm">
               <UserCheck className="w-7 h-7" />
             </div>
             <div>
-              <h3 className="text-xl font-black uppercase tracking-widest text-slate-900 dark:text-slate-100">
+              <h3 className="text-xl font-black uppercase tracking-widest text-slate-900">
                 Consola del Operador
               </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest mt-1">Control de Módulos</p>
+              <p className="text-xs text-slate-400 font-extrabold uppercase tracking-widest mt-1">SISTEMA INTEGRAL DE LLAMADAS</p>
             </div>
           </div>
-          <span className="px-3.5 py-1.5 text-xs uppercase font-mono bg-slate-900 text-white dark:bg-slate-800 dark:text-slate-200 border-2 border-slate-900 font-black tracking-widest">
+          <span className="px-3.5 py-1.5 text-xs uppercase font-mono bg-slate-900 text-white border border-slate-900 font-black tracking-widest rounded-lg">
             SALA / GESTIÓN
           </span>
         </div>
 
-        {/* SELECCIÓN DE ROL DE OPERADOR (ARRIBA) */}
-        <div className="space-y-3 bg-indigo-50/30 dark:bg-indigo-950/20 p-4 border-4 border-slate-900 dark:border-slate-800 rounded-none shadow-inner">
-          <label className="block text-xs uppercase tracking-widest font-black text-indigo-700 dark:text-indigo-400">
-            Filtro Principal: Rol del Operador
-          </label>
-          <div className="flex gap-3">
+        {/* PROMINENT ROLE INDICATOR & SELECTION BUTTONS AT THE TOP */}
+        <div className="space-y-3 bg-blue-50/30 p-5 border border-blue-100 rounded-2xl shadow-sm">
+          <div className="flex items-center justify-between">
+            <label className="block text-[11px] uppercase tracking-widest font-black text-[#122e70] font-mono">
+              ★ ROL SELECCIONADO DE ATENCIÓN (FILTRO GLOBAL DE MÓDULOS) ★
+            </label>
+            <span className="text-[10px] bg-[#122e70] text-white px-2 py-0.5 rounded-md font-black">ACTIVO</span>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
             <button
               id="role-filter-caja"
               type="button"
               onClick={() => {
                 setActiveRoleFilter(TicketPhase.CAJA);
-                const firstCaja = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.CAJA));
+                // Default to first matching modulo
+                const firstCaja = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja"));
                 if (firstCaja) setActiveCubicleId(firstCaja.id);
               }}
-              className={`flex-1 py-3.5 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all border-4 text-center cursor-pointer ${
+              className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center cursor-pointer border ${
                 activeRoleFilter === TicketPhase.CAJA
-                  ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[1.02]"
-                  : "bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-400 border-slate-300 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
+                  : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
               }`}
             >
-              🏧 RECEPCIÓN Y CAJA
+              🏧 VER SÓLO CAJAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja")).length})
             </button>
             <button
               id="role-filter-triada"
               type="button"
               onClick={() => {
                 setActiveRoleFilter(TicketPhase.TRIADA);
-                const firstTriada = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.TRIADA));
+                // Default to first matching modulo 
+                const firstTriada = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada"));
                 if (firstTriada) setActiveCubicleId(firstTriada.id);
               }}
-              className={`flex-1 py-3.5 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all border-4 text-center cursor-pointer ${
+              className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center cursor-pointer border ${
                 activeRoleFilter === TicketPhase.TRIADA
-                  ? "bg-indigo-600 text-white border-indigo-700 shadow-md scale-[1.02]"
-                  : "bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-400 border-slate-300 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
+                  : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
               }`}
             >
-              📸 TRÍADA & FOTOGRAFÍA
+              📸 VER SÓLO TRÍADAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada")).length})
             </button>
           </div>
         </div>
 
-        {/* CUBICLE SIMULATION SELECTOR TABS */}
+        {/* CUBICLE SELECTOR FOR FILTERED ROLE */}
         <div className="space-y-2">
-          <label className="block text-xs uppercase tracking-widest font-black text-slate-500 dark:text-slate-400">
-            Módulo Activo en Pantalla ({activeRoleFilter === TicketPhase.CAJA ? "CAJAS OPERATIVAS" : "MÓDULOS DE TRÍADA/FOTO"}):
+          <label className="block text-xs uppercase tracking-widest font-black text-slate-500 font-mono">
+            Módulos del Operador Disponibles:
           </label>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 bg-slate-100 dark:bg-slate-950 p-2 rounded-none border-2 border-slate-400 dark:border-slate-800">
-            {cubicles
-              .filter((c) => c.supportedPhases?.includes(activeRoleFilter))
-              .map((c) => {
+          
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 shadow-inner">
+            {filteredRoleCubicles.map((c) => {
               const isActive = c.id === activeCubicleId;
               return (
                 <button
                   id={`btn-select-agent-${c.id.toLowerCase()}`}
                   key={c.id}
                   onClick={() => setActiveCubicleId(c.id)}
-                  className={`text-left p-3.5 rounded-none border-2 transition-all cursor-pointer ${
+                  className={`text-left p-4 rounded-xl border transition-all cursor-pointer ${
                     isActive
-                      ? "bg-slate-900 dark:bg-slate-850 text-white border-slate-900 font-extrabold shadow-sm scale-[1.01]"
-                      : "hover:bg-slate-200 dark:hover:bg-slate-900 text-slate-700 dark:text-slate-300 border-transparent bg-white/40 dark:bg-black/10"
+                      ? "bg-slate-900 text-white border-slate-900 font-black shadow-md scale-[1.02]"
+                      : "hover:bg-slate-200 text-slate-700 border-slate-200 bg-white"
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-1 truncate uppercase tracking-widest text-[11px] font-black">
+                  <div className="flex items-center justify-between gap-1.5 truncate uppercase tracking-wider text-[11px] font-black">
                     <span className="truncate">{c.name.toUpperCase()}</span>
-                    <span className={`w-3.5 h-3.5 rounded-full outline outline-2 outline-white dark:outline-slate-900 shrink-0 ${
+                    <span className={`w-3 h-3 rounded-full outline outline-2 outline-white shrink-0 ${
                       c.status === CubicleStatus.ONLINE_AVAILABLE 
                         ? "bg-emerald-500 animate-pulse" 
                         : c.status === CubicleStatus.ATTENDING
-                          ? "bg-indigo-500"
+                          ? "bg-blue-600"
                           : c.status === CubicleStatus.BREAK
                             ? "bg-amber-500"
-                            : "bg-red-500"
+                            : "bg-rose-500"
                     }`} />
                   </div>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold truncate mt-1.5 uppercase tracking-wide">AGENTE: {c.agentName.toUpperCase()}</p>
+                  <p className="text-[10px] text-slate-550 font-bold truncate mt-1.5 uppercase tracking-wide">AGENTE: {c.agentName.toUpperCase()}</p>
                 </button>
               );
             })}
@@ -194,12 +218,12 @@ export default function AgentConsole({
         </div>
 
         {/* AGENT STATE CARD & CONFIGURATOR */}
-        <div className="space-y-4">
-          <div className="bg-slate-50 dark:bg-slate-950 p-4 border-2 border-slate-900 dark:border-slate-800 flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
+        <div className="space-y-4 pt-2">
+          <div className="bg-slate-50 p-4 border border-slate-200 rounded-xl flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between shadow-sm">
             <div className="space-y-1">
               <span className="text-[9px] uppercase font-mono tracking-widest text-slate-400 block font-black">MÓDULO SELECCIONADO:</span>
-              <p className="text-sm font-black text-slate-900 dark:text-slate-105 uppercase tracking-wider">
-                {currentCubicle.name} &bull; AGENTE {currentCubicle.agentName}
+              <p className="text-sm font-black text-slate-900 uppercase tracking-wider leading-none">
+                {currentCubicle.name} • AGENTE {currentCubicle.agentName}
               </p>
             </div>
 
@@ -207,26 +231,24 @@ export default function AgentConsole({
               <button
                 id="btn-status-available"
                 onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.ONLINE_AVAILABLE)}
-                className={`px-3.5 py-2 rounded-none border-2 text-[11px] uppercase font-black tracking-widest flex items-center gap-2 cursor-pointer transition-all ${
+                className={`px-3.5 py-2.5 rounded-xl border text-[11px] uppercase font-black tracking-widest flex items-center gap-1.5 cursor-pointer transition-all ${
                   currentCubicle.status === CubicleStatus.ONLINE_AVAILABLE || currentCubicle.status === CubicleStatus.ATTENDING
                     ? "bg-emerald-600 text-white border-emerald-700 shadow-sm"
-                    : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-800 text-slate-505 dark:text-slate-400 hover:bg-slate-100"
+                    : "bg-white border-slate-250 text-slate-600 hover:bg-slate-100"
                 }`}
-                title="Disponible"
               >
                 <span className="w-2 h-2 rounded-full bg-white antialiased" />
-                <span>ACTIVO</span>
+                <span>DISPONIBLE</span>
               </button>
 
               <button
                 id="btn-status-break"
                 onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.BREAK)}
-                className={`px-3.5 py-2 rounded-none border-2 text-[11px] uppercase font-black tracking-widest flex items-center gap-2 cursor-pointer transition-all ${
+                className={`px-3.5 py-2.5 rounded-xl border text-[11px] uppercase font-black tracking-widest flex items-center gap-1.5 cursor-pointer transition-all ${
                   currentCubicle.status === CubicleStatus.BREAK
                     ? "bg-amber-500 text-white border-amber-600 shadow-sm"
-                    : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-800 text-slate-505 dark:text-slate-400 hover:bg-slate-100"
+                    : "bg-white border-slate-255 text-slate-600 hover:bg-slate-100"
                 }`}
-                title="Pausa"
               >
                 <span>RECESO</span>
               </button>
@@ -234,39 +256,38 @@ export default function AgentConsole({
               <button
                 id="btn-status-offline"
                 onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.OFFLINE)}
-                className={`px-3.5 py-2 rounded-none border-2 text-[11px] uppercase font-black tracking-widest flex items-center gap-2 cursor-pointer transition-all ${
+                className={`px-3.5 py-2.5 rounded-xl border text-[11px] uppercase font-black tracking-widest flex items-center gap-1.5 cursor-pointer transition-all ${
                   currentCubicle.status === CubicleStatus.OFFLINE
                     ? "bg-rose-600 text-white border-rose-700 shadow-sm"
-                    : "bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-800 text-slate-505 dark:text-slate-400 hover:bg-slate-100"
+                    : "bg-white border-slate-250 text-slate-600 hover:bg-slate-105"
                 }`}
-                title="Fuera de línea"
               >
-                <span>OUT</span>
+                <span>LOGOUT</span>
               </button>
             </div>
           </div>
 
           {/* DYNAMIC ROLE CONFIGURATOR */}
-          <div className="border-2 border-slate-900 dark:border-slate-800 p-4 bg-slate-50 dark:bg-slate-950 space-y-3.5 shadow-inner">
-            <div className="flex items-center justify-between border-b pb-2.5 border-slate-200 dark:border-slate-800">
+          <div className="border border-slate-200 p-4 bg-slate-50 rounded-xl space-y-3 shadow-sm">
+            <div className="flex items-center justify-between border-b pb-2.5 border-slate-200">
               <div>
-                <span className="text-xs font-black uppercase tracking-widest text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <span className="text-xs font-black uppercase tracking-widest text-slate-900 flex items-center gap-2">
                   <Settings className="w-4.5 h-4.5 text-indigo-500" />
-                  PERMISO Y ROL DE ATENCIÓN DE CABINA
+                  CONFIGURACIÓN DE TRÁMITES DE LA CABINA
                 </span>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 uppercase tracking-wider font-extrabold">Configuración local del hardware de llamada</p>
+                <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wider font-extrabold font-mono">GESTIÓN INTERNA DE FILAS</p>
               </div>
               <button 
                 type="button"
                 onClick={() => setShowConfig(!showConfig)}
-                className="text-xs font-black text-indigo-600 dark:text-indigo-400 hover:underline uppercase cursor-pointer"
+                className="text-xs font-black text-[#122e70] hover:underline uppercase cursor-pointer"
               >
                 {showConfig ? "Ocultar panel" : "Ver opciones"}
               </button>
             </div>
 
             <div className="space-y-2">
-              <span className="text-[10px] uppercase font-mono tracking-widest text-slate-400 block font-black">Fases Habilitadas:</span>
+              <span className="text-[10px] uppercase font-mono tracking-widest text-slate-400 block font-black">Fases Habilitadas en este Módulo:</span>
               <div className="flex flex-wrap gap-2">
                 {Object.values(PHASES_CONFIG).map((phase) => {
                   const isActive = (currentCubicle.supportedPhases || []).includes(phase.id);
@@ -275,10 +296,10 @@ export default function AgentConsole({
                       key={phase.id}
                       type="button"
                       onClick={() => handleTogglePhase(phase.id)}
-                      className={`px-3.5 py-2 text-[11px] font-black border-2 tracking-wider uppercase cursor-pointer transition-all ${
+                      className={`px-3.5 py-2 text-[11px] font-black border tracking-wider uppercase cursor-pointer transition-all rounded-lg ${
                         isActive 
-                          ? `${phase.color} font-black border-slate-900 shadow-sm` 
-                          : "bg-white dark:bg-slate-900 text-slate-400 border-slate-250 dark:border-slate-800 hover:text-slate-700 dark:hover:text-slate-250"
+                          ? `${phase.color} font-black border-blue-300 shadow-sm` 
+                          : "bg-white text-slate-400 border-slate-200 hover:text-slate-700 hover:bg-slate-100"
                       }`}
                     >
                       {isActive ? "✓ " : ""}
@@ -290,7 +311,7 @@ export default function AgentConsole({
             </div>
 
             {showConfig && (
-              <div className="space-y-3 pt-3 border-t-2 border-slate-300 dark:border-slate-800">
+              <div className="space-y-3 pt-3 border-t border-slate-200">
                 <span className="text-[10px] uppercase font-mono tracking-widest text-slate-400 block font-black">
                   Trámites Soportados en Pantalla:
                 </span>
@@ -302,14 +323,14 @@ export default function AgentConsole({
                         key={service.id}
                         type="button"
                         onClick={() => handleToggleService(service.id)}
-                        className={`px-3 py-2 text-xs text-left font-black tracking-wider uppercase border-2 cursor-pointer flex items-center justify-between transition-all ${
+                        className={`px-3 py-2 text-xs text-left font-black tracking-wider uppercase border rounded-lg cursor-pointer flex items-center justify-between transition-all ${
                           isActive 
-                            ? "bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 border-indigo-505" 
-                            : "bg-white dark:bg-slate-900 text-slate-400 border-slate-200 dark:border-slate-800 hover:text-slate-600"
+                            ? "bg-blue-50 text-[#122e70] border-blue-200" 
+                            : "bg-white text-slate-400 border-slate-200 hover:text-slate-655"
                         }`}
                       >
                         <span className="truncate">{service.name}</span>
-                        <span className="text-[10px] px-2 py-0.5 bg-slate-200 dark:bg-slate-800 text-slate-505 font-mono font-black border">
+                        <span className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-600 font-mono font-black border border-slate-200 rounded">
                           {isActive ? "SÍ" : "NO"}
                         </span>
                       </button>
@@ -322,41 +343,41 @@ export default function AgentConsole({
         </div>
 
         {/* ACTIVE TICKET IN PROGRESS CARD */}
-        <div className="space-y-2">
-          <span className="block text-xs uppercase font-black tracking-widest text-slate-500">Trámite Activo en Curso</span>
+        <div className="space-y-2 pt-2">
+          <span className="block text-xs uppercase font-black tracking-widest text-slate-500 font-mono">Trámite Activo en Curso</span>
           
           {activeTicket ? (
-            <div className="bg-indigo-50/40 dark:bg-indigo-950/20 border-4 border-indigo-600 p-6 rounded-none space-y-4 relative overflow-hidden shadow-md">
-              <div className="absolute top-0 right-0 p-4 text-[10px] uppercase text-indigo-700 dark:text-indigo-400 font-black tracking-widest font-mono">
-                {activeTicket.status === TicketStatus.CALLING ? "🛎️ ESTADO: LLAMANDO" : "🎙️ ESTADO: ATENDIENDO"}
+            <div className="bg-blue-50/20 border-2 border-[#122e70] p-6 rounded-2xl space-y-4 relative overflow-hidden shadow-sm">
+              <div className="absolute top-0 right-0 p-4 text-[10px] uppercase text-[#122e70] font-black tracking-widest font-mono">
+                {activeTicket.status === TicketStatus.CALLING ? "🛎️ LLAMANDO CLIENTE" : "🎙️ ATENDIENDO CLIENTE"}
               </div>
 
               <div className="flex items-start gap-4 pt-4">
-                <div className="px-5 py-3.5 bg-indigo-600 text-white rounded-none font-mono font-black text-3xl shadow-md border-2 border-indigo-700 select-none">
+                <div className="px-5 py-3.5 bg-[#122e70] text-white rounded-xl font-mono font-black text-3xl shadow-sm select-none">
                   {activeTicket.numberCode}
                 </div>
                 <div className="space-y-1">
-                  <h4 className="text-lg font-black uppercase text-slate-900 dark:text-white leading-tight">
+                  <h4 className="text-xl font-black uppercase text-slate-900 leading-tight">
                     {activeTicket.name}
                   </h4>
-                  <p className="text-xs text-slate-505 dark:text-slate-400 uppercase tracking-widest font-bold">
-                    SERVICIO SOLICITADO: <span className="font-extrabold text-indigo-700 dark:text-indigo-400">{SERVICES_CONFIG[activeTicket.serviceType].name.toUpperCase()}</span>
+                  <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">
+                    SERVICIO: <span className="font-extrabold text-blue-900">{SERVICES_CONFIG[activeTicket.serviceType].name.toUpperCase()}</span>
                   </p>
                   {activeTicket.priority && (
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500 text-white font-black text-[10px] uppercase mt-2 tracking-widest shadow-sm animate-pulse">
-                      ★ ATENCIÓN PRIORITARIA/PREFERENCIAL
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500 text-white font-black text-[10px] uppercase mt-2 tracking-widest shadow-sm rounded-lg animate-pulse">
+                      ★ PRIORITARIO
                     </span>
                   )}
                 </div>
               </div>
 
               {/* LIVE STEPS PROGRESS TIMELINE */}
-              <div className="mt-4 bg-white dark:bg-slate-900 p-4 border-2 border-indigo-100 dark:border-indigo-900 space-y-3.5 shadow-inner">
+              <div className="mt-4 bg-white p-4 border border-blue-100 rounded-xl space-y-3.5 shadow-inner">
                 <span className="text-[10px] uppercase font-mono font-black text-slate-400 block tracking-widest text-center">
                   RANGO DEL FLUJO CONTINUO (MISMO TICKET)
                 </span>
                 
-                <div className="relative py-2 flex items-center justify-between max-w-md mx-auto">
+                <div className="relative py-2 flex items-center justify-between max-w-sm mx-auto">
                   {Object.values(PHASES_CONFIG).map((p, pIdx) => {
                     const phasesList = Object.values(PHASES_CONFIG);
                     const currentPhaseIdx = phasesList.findIndex(x => x.id === activeTicket.currentPhase);
@@ -368,19 +389,19 @@ export default function AgentConsole({
                         {/* Connector line between steps */}
                         {pIdx > 0 && (
                           <div className={`absolute top-4.5 w-full right-1/2 h-[3.5px] -z-10 ${
-                            pIdx <= currentPhaseIdx ? "bg-indigo-600" : "bg-slate-200 dark:bg-slate-800"
+                            pIdx <= currentPhaseIdx ? "bg-[#122e70]" : "bg-slate-200"
                           }`} />
                         )}
-                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-black border-2 transition-all ${
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-black border transition-all ${
                           isDone 
                             ? "bg-emerald-500 text-white border-emerald-600" 
                             : isCurrent 
-                              ? "bg-indigo-600 text-white border-indigo-700 ring-4 ring-indigo-500/30 scale-110" 
-                              : "bg-slate-200 dark:bg-slate-800 text-slate-500 border-slate-300 dark:border-slate-750"
+                              ? "bg-[#122e70] text-white border-blue-900 ring-4 ring-blue-500/10 scale-110" 
+                              : "bg-slate-200 text-slate-500 border-slate-300"
                         }`}>
                           {isDone ? "✓" : pIdx + 1}
                         </div>
-                        <span className={`text-[10px] mt-2 text-center uppercase tracking-wider font-extrabold ${isCurrent ? "text-indigo-600 dark:text-indigo-400 font-black scale-102" : "text-slate-400"}`}>
+                        <span className={`text-[10px] mt-2 text-center uppercase tracking-wider font-extrabold ${isCurrent ? "text-[#122e70] font-black animate-pulse" : "text-slate-405"}`}>
                           {p.shortName.toUpperCase()}
                         </span>
                       </div>
@@ -388,19 +409,19 @@ export default function AgentConsole({
                   })}
                 </div>
                 
-                <p className="text-[11px] uppercase text-indigo-700 dark:text-indigo-400 text-center font-black bg-indigo-50/50 dark:bg-slate-950 py-1.5 border border-indigo-100/40">
+                <p className="text-[11px] uppercase text-[#122e70] text-center font-bold bg-blue-50/50 py-1.5 border border-blue-100/40 rounded-lg">
                   {activeTicket.currentPhase === TicketPhase.CAJA && "➔ Al finalizar en caja, el tiquet pasará automáticamente a la siguiente cola de Tríada y Fotografía."}
                   {activeTicket.currentPhase === TicketPhase.TRIADA && "➔ Fase final de atención. Al pulsar Completar, el ciudadano se completa."}
                 </p>
               </div>
 
               {/* ACTION TOOLBARS */}
-              <div className="grid grid-cols-2 gap-3 pt-3 border-t-2 border-indigo-100 dark:border-indigo-900">
+              <div className="grid grid-cols-2 gap-3 pt-3 border-t border-blue-100">
                 {activeTicket.status === TicketStatus.CALLING ? (
                   <button
                     id="btn-action-start"
                     onClick={() => onStartAttending(currentCubicle.id)}
-                    className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest border-2 border-black rounded-none cursor-pointer flex items-center justify-center gap-2 shadow-sm transition-all"
+                    className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-sm transition-all"
                   >
                     <Play className="w-4 h-4 text-emerald-400" />
                     Iniciar Atención
@@ -409,7 +430,7 @@ export default function AgentConsole({
                   <button
                     id="btn-action-complete"
                     onClick={() => onComplete(currentCubicle.id)}
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest border-2 border-indigo-800 rounded-none cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all"
+                    className="w-full py-3 bg-[#122e70] hover:bg-blue-800 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all"
                   >
                     <Check className="w-4 h-4 text-white" />
                     Completar Atención
@@ -419,17 +440,17 @@ export default function AgentConsole({
                 <button
                   id="btn-action-recall"
                   onClick={() => onRecall(currentCubicle.id)}
-                  className="w-full py-3 bg-white hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-750 text-indigo-700 dark:text-indigo-455 border-2 border-indigo-500 font-black text-xs uppercase tracking-widest rounded-none transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm"
+                  className="w-full py-3 bg-white hover:bg-slate-100 text-indigo-700 border border-indigo-550 font-black text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm"
                   title="Re-llamar al altavoz"
                 >
-                  <Volume2 className="w-4 h-4 animate-bounce" />
+                  <Volume2 className="w-4 h-4 text-indigo-600 animate-pulse" />
                   Volver a Llamar
                 </button>
 
                 <button
                   id="btn-action-miss"
                   onClick={() => onMiss(currentCubicle.id)}
-                  className="col-span-2 w-full py-2.5 bg-slate-100 hover:bg-rose-105 hover:bg-rose-100 dark:hover:bg-rose-950/20 text-slate-700 hover:text-rose-700 dark:bg-slate-805 dark:text-slate-300 font-extrabold text-[11px] uppercase tracking-wider rounded-none border border-slate-305 dark:border-slate-850 cursor-pointer flex items-center justify-center gap-2"
+                  className="col-span-2 w-full py-3 bg-slate-100 hover:bg-rose-50 text-slate-705 hover:text-rose-700 font-extrabold text-[11px] uppercase tracking-wider rounded-xl border border-slate-205 cursor-pointer flex items-center justify-center gap-2 transition-all mt-1"
                   title="Marca cliente como ausente"
                 >
                   <UserX className="w-4 h-4 text-rose-500" />
@@ -438,19 +459,19 @@ export default function AgentConsole({
               </div>
             </div>
           ) : (
-            <div className="border-4 border-slate-900 hover:border-slate-700 dark:border-slate-800 border-dashed rounded-none p-8 text-center space-y-4 bg-slate-50 dark:bg-slate-950 transition-all">
-              <p className="text-sm text-slate-505 dark:text-slate-400 uppercase tracking-widest font-black">Módulo Disponible para Próxima Llamada</p>
+            <div className="border border-slate-300 border-dashed rounded-2xl p-8 text-center space-y-4 bg-slate-50 transition-all">
+              <p className="text-sm text-slate-500 uppercase tracking-widest font-black leading-none">Módulo Disponible para Próxima Llamada</p>
               
               <button
                 id="btn-call-next-ticket"
                 disabled={currentCubicle.status === CubicleStatus.BREAK || currentCubicle.status === CubicleStatus.OFFLINE || sortedCandidates.length === 0}
                 onClick={() => onCallNext(currentCubicle.id)}
-                className={`px-6 py-4.5 w-full font-black text-sm uppercase tracking-widest rounded-none border-2 border-black transition-all flex items-center justify-center gap-2 shadow-lg ${
+                className={`px-6 py-4.5 w-full font-black text-sm uppercase tracking-widest rounded-xl border transition-all flex items-center justify-center gap-2 shadow-md ${
                   currentCubicle.status === CubicleStatus.BREAK || currentCubicle.status === CubicleStatus.OFFLINE
-                    ? "bg-slate-200 text-slate-400 border-slate-300 cursor-not-allowed"
+                    ? "bg-slate-200 text-slate-400 border-slate-200 cursor-not-allowed shadow-none"
                     : sortedCandidates.length === 0
-                      ? "bg-indigo-300 text-white border-indigo-400 cursor-not-allowed"
-                      : "bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer active:scale-[0.99] shadow-indigo-950/20"
+                      ? "bg-indigo-300 text-white border-indigo-400 cursor-not-allowed shadow-none"
+                      : "bg-indigo-600 hover:bg-indigo-700 text-white border-transparent cursor-pointer active:scale-[0.99] shadow-indigo-100"
                 }`}
               >
                 {currentCubicle.status === CubicleStatus.BREAK ? (
@@ -458,11 +479,11 @@ export default function AgentConsole({
                 ) : currentCubicle.status === CubicleStatus.OFFLINE ? (
                   "Módulo Desconectado"
                 ) : sortedCandidates.length === 0 ? (
-                  "Ningún ticket compatible en cola esperando"
+                  "Ningún tiquet compatible esperando en fila"
                 ) : (
                   <>
-                    <span>Llamar Siguiente Turno disponible</span>
-                    <ArrowRight className="w-5 h-5" />
+                    <span>Llamar Siguiente Turno ({sortedCandidates.length} en espera)</span>
+                    <ArrowRight className="w-5 h-5 animate-bounce" />
                   </>
                 )}
               </button>
@@ -471,55 +492,55 @@ export default function AgentConsole({
         </div>
 
         {/* CANDIDATE LIST FOR THIS AGENT */}
-        <div className="space-y-2 rounded-none">
-          <div className="flex justify-between items-center text-[10px] uppercase font-black text-slate-500 tracking-wider">
-            <span>COLA COMPATIBLE Soportada por Módulo ({sortedCandidates.length})</span>
-            {sortedCandidates.length > 0 && <span className="text-xs px-2 py-0.5 bg-slate-900 text-white font-mono rounded-none font-bold">TURNOS</span>}
+        <div className="space-y-2">
+          <div className="flex justify-between items-center text-[10px] uppercase font-black text-slate-450 tracking-wider">
+            <span>COLA COMPATIBLE CON ESTE MÓDULO ({sortedCandidates.length})</span>
+            {sortedCandidates.length > 0 && <span className="text-xs px-2 py-0.5 bg-slate-900 text-white font-mono rounded-lg font-bold">TURNOS</span>}
           </div>
 
           {sortedCandidates.length > 0 ? (
             <div className="space-y-2 max-h-[190px] overflow-y-auto pr-1">
               {sortedCandidates.slice(0, 4).map((item) => (
-                <div key={item.id} className="p-3 border-2 border-slate-201 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 rounded-none flex items-center justify-between text-xs">
+                <div key={item.id} className="p-3 border border-slate-200 bg-white rounded-xl flex items-center justify-between text-xs shadow-xs">
                   <div className="flex items-center gap-3">
-                    <span className="font-bold font-mono text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-slate-900 border-2 border-slate-300 dark:border-slate-800 px-2 py-1 rounded-none text-xs">
+                    <span className="font-bold font-mono text-[#122e70] bg-blue-50 border border-blue-100 px-2.5 py-1 rounded-lg text-xs shadow-xs">
                       {item.numberCode}
                     </span>
-                    <span className="font-black text-slate-800 dark:text-slate-200 truncate max-w-[170px] uppercase tracking-wide">{item.name}</span>
+                    <span className="font-extrabold text-slate-800 truncate max-w-[170px] uppercase tracking-wide">{item.name}</span>
                   </div>
 
                   <div className="flex items-center gap-2">
                     {item.priority && (
-                      <span className="px-2 py-0.5 bg-amber-500 text-white text-[9px] font-black uppercase rounded-none tracking-widest animate-pulse">
-                        PE
+                      <span className="px-2 py-0.5 bg-amber-500 text-white text-[9px] font-black uppercase rounded-lg tracking-widest">
+                        ★ PREF
                       </span>
                     )}
-                    <span className="text-[10px] text-slate-500 font-mono font-bold">
+                    <span className="text-[10px] text-slate-400 font-mono font-bold">
                       {new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>
                 </div>
               ))}
               {sortedCandidates.length > 4 && (
-                <p className="text-[10px] text-slate-500 uppercase font-mono tracking-widest font-black italic text-center">
-                  + {sortedCandidates.length - 4} turnos más compatibles en cola.
+                <p className="text-[10px] text-slate-400 uppercase font-mono tracking-widest font-black italic text-center">
+                  + {sortedCandidates.length - 4} turnos compatibles adicionales.
                 </p>
               )}
             </div>
           ) : (
-            <div className="p-4 border-2 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 rounded-none text-center text-xs text-slate-400 uppercase tracking-widest font-black">
-              No hay turnos en cola compatibles con este módulo de atención.
+            <div className="p-4 border border-slate-200 bg-slate-50 rounded-xl text-center text-xs text-slate-400 uppercase tracking-widest font-bold">
+              No hay turnos compatibles con este módulo de atención.
             </div>
           )}
         </div>
       </div>
 
       {/* METRICS UNDERLAY */}
-      <div className="border-t-2 border-slate-200 dark:border-slate-800 pt-4 flex items-center justify-between text-xs mt-4">
-        <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400 uppercase text-[10px] font-mono font-black tracking-widest">
-          <Award className="w-5 h-5 text-indigo-550 text-indigo-505" />
-          <span>Atendidos hoy en Cabina:</span>
-          <span className="font-mono font-black bg-slate-900 text-white dark:bg-slate-800 dark:text-white px-3 py-1 border border-slate-950 shadow-inner">{currentCubicle.totalAttendedCount}</span>
+      <div className="border-t border-slate-100 pt-4 flex items-center justify-between text-xs mt-4">
+        <div className="flex items-center gap-2 text-slate-655 uppercase text-[10.5px] font-mono font-extrabold tracking-widest">
+          <Award className="w-5 h-5 text-[#122e70] animate-pulse" />
+          <span>Atendidos hoy en este Módulo:</span>
+          <span className="font-mono font-black bg-slate-900 text-white px-3 py-1 border border-slate-950 rounded-lg">{currentCubicle.totalAttendedCount}</span>
         </div>
       </div>
     </div>

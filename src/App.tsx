@@ -23,7 +23,9 @@ import {
   Sparkles, 
   Volume2, 
   Activity,
-  Heart
+  Heart,
+  Trash2,
+  UserPlus
 } from "lucide-react";
 
 export default function App() {
@@ -87,62 +89,67 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 py-6 px-4 md:px-8 space-y-6 flex flex-col justify-between">
-      {/* STICKY HEADER BRANDING & VIEWPORT CONTROLLER */}
-      <header className="max-w-7xl mx-auto w-full space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 relative">
-          {/* Indigo Geometric Pillar Left Accent */}
-          <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-indigo-600" />
+    <div className="min-h-screen bg-[#f1f5f9] font-sans text-slate-900 pb-12 flex flex-col justify-between">
+      {/* UPPER NATIONAL FLAG BAR */}
+      <div className="w-full h-1.5 flex select-none shrink-0">
+        <div className="bg-red-600 flex-1"></div>
+        <div className="bg-[#122e70] flex-1"></div>
+      </div>
+
+      {/* HEADER SECTION */}
+      <header className="max-w-7xl mx-auto w-full px-4 md:px-8 pt-6 space-y-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
           
           <div className="flex items-center gap-4 pl-1">
-            <div className="w-12 h-12 bg-indigo-600 flex items-center justify-center shrink-0 text-white">
-              <div className="w-6 h-6 border-2 border-white"></div>
+            <div className="w-12 h-12 bg-[#122e70] flex items-center justify-center shrink-0 text-white rounded font-sans font-black text-xl shadow-md border border-amber-400 select-none">
+              <span>T</span>
+              <span className="text-amber-400 ml-0.5">E</span>
             </div>
             
             <div className="space-y-0.5">
+              <p className="text-[9px] text-[#122e70] font-black uppercase tracking-wider font-sans leading-none mb-0.5">
+                TRÁMITES OFICIALES
+              </p>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100 uppercase">
-                  SISTEMA DE TURNOS
+                <h1 className="text-base md:text-xl font-black tracking-tight text-[#122e70] uppercase">
+                  TRIBUNAL ELECTORAL DE PANAMÁ
                 </h1>
-                <span className="px-1.5 py-0.5 text-[8px] font-mono tracking-widest bg-slate-900 text-white dark:bg-slate-800 font-bold uppercase">
-                  V2.4
+                <span className="hidden sm:inline-block px-1.5 py-0.5 text-[8.5px] font-mono tracking-widest bg-blue-100 text-[#122e70] font-extrabold rounded">
+                  TURNO EXPRESS
                 </span>
               </div>
-              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                Centro de Atención Municipal
-              </p>
             </div>
           </div>
 
           {/* Test Chime and Alerts quick bar */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <button
               id="btn-quick-sound-test"
               onClick={handleTestSpeaker}
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-850 dark:hover:bg-slate-800 text-xs font-bold transition-all flex items-center gap-2 border-none ring-offset-2 cursor-pointer uppercase tracking-wider"
+              className="px-4 py-2.5 bg-[#122e70] hover:bg-blue-800 text-white text-xs font-bold transition-all flex items-center gap-2 rounded-xl border-none shadow-sm cursor-pointer uppercase tracking-wider font-sans"
             >
-              <Volume2 className="w-4 h-4" />
+              <Volume2 className="w-4 h-4 text-amber-400" />
               <span>Timbre de Prueba</span>
             </button>
             
-            <div className="w-[1px] h-6 bg-slate-200 dark:bg-slate-800 hidden sm:block" />
+            <div className="w-[1px] h-6 bg-slate-200 hidden sm:block" />
 
-            <div className="hidden sm:flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-1.5 font-mono text-[9px] text-slate-800 dark:text-slate-350 font-bold uppercase tracking-widest">
+            <div className="hidden sm:flex items-center gap-2 bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-xl font-mono text-[9px] text-slate-705 font-bold uppercase tracking-widest shadow-inner">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-              <span>Servidor Activo</span>
+              <span className="text-emerald-700">Estado: En Línea</span>
             </div>
           </div>
         </div>
 
         {/* VIEWPORT CONTROLLER TABS */}
-        <div className="flex items-center justify-start overflow-x-auto gap-0 border-b border-slate-200 dark:border-slate-800 pb-0 scrollbar-none">
+        <div className="flex items-center justify-start overflow-x-auto gap-2 border-b border-slate-200/50 pb-2 scrollbar-none">
           <button
             id="tab-view-combined"
             onClick={() => setActiveTab("combined")}
-            className={`px-5 py-3 text-xs font-bold uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
               activeTab === "combined"
-                ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900 border-l border-r border-t border-slate-200 dark:border-slate-800 -mb-[2px] pt-3.5"
-                : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900"
             }`}
           >
             <LayoutGrid className="w-4 h-4" />
@@ -152,10 +159,10 @@ export default function App() {
           <button
             id="tab-view-kiosk"
             onClick={() => setActiveTab("kiosk")}
-            className={`px-5 py-3 text-xs font-bold uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
               activeTab === "kiosk"
-                ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900 border-l border-r border-t border-slate-200 dark:border-slate-800 -mb-[2px] pt-3.5"
-                : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
+                : "bg-white text-slate-600 border-slate-205 hover:bg-slate-50 hover:text-slate-900"
             }`}
           >
             <Printer className="w-4 h-4" />
@@ -165,10 +172,10 @@ export default function App() {
           <button
             id="tab-view-tv"
             onClick={() => setActiveTab("tv")}
-            className={`px-5 py-3 text-xs font-bold uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
               activeTab === "tv"
-                ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900 border-l border-r border-t border-slate-200 dark:border-slate-800 -mb-[2px] pt-3.5"
-                : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
+                : "bg-white text-slate-600 border-slate-205 hover:bg-slate-50 hover:text-slate-900"
             }`}
           >
             <Tv className="w-4 h-4" />
@@ -178,10 +185,10 @@ export default function App() {
           <button
             id="tab-view-agent"
             onClick={() => setActiveTab("agent")}
-            className={`px-5 py-3 text-xs font-bold uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
               activeTab === "agent"
-                ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900 border-l border-r border-t border-slate-200 dark:border-slate-800 -mb-[2px] pt-3.5"
-                : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
+                : "bg-white text-slate-600 border-slate-205 hover:bg-slate-50 hover:text-slate-900"
             }`}
           >
             <UserCheck className="w-4 h-4" />
@@ -191,10 +198,10 @@ export default function App() {
           <button
             id="tab-view-admin"
             onClick={() => setActiveTab("admin")}
-            className={`px-5 py-3 text-xs font-bold uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
               activeTab === "admin"
-                ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900 border-l border-r border-t border-slate-200 dark:border-slate-800 -mb-[2px] pt-3.5"
-                : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
+                : "bg-white text-slate-600 border-slate-205 hover:bg-slate-50 hover:text-slate-900"
             }`}
           >
             <Settings className="w-4 h-4" />
@@ -204,35 +211,67 @@ export default function App() {
       </header>
 
       {/* MAIN RENDER AREA */}
-      <main className="max-w-7xl mx-auto w-full flex-grow">
+      <main className="max-w-7xl mx-auto w-full px-4 md:px-8 flex-grow">
         {activeTab === "combined" && (
           /* Multi-screen side-by-side dashboard */
           <div className="space-y-6">
             
-            {/* Quick Demo Assist Banner */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 text-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-slate-800 dark:text-slate-200 leading-normal relative overflow-hidden">
-              {/* Geometric Small Anchor Indicator */}
-              <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500" />
-              <div className="space-y-1 pl-2">
-                <p className="font-bold flex items-center gap-1.5 uppercase tracking-wide text-slate-900 dark:text-slate-100">
-                  <Sparkles className="w-4 h-4 text-indigo-600" />
-                  Guía de Simulación del Sistema
+            {/* GIANT DEEP BLUE HERO BLOCK */}
+            <div className="w-full bg-gradient-to-r from-[#122e70] to-[#1d428a] text-white rounded-2xl p-8 md:p-10 text-center relative overflow-hidden shadow-md flex flex-col justify-center items-center">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-blue-600/30 via-transparent to-transparent opacity-75"></div>
+              
+              <div className="relative z-10 max-w-4xl mx-auto space-y-4">
+                <span className="px-3 py-1 text-[10px] font-mono tracking-widest bg-blue-500/20 text-blue-200 border border-blue-400/40 font-black rounded uppercase">
+                  ✓ PORTAL OFICIAL DE ATENCIÓN CIUDADANA
+                </span>
+                <h2 className="text-3xl md:text-5xl font-black font-display uppercase tracking-wider text-white">
+                  PORTAL DE CITAS TECNOLÓGICAS
+                </h2>
+                <p className="text-sm md:text-base text-blue-100 font-medium leading-relaxed max-w-2xl mx-auto">
+                  Evite filas y programe su atención presencial obligatoria para servicios de Cédula, Registro Civil y Extranjería de manera transparente, rápida y garantizada.
                 </p>
-                <p className="text-slate-650 dark:text-slate-400">
-                  Ingrese un nombre y genere un turno en el <b>Kiosko</b> (Izquierda) • Vaya a la <b>Consola del Agente</b> (Derecha) para presionar "Llamar Siguiente" • Observe el llamado inmediato en la <b>TV Pública</b> (Centro) con audio de voz.
-                </p>
+                
+                {/* Embedded Simulation system controls */}
+                <div className="pt-4 flex flex-wrap items-center justify-center gap-3.5">
+                  <button
+                    id="btn-fast-simulation-start"
+                    onClick={() => setIsSimulationActive(!isSimulationActive)}
+                    className={`py-3 px-5 rounded-xl font-black tracking-wider text-xs uppercase cursor-pointer transition-all flex items-center gap-2 shadow-md ${
+                      isSimulationActive 
+                        ? "bg-amber-500 text-white shadow-amber-900/20" 
+                        : "bg-emerald-600 text-white shadow-emerald-900/20 hover:bg-emerald-700"
+                    }`}
+                  >
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isSimulationActive ? 'bg-amber-300' : 'bg-emerald-300'}`}></span>
+                      <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isSimulationActive ? 'bg-white' : 'bg-emerald-250'}`}></span>
+                    </span>
+                    <span>{isSimulationActive ? "PAUSAR FLUJO AUTOMÁTICO" : "ACTIVAR TRÁFICO DE CIUDADANOS"}</span>
+                  </button>
+
+                  <button
+                    id="btn-trigger-single-instant-client-hero"
+                    onClick={handleCreateRandomTicket}
+                    className="py-3 px-5 bg-white hover:bg-slate-50 text-[#122e70] font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-2"
+                  >
+                    <UserPlus className="w-4 h-4 text-[#122e70]" />
+                    <span>Generar Turno Al Instante</span>
+                  </button>
+                  
+                  <button
+                    id="btn-reset-system"
+                    onClick={() => {
+                      if (window.confirm("¿Estás seguro de que quieres reiniciar totalmente el sistema de tickets? Se vaciarán colas e históricos.")) {
+                        resetSystem();
+                      }
+                    }}
+                    className="py-3 px-5 bg-red-600 hover:bg-red-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-2"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>REINICIAR TODO</span>
+                  </button>
+                </div>
               </div>
-              <button
-                id="btn-fast-simulation-start"
-                onClick={() => setIsSimulationActive(!isSimulationActive)}
-                className={`py-2 px-4 shadow-none font-bold tracking-wider text-[11px] uppercase border cursor-pointer transition-all ${
-                  isSimulationActive 
-                    ? "bg-amber-500 border-amber-600 text-white hover:bg-amber-600" 
-                    : "bg-slate-900 border-slate-900 text-white hover:bg-slate-800"
-                }`}
-              >
-                {isSimulationActive ? "Pausar Simulación" : "Auto-Generar Tráfico"}
-              </button>
             </div>
 
             {/* Combined 4-panel Grid Layout */}
@@ -304,13 +343,13 @@ export default function App() {
 
         {/* INDIVIDUAL MAXIMIZED VIEWPORTS */}
         {activeTab === "kiosk" && (
-          <div className="max-w-lg mx-auto py-4">
+          <div className="w-full py-4">
             <WelcomeKiosk onCreateTicket={createTicket} />
           </div>
         )}
 
         {activeTab === "tv" && (
-          <div className="max-w-4xl mx-auto py-4">
+          <div className="w-full py-4">
             <MainScreen
               tickets={tickets}
               cubicles={cubicles}
@@ -322,7 +361,7 @@ export default function App() {
         )}
 
         {activeTab === "agent" && (
-          <div className="max-w-2xl mx-auto py-4">
+          <div className="w-full py-4">
             <AgentConsole
               tickets={tickets}
               cubicles={cubicles}
@@ -338,7 +377,7 @@ export default function App() {
         )}
 
         {activeTab === "admin" && (
-          <div className="max-w-2xl mx-auto py-4">
+          <div className="w-full py-4">
             <ControlDashboard
               tickets={tickets}
               cubicles={cubicles}
@@ -356,16 +395,16 @@ export default function App() {
       </main>
 
       {/* FOOTER BAR */}
-      <footer className="max-w-7xl mx-auto w-full py-6 border-t border-slate-200 dark:border-slate-800 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="uppercase tracking-widest font-bold text-[10px]">
+      <footer className="max-w-7xl mx-auto w-full py-6 border-t border-slate-200 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="uppercase tracking-widest font-extrabold text-[10px] text-slate-400">
           SISTEMA CENTRALIZADO DE GESTIÓN DE TURNOS V2.4
         </div>
         <div className="flex gap-6 font-mono text-[10px] items-center">
-          <span className="flex items-center gap-1.5 font-bold">
+          <span className="flex items-center gap-1.5 font-bold text-slate-650">
             <span className="w-2.5 h-2.5 bg-emerald-500"></span>
             SERVIDOR ACTIVO
           </span>
-          <span className="opacity-60 font-semibold uppercase">TERMINAL 0014-B</span>
+          <span className="opacity-60 font-bold uppercase text-slate-400">TERMINAL 0014-B</span>
         </div>
       </footer>
     </div>
