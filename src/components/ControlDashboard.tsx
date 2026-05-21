@@ -21,7 +21,8 @@ import {
   Layout,
   HelpCircle,
   FileText,
-  Download
+  Download,
+  Volume2
 } from "lucide-react";
 import { generatePDFReport } from "../utils/reportGenerator";
 

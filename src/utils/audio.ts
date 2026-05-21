@@ -79,10 +79,14 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string)
     const parsedCode = ticketCode.split("").join(" "); // Pronuncia dígito por dígito para mayor claridad
     const message = `¿Atención, ticket? ${parsedCode}!... ${name}!... Por favor, pase al ${cubicleName}.`;
     
+    const rateStr = localStorage.getItem("ticket_tts_rate");
+    const pitchStr = localStorage.getItem("ticket_tts_pitch");
+    const voicePref = localStorage.getItem("ticket_tts_voice_pref") || "female";
+
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.lang = "es-ES";
-    utterance.rate = 0.95; // Un poco más lento para mejor comprensión
-    utterance.pitch = 1.05; // Tono agradable
+    utterance.rate = rateStr ? parseFloat(rateStr) : 0.95; // Un poco más lento para mejor comprensión por defecto
+    utterance.pitch = pitchStr ? parseFloat(pitchStr) : 1.05; // Tono agradable por defecto
 
     // Buscar una voz en español
     const setVoice = () => {
@@ -92,13 +96,32 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string)
       const spanishVoices = voices.filter(voice => voice.lang.toLowerCase().startsWith("es"));
       
       if (spanishVoices.length > 0) {
-        // Preferir una voz de Microsoft, Google o Apple que suene natural
-        const preferredVoice = spanishVoices.find(voice => 
-          voice.name.includes("Google") || 
-          voice.name.includes("Natural") || 
-          voice.name.includes("Sabina") || 
-          voice.name.includes("Helena")
-        );
+        let preferredVoice;
+        if (voicePref === "female") {
+          preferredVoice = spanishVoices.find(voice => 
+            voice.name.includes("Sabina") || 
+            voice.name.includes("Helena") || 
+            voice.name.includes("Zira") ||
+            voice.name.toLowerCase().includes("woman") ||
+            voice.name.toLowerCase().includes("female")
+          );
+        } else if (voicePref === "male") {
+          preferredVoice = spanishVoices.find(voice => 
+            voice.name.toLowerCase().includes("pablo") || 
+            voice.name.toLowerCase().includes("andres") || 
+            voice.name.toLowerCase().includes("diego") ||
+            voice.name.toLowerCase().includes("man") ||
+            voice.name.toLowerCase().includes("male")
+          );
+        }
+        
+        if (!preferredVoice) {
+          preferredVoice = spanishVoices.find(voice => 
+            voice.name.includes("Google") || 
+            voice.name.includes("Natural")
+          );
+        }
+        
         utterance.voice = preferredVoice || spanishVoices[0];
       }
     };

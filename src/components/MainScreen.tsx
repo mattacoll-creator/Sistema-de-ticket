@@ -416,20 +416,27 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
                             {phaseTickets.length > 0 ? (
                               <div className={`flex flex-wrap gap-1.5 ${layoutFocus === "queue" ? "max-h-[145px]" : "max-h-[85px]"} overflow-y-auto pt-1 content-start scrollbar-none`}>
-                                {phaseTickets.map(t => (
-                                  <span
-                                    key={t.id}
-                                    className={`text-[12px] font-mono px-3 py-1.5 font-black border flex items-center gap-1 rounded ${
-                                      t.priority 
-                                        ? "bg-amber-50 text-amber-805 border-amber-250 shadow-sm" 
-                                        : "bg-slate-50 text-slate-705 border-slate-200"
-                                    }`}
-                                    title={`${t.name} - ${SERVICES_CONFIG[t.serviceType].name}`}
-                                  >
-                                    {t.priority && <span className="text-amber-550 font-black">★</span>}
-                                    {t.numberCode}
-                                  </span>
-                                ))}
+                                {phaseTickets.map(t => {
+                                  const secondsWaiting = Math.round((Date.now() - t.createdAt) / 1000);
+                                  const isOverdue = secondsWaiting > 60;
+                                  return (
+                                    <span
+                                      key={t.id}
+                                      className={`text-[12px] font-mono px-3 py-1.5 font-black border flex items-center gap-1 rounded transition-colors duration-300 ${
+                                        isOverdue 
+                                          ? "bg-rose-600 text-white border-rose-650 animate-pulse font-extrabold" 
+                                          : t.priority 
+                                            ? "bg-amber-50 text-amber-850 border-amber-250 shadow-sm" 
+                                            : "bg-slate-50 text-slate-705 border-slate-200"
+                                      }`}
+                                      title={`${t.name} - ${SERVICES_CONFIG[t.serviceType].name} (Espera: ${secondsWaiting}s)`}
+                                    >
+                                      {t.priority && !isOverdue && <span className="text-amber-550 font-black">★</span>}
+                                      {isOverdue && <span className="text-white">⚠️</span>}
+                                      {t.numberCode}
+                                    </span>
+                                  );
+                                })}
                               </div>
                             ) : (
                               <div className="flex-1 flex items-center justify-center text-xs text-slate-400 uppercase font-bold text-center tracking-widest py-4">

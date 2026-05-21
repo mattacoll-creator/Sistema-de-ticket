@@ -500,27 +500,44 @@ export default function AgentConsole({
 
           {sortedCandidates.length > 0 ? (
             <div className="space-y-2 max-h-[190px] overflow-y-auto pr-1">
-              {sortedCandidates.slice(0, 4).map((item) => (
-                <div key={item.id} className="p-3 border border-slate-200 bg-white rounded-xl flex items-center justify-between text-xs shadow-xs">
-                  <div className="flex items-center gap-3">
-                    <span className="font-bold font-mono text-[#122e70] bg-blue-50 border border-blue-100 px-2.5 py-1 rounded-lg text-xs shadow-xs">
-                      {item.numberCode}
-                    </span>
-                    <span className="font-extrabold text-slate-800 truncate max-w-[170px] uppercase tracking-wide">{item.name}</span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {item.priority && (
-                      <span className="px-2 py-0.5 bg-amber-500 text-white text-[9px] font-black uppercase rounded-lg tracking-widest">
-                        ★ PREF
+              {sortedCandidates.slice(0, 4).map((item) => {
+                const secondsWaiting = Math.round((Date.now() - item.createdAt) / 1000);
+                const isOverdue = secondsWaiting > 60;
+                return (
+                  <div key={item.id} className={`p-3 border rounded-xl flex items-center justify-between text-xs transition-all duration-300 ${
+                    isOverdue 
+                      ? "border-amber-350 bg-amber-50 shadow-sm animate-pulse" 
+                      : "border-slate-200 bg-white shadow-xs"
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <span className={`font-bold font-mono px-2.5 py-1 rounded-lg text-xs shadow-xs ${
+                        isOverdue 
+                          ? "text-rose-950 bg-rose-200 border border-rose-300 font-black"
+                          : "text-[#122e70] bg-blue-50 border border-blue-100"
+                      }`}>
+                        {item.numberCode}
                       </span>
-                    )}
-                    <span className="text-[10px] text-slate-400 font-mono font-bold">
-                      {new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                    </span>
+                      <span className="font-extrabold text-slate-800 truncate max-w-[170px] uppercase tracking-wide">{item.name}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2 font-mono">
+                      {isOverdue && (
+                        <span className="px-2 py-0.5 bg-rose-650 text-white text-[8px] font-black uppercase rounded-md tracking-wider animate-bounce">
+                          ⚠️ DEMORA ({secondsWaiting}s)
+                        </span>
+                      )}
+                      {item.priority && (
+                        <span className="px-2 py-0.5 bg-amber-500 text-white text-[9px] font-black uppercase rounded-lg tracking-widest font-sans">
+                          ★ PREF
+                        </span>
+                      )}
+                      <span className="text-[10px] text-slate-400 font-bold">
+                        {new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {sortedCandidates.length > 4 && (
                 <p className="text-[10px] text-slate-400 uppercase font-mono tracking-widest font-black italic text-center">
                   + {sortedCandidates.length - 4} turnos compatibles adicionales.
