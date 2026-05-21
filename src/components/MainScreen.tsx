@@ -20,6 +20,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   const [currentTime, setCurrentTime] = useState(new Date());
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase>("general");
+  const [layoutFocus, setLayoutFocus] = useState<"both" | "cubicles" | "queue">("both");
 
   // Maintain local clock
   useEffect(() => {
@@ -153,6 +154,52 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
           })}
         </div>
 
+        {/* --- DEDICATED VIEW MODE SELECTOR (ESTRUCTURA DE PANTALLA) --- */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 bg-slate-100 rounded-xl border border-slate-205 text-xs shadow-inner animate-fade-in">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider font-mono">DISTRIBUCIÓN DEL MONITOR:</span>
+            <span className="text-[10px] bg-[#122e70] text-white px-2 py-0.5 rounded font-black uppercase font-mono shadow-sm">
+              {layoutFocus === "both" ? "Vista Dividida (Módulos + Turnos)" : layoutFocus === "cubicles" ? "Enfoque Principal: Solo Módulos" : "Enfoque Principal: Solo Fila de Turnos"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLayoutFocus("both")}
+              className={`px-3.5 py-2 text-[10px] font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-1.5 ${
+                layoutFocus === "both"
+                  ? "bg-white text-[#122e70] border border-slate-305 font-bold shadow-sm"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-200 border border-transparent"
+              }`}
+              title="Muestra los Módulos de atención en el lado izquierdo y las colas de turnos en el derecho"
+            >
+              <span>📊 Vista Dividida</span>
+            </button>
+            <button
+              onClick={() => setLayoutFocus("cubicles")}
+              className={`px-3.5 py-2 text-[10px] font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-1.5 ${
+                layoutFocus === "cubicles"
+                  ? "bg-white text-[#122e70] border border-slate-305 font-bold shadow-sm"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-200 border border-transparent"
+              }`}
+              title="Oculta las colas de turnos y expande los Módulos de atención a pantalla completa"
+            >
+              <span>🚪 Solo Módulos</span>
+            </button>
+            <button
+              onClick={() => setLayoutFocus("queue")}
+              className={`px-3.5 py-2 text-[10px] font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-1.5 ${
+                layoutFocus === "queue"
+                  ? "bg-white text-[#122e70] border border-slate-305 font-bold shadow-sm"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-200 border border-transparent"
+              }`}
+              title="Oculta los Módulos de atención y expande la fila de turnos esperando a pantalla completa"
+            >
+              <span>🎟️ Solo Fila de Turnos</span>
+            </button>
+          </div>
+        </div>
+
         {/* --- HERO: FLASHING CALL OUT SECTION --- */}
         <div id="hero-callout-screen" className="min-h-[190px] relative">
           <AnimatePresence mode="wait">
@@ -251,207 +298,213 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         </div>
 
         {/* --- BODY: DUAL GRID --- */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-3">
+        <div className={`grid grid-cols-1 ${layoutFocus === "both" ? "lg:grid-cols-2" : "grid-cols-1"} gap-8 pt-3`}>
           
           {/* COLUMN LEFT: Cubicle Monitors */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-2">
-              <span className="text-xs font-black font-mono tracking-widest text-slate-500 uppercase flex items-center gap-2">
-                <UserCheck className="w-5 h-5 text-[#122e70]" />
-                MÓDULOS DE ATENCIÓN {selectedChannel !== "general" ? `(FILTRADOS POR ${PHASES_CONFIG[selectedChannel as TicketPhase].shortName.toUpperCase()})` : ""}
-              </span>
-              <span className="text-xs text-slate-500 font-mono tracking-wider font-bold uppercase">{filteredCubicles.length} EN SERVICIO</span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-h-[460px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200">
-              {filteredCubicles.map((cubicle) => {
-                const currentTicket = tickets.find(t => t.id === cubicle.currentTicketId);
-                const isFree = cubicle.status === "ONLINE_AVAILABLE";
-                const isBreak = cubicle.status === "BREAK";
-
-                return (
-                  <div
-                    key={cubicle.id}
-                    className={`p-4 rounded-xl border flex flex-col justify-between min-h-[110px] transition-all duration-150 ${
-                      cubicle.status === "ATTENDING"
-                        ? "bg-blue-50/50 border-blue-405 shadow-sm ring-2 ring-blue-500/10"
-                        : isFree
-                          ? "bg-white border-slate-200 hover:border-slate-300 shadow-sm"
-                          : "bg-slate-100 border-slate-200 opacity-60"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-1 border-b border-slate-100 pb-2">
-                      <div className="space-y-0.5 truncate">
-                        <h4 className="text-sm font-black text-slate-900 uppercase tracking-wider truncate">
-                          {cubicle.name}
-                        </h4>
-                        <p className="text-[10px] text-slate-400 uppercase font-mono tracking-widest truncate font-extrabold">
-                          AGENTE: {cubicle.agentName}
-                        </p>
-                      </div>
-
-                      <div className="shrink-0">
-                        {isFree ? (
-                          <span className="px-2 py-0.5 text-[9px] font-mono tracking-widest font-black bg-emerald-50 text-emerald-700 border border-emerald-250 uppercase rounded">
-                            ☑️ LIBRE
-                          </span>
-                        ) : isBreak ? (
-                          <span className="px-2 py-0.5 text-[9px] font-mono tracking-widest font-black bg-amber-50 text-amber-700 border border-amber-205 uppercase rounded">
-                            ☕ RECESO
-                          </span>
-                        ) : cubicle.status === "ATTENDING" ? (
-                          <span className="px-2 py-0.5 text-[9px] font-mono tracking-widest font-black bg-[#122e70] text-white uppercase rounded shadow-sm">
-                            🎙️ LLAMADO
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 text-[9px] font-mono tracking-widest font-black bg-slate-205 text-slate-500 uppercase rounded">
-                            INACTIVO
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between text-right">
-                      {cubicle.status === "ATTENDING" && currentTicket ? (
-                        <>
-                          <span className="text-[10px] text-slate-505 uppercase tracking-widest font-bold max-w-[110px] truncate block">
-                            👤 {currentTicket.name}
-                          </span>
-                          <span className="px-3 py-1 text-base font-mono font-black text-white bg-[#122e70] rounded-lg shadow-sm animate-pulse">
-                            {currentTicket.numberCode}
-                          </span>
-                        </>
-                      ) : (
-                        <span className="text-[10px] text-slate-400 font-mono uppercase tracking-widest font-extrabold">
-                          DISPONIBLE
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* COLUMN RIGHT: Waiting List & Queue (OR SELECTIVE CHANNELS) */}
-          {selectedChannel === "general" ? (
-            /* GENERAL MULTICHANNEL SCREEN SHOWING EXPLICIT INDEPENDENT PANELS */
-            <div className="space-y-3">
+          {layoutFocus !== "queue" && (
+            <div className="space-y-3 animate-fade-in">
               <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-2">
-                <span className="text-xs font-black font-mono tracking-widest text-slate-500 uppercase flex items-center gap-2">
-                  <Users className="w-5 h-5 text-indigo-650" />
-                  COLA DE ESPERA EN VIVO POR SECCIONES (FASES)
+                <span className="text-xs font-black font-mono tracking-widest text-[#122e70] uppercase flex items-center gap-2">
+                  <UserCheck className="w-5 h-5 text-[#122e70]" />
+                  MÓDULOS DE ATENCIÓN {selectedChannel !== "general" ? `(FILTRADOS POR ${PHASES_CONFIG[selectedChannel as TicketPhase].shortName.toUpperCase()})` : ""}
                 </span>
-                <span className="text-xs text-slate-400 font-mono font-bold uppercase">TOTAL: {sortedWaiting.length} ESPERANDO</span>
+                <span className="text-xs text-slate-500 font-mono tracking-wider font-bold uppercase">{filteredCubicles.length} EN SERVICIO</span>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                {Object.entries(PHASES_CONFIG).map(([key, phase]) => {
-                  const phaseTickets = sortedWaiting.filter(t => t.currentPhase === key);
+              <div className={`grid grid-cols-1 ${layoutFocus === "cubicles" ? "md:grid-cols-3 lg:grid-cols-4" : "md:grid-cols-2"} gap-3.5 max-h-[460px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200`}>
+                {filteredCubicles.map((cubicle) => {
+                  const currentTicket = tickets.find(t => t.id === cubicle.currentTicketId);
+                  const isFree = cubicle.status === "ONLINE_AVAILABLE";
+                  const isBreak = cubicle.status === "BREAK";
+
                   return (
-                    <div key={key} className="bg-white border border-slate-200 p-4 flex flex-col justify-between h-[155px] relative overflow-hidden rounded-xl shadow-sm">
-                      {/* Top accent line */}
-                      <div className={`absolute top-0 left-0 right-0 h-[3.5px] ${phase.color.split(" ")[0]}`} />
-                      
-                      <div className="space-y-2 flex-1 flex flex-col justify-between overflow-hidden">
-                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                          <span className="text-sm font-black tracking-widest uppercase text-slate-800">
-                            {phase.name}
-                          </span>
-                          <span className="text-xs font-mono font-black text-slate-600 bg-slate-50 px-2 py-0.5 border border-slate-200 rounded">
-                            {phaseTickets.length} cola
-                          </span>
+                    <div
+                      key={cubicle.id}
+                      className={`p-4 rounded-xl border flex flex-col justify-between min-h-[110px] transition-all duration-150 ${
+                        cubicle.status === "ATTENDING"
+                          ? "bg-blue-50/50 border-blue-405 shadow-sm ring-2 ring-blue-500/10"
+                          : isFree
+                            ? "bg-white border-slate-200 hover:border-slate-300 shadow-sm"
+                            : "bg-slate-100 border-slate-200 opacity-60"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-1 border-b border-slate-100 pb-2">
+                        <div className="space-y-0.5 truncate">
+                          <h4 className="text-sm font-black text-slate-900 uppercase tracking-wider truncate">
+                            {cubicle.name}
+                          </h4>
+                          <p className="text-[10px] text-slate-400 uppercase font-mono tracking-widest truncate font-extrabold">
+                            AGENTE: {cubicle.agentName}
+                          </p>
                         </div>
 
-                        {phaseTickets.length > 0 ? (
-                          <div className="flex flex-wrap gap-1.5 max-h-[85px] overflow-y-auto pt-1 content-start scrollbar-none">
-                            {phaseTickets.map(t => (
-                              <span
-                                key={t.id}
-                                className={`text-[11px] font-mono px-2.5 py-1 font-black border flex items-center gap-1 rounded ${
-                                  t.priority 
-                                    ? "bg-amber-50 text-amber-805 border-amber-250 shadow-sm" 
-                                    : "bg-slate-50 text-slate-705 border-slate-200"
-                                }`}
-                                title={`${t.name} - ${SERVICES_CONFIG[t.serviceType].name}`}
-                              >
-                                {t.priority && <span className="text-amber-550 font-black">★</span>}
-                                {t.numberCode}
-                              </span>
-                            ))}
-                          </div>
+                        <div className="shrink-0">
+                          {isFree ? (
+                            <span className="px-2 py-0.5 text-[9px] font-mono tracking-widest font-black bg-emerald-50 text-emerald-700 border border-emerald-250 uppercase rounded">
+                              ☑️ LIBRE
+                            </span>
+                          ) : isBreak ? (
+                            <span className="px-2 py-0.5 text-[9px] font-mono tracking-widest font-black bg-amber-50 text-amber-700 border border-amber-205 uppercase rounded">
+                              ☕ RECESO
+                            </span>
+                          ) : cubicle.status === "ATTENDING" ? (
+                            <span className="px-2 py-0.5 text-[9px] font-mono tracking-widest font-black bg-[#122e70] text-white uppercase rounded shadow-sm">
+                              🎙️ LLAMADO
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 text-[9px] font-mono tracking-widest font-black bg-slate-205 text-slate-500 uppercase rounded">
+                              INACTIVO
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between text-right">
+                        {cubicle.status === "ATTENDING" && currentTicket ? (
+                          <>
+                            <span className="text-[10px] text-slate-550 uppercase tracking-widest font-bold max-w-[110px] truncate block">
+                              👤 {currentTicket.name}
+                            </span>
+                            <span className="px-3 py-1 text-base font-mono font-black text-white bg-[#122e70] rounded-lg shadow-sm animate-pulse">
+                              {currentTicket.numberCode}
+                            </span>
+                          </>
                         ) : (
-                          <div className="flex-1 flex items-center justify-center text-xs text-slate-400 uppercase font-bold text-center tracking-widest py-4">
-                            🚫 SIN ESPERAS EN COLA
-                          </div>
+                          <span className="text-[10px] text-slate-405 font-mono uppercase tracking-widest font-extrabold">
+                            DISPONIBLE
+                          </span>
                         )}
                       </div>
                     </div>
                   );
                 })}
               </div>
-
-              {/* Explanatory banner confirming continuous same ticket */}
-              <div className="p-3.5 border border-dashed border-indigo-200 bg-indigo-50/20 text-center space-y-1 mt-2 shadow-inner rounded-xl animate-pulse">
-                <p className="text-xs text-indigo-700 uppercase font-black tracking-widest">
-                  ★ UN SOLO TÍQUET: PROCESO AUTOMÁTICO CONTINUO ★
-                </p>
-                <p className="text-[10px] text-slate-450 uppercase font-bold leading-relaxed">
-                  Usted NO requiere un nuevo papel. Al terminar su turno en Caja el tiquet avanzará automáticamente a Tríada/Foto.
-                </p>
-              </div>
             </div>
-          ) : (
-            /* FOCUSED SCREEN FOR A SPECIFIC SEPARATE PHASE MONITOR (TV BOXES) */
-            <div className="space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-2">
-                <span className="text-xs font-black font-mono tracking-widest text-slate-450 uppercase flex items-center gap-2">
-                  <Users className="w-5 h-5 text-[#122e70]" />
-                  COLA DE ESPERA EN EXCLUSIVA ({PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()})
-                </span>
-                <span className="text-xs text-slate-400 font-mono font-extrabold">TOTAL: {filteredWaiting.length} TURNOS EN FILA</span>
-              </div>
+          )}
 
-              {filteredWaiting.length > 0 ? (
-                <div className="grid grid-cols-2 gap-3.5 max-h-[300px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-250">
-                  {filteredWaiting.map((ticket, index) => {
-                    const styleConfig = SERVICES_CONFIG[ticket.serviceType];
-                    return (
-                      <div
-                        key={ticket.id}
-                        className={`p-3.5 rounded-xl flex items-center justify-between border ${
-                          ticket.priority
-                            ? "bg-amber-50/50 border-amber-300 text-amber-950 shadow-sm"
-                            : "bg-white border-slate-200 text-slate-800 hover:border-slate-300 shadow-sm"
-                        }`}
-                      >
-                        <div className="space-y-1 truncate max-w-[150px]">
-                          <span className="text-[10px] text-slate-400 font-mono font-black block font-bold">
-                            ORDEN #{index+1}
-                          </span>
-                          <h5 className="text-xs font-black tracking-wider uppercase truncate text-slate-900">
-                            {ticket.name}
-                          </h5>
+          {/* COLUMN RIGHT: Waiting List & Queue (OR SELECTIVE CHANNELS) */}
+          {layoutFocus !== "cubicles" && (
+            <div className="space-y-3 animate-fade-in">
+              {selectedChannel === "general" ? (
+                /* GENERAL MULTICHANNEL SCREEN SHOWING EXPLICIT INDEPENDENT PANELS */
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-2">
+                    <span className="text-xs font-black font-mono tracking-widest text-[#122e70] uppercase flex items-center gap-2">
+                      <Users className="w-5 h-5 text-indigo-650" />
+                      COLA DE ESPERA EN VIVO POR SECCIONES (FASES)
+                    </span>
+                    <span className="text-xs text-slate-400 font-mono font-bold uppercase">TOTAL: {sortedWaiting.length} ESPERANDO</span>
+                  </div>
+
+                  <div className={`grid ${layoutFocus === "queue" ? "grid-cols-2 md:grid-cols-4" : "grid-cols-2"} gap-4`}>
+                    {Object.entries(PHASES_CONFIG).map(([key, phase]) => {
+                      const phaseTickets = sortedWaiting.filter(t => t.currentPhase === key);
+                      return (
+                        <div key={key} className={`bg-white border border-slate-200 p-4 flex flex-col justify-between ${layoutFocus === "queue" ? "h-[225px]" : "h-[155px]"} relative overflow-hidden rounded-xl shadow-sm`}>
+                          {/* Top accent line */}
+                          <div className={`absolute top-0 left-0 right-0 h-[3.5px] ${phase.color.split(" ")[0]}`} />
+                          
+                          <div className="space-y-2 flex-1 flex flex-col justify-between overflow-hidden">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                              <span className="text-sm font-black tracking-widest uppercase text-slate-800">
+                                {phase.name}
+                              </span>
+                              <span className="text-xs font-mono font-black text-slate-600 bg-slate-50 px-2 py-0.5 border border-slate-200 rounded">
+                                {phaseTickets.length} cola
+                              </span>
+                            </div>
+
+                            {phaseTickets.length > 0 ? (
+                              <div className={`flex flex-wrap gap-1.5 ${layoutFocus === "queue" ? "max-h-[145px]" : "max-h-[85px]"} overflow-y-auto pt-1 content-start scrollbar-none`}>
+                                {phaseTickets.map(t => (
+                                  <span
+                                    key={t.id}
+                                    className={`text-[12px] font-mono px-3 py-1.5 font-black border flex items-center gap-1 rounded ${
+                                      t.priority 
+                                        ? "bg-amber-50 text-amber-805 border-amber-250 shadow-sm" 
+                                        : "bg-slate-50 text-slate-705 border-slate-200"
+                                    }`}
+                                    title={`${t.name} - ${SERVICES_CONFIG[t.serviceType].name}`}
+                                  >
+                                    {t.priority && <span className="text-amber-550 font-black">★</span>}
+                                    {t.numberCode}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="flex-1 flex items-center justify-center text-xs text-slate-400 uppercase font-bold text-center tracking-widest py-4">
+                                🚫 SIN ESPERAS EN COLA
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        
-                        <div className="flex flex-col items-end gap-1.5 font-mono">
-                          <span className="text-lg font-black leading-none text-[#122e70]">
-                            {ticket.numberCode}
-                          </span>
-                          <span className={`text-[9px] px-2 py-0.5 font-black uppercase text-center rounded ${styleConfig.color}`}>
-                            {styleConfig.prefix}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
+
+                  {/* Explanatory banner confirming continuous same ticket */}
+                  <div className="p-3.5 border border-dashed border-indigo-200 bg-indigo-50/20 text-center space-y-1 mt-2 shadow-inner rounded-xl animate-pulse">
+                    <p className="text-xs text-indigo-700 uppercase font-black tracking-widest">
+                      ★ UN SOLO TÍQUET: PROCESO AUTOMÁTICO CONTINUO ★
+                    </p>
+                    <p className="text-[10px] text-slate-450 uppercase font-bold leading-relaxed">
+                      Usted NO requiere un nuevo papel. Al terminar su turno en Caja el tiquet avanzará automáticamente a Tríada/Foto.
+                    </p>
+                  </div>
                 </div>
               ) : (
-                <div className="h-[250px] border border-slate-200 border-dashed rounded-xl flex flex-col items-center justify-center p-6 text-center bg-white shadow-sm">
-                  <p className="text-sm text-slate-400 uppercase tracking-widest font-black">No hay Turnos en Fila</p>
-                  <p className="text-xs text-slate-400 mt-2 uppercase tracking-wide max-w-sm leading-relaxed font-bold">
-                    Los turnos pasarán automáticamente a esta pantalla tan pronto se completen de Caja
-                  </p>
+                /* FOCUSED SCREEN FOR A SPECIFIC SEPARATE PHASE MONITOR (TV BOXES) */
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-2">
+                    <span className="text-xs font-black font-mono tracking-widest text-[#122e70] uppercase flex items-center gap-2">
+                      <Users className="w-5 h-5 text-[#122e70]" />
+                      COLA DE ESPERA EN EXCLUSIVA ({PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()})
+                    </span>
+                    <span className="text-xs text-slate-400 font-mono font-extrabold">TOTAL: {filteredWaiting.length} TURNOS EN FILA</span>
+                  </div>
+
+                  {filteredWaiting.length > 0 ? (
+                    <div className={`grid ${layoutFocus === "queue" ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-4" : "grid-cols-2"} gap-3.5 max-h-[460px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-250`}>
+                      {filteredWaiting.map((ticket, index) => {
+                        const styleConfig = SERVICES_CONFIG[ticket.serviceType];
+                        return (
+                          <div
+                            key={ticket.id}
+                            className={`p-4 rounded-xl flex items-center justify-between border ${
+                              ticket.priority
+                                ? "bg-amber-50/50 border-amber-300 text-amber-950 shadow-sm"
+                                : "bg-white border-slate-200 text-slate-800 hover:border-slate-300 shadow-sm"
+                            } ${layoutFocus === "queue" ? "p-6" : "p-3.5"}`}
+                          >
+                            <div className="space-y-1 truncate max-w-[200px]">
+                              <span className="text-[9px] text-slate-400 font-mono font-black block font-bold">
+                                ORDEN #{index+1}
+                              </span>
+                              <h5 className={`font-black tracking-wider uppercase truncate text-slate-900 ${layoutFocus === "queue" ? "text-sm" : "text-xs"}`}>
+                                {ticket.name}
+                              </h5>
+                            </div>
+                            
+                            <div className="flex flex-col items-end gap-1.5 font-mono">
+                              <span className={`font-black leading-none text-[#122e70] ${layoutFocus === "queue" ? "text-2xl" : "text-lg"}`}>
+                                {ticket.numberCode}
+                              </span>
+                              <span className={`text-[9px] px-2 py-0.5 font-black uppercase text-center rounded ${styleConfig.color}`}>
+                                {styleConfig.prefix}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="h-[250px] border border-slate-200 border-dashed rounded-xl flex flex-col items-center justify-center p-6 text-center bg-white shadow-sm">
+                      <p className="text-sm text-slate-400 uppercase tracking-widest font-black">No hay Turnos en Fila</p>
+                      <p className="text-xs text-slate-400 mt-2 uppercase tracking-wide max-w-sm leading-relaxed font-bold">
+                        Los turnos pasarán automáticamente a esta pantalla tan pronto se completen de Caja
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
