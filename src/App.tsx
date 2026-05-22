@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { useTicketSystem } from "./hooks/useTicketSystem";
-import { ServiceType, SERVICES_CONFIG } from "./types";
+import { ServiceType, SERVICES_CONFIG, OFFICES_CONFIG } from "./types";
 import { playCallingChime, speakCall } from "./utils/audio";
 
 // Import custom components
@@ -13,6 +13,7 @@ import WelcomeKiosk from "./components/WelcomeKiosk";
 import MainScreen from "./components/MainScreen";
 import AgentConsole from "./components/AgentConsole";
 import ControlDashboard from "./components/ControlDashboard";
+import SuperAdminConsole from "./components/SuperAdminConsole";
 
 import { 
   Tv, 
@@ -34,6 +35,8 @@ import {
 
 export default function App() {
   const {
+    currentOfficeId,
+    setCurrentOfficeId,
     tickets,
     cubicles,
     activeCall,
@@ -52,11 +55,16 @@ export default function App() {
     recallCurrentTicket,
     changeCubicleStatus,
     updateCubicleConfig,
-    resetSystem
+    resetSystem,
+    purgeOldTickets,
+    officeTickets,
+    setOfficeTickets,
+    officeCubicles,
+    setOfficeCubicles
   } = useTicketSystem();
 
-  // Selected viewport tab: "combined" | "kiosk" | "tv" | "agent" | "admin"
-  const [activeTab, setActiveTab] = useState<string>("combined");
+  // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin"
+  const [activeTab, setActiveTab] = useState<string>("kiosk");
 
   // Keep navigation menu hidden for dedicated device screen focus (Kiosk / TV screen lock)
   const [isHeaderHidden, setIsHeaderHidden] = useState<boolean>(false);
@@ -333,13 +341,31 @@ export default function App() {
         <header className="max-w-7xl mx-auto w-full px-4 md:px-8 pt-6 space-y-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
           
-          <div className="flex items-center pl-1">
+          <div className="flex flex-col md:flex-row md:items-center gap-4 pl-1">
             <img 
               src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/04/WhatsApp-Image-2026-04-30-at-09.45.35.png" 
               referrerPolicy="no-referrer" 
               alt="Tribunal Electoral de Panamá" 
-              className="h-16 md:h-20 w-auto object-contain" 
+              className="h-14 md:h-16 w-auto object-contain self-start md:self-center" 
             />
+            <div className="h-6 w-[1px] bg-slate-250 hidden md:block" />
+            <div className="flex flex-col">
+              <label htmlFor="office-select" className="text-[9px] uppercase tracking-wider font-extrabold text-slate-400 mb-0.5">
+                Sede / Oficina Regional Activa
+              </label>
+              <select
+                id="office-select"
+                value={currentOfficeId}
+                onChange={(e) => setCurrentOfficeId(e.target.value)}
+                className="bg-slate-50 border border-slate-250 hover:bg-slate-100 focus:ring-2 focus:ring-blue-150 text-slate-800 text-[11px] font-black uppercase tracking-wider rounded-xl px-3 py-1.5 cursor-pointer shadow-sm outline-none transition-all"
+              >
+                {OFFICES_CONFIG.map(office => (
+                  <option key={office.id} value={office.id}>
+                    {office.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* Test Chime and Alerts quick bar */}
@@ -363,20 +389,7 @@ export default function App() {
         </div>
 
         {/* VIEWPORT CONTROLLER TABS */}
-        <div className="flex items-center justify-start overflow-x-auto gap-2 border-b border-slate-200/50 pb-2 scrollbar-none">
-          <button
-            id="tab-view-combined"
-            onClick={() => setActiveTab("combined")}
-            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
-              activeTab === "combined"
-                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
-                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900"
-            }`}
-          >
-            <LayoutGrid className="w-4 h-4" />
-            <span>Multipantalla</span>
-          </button>
-
+        <div className="flex flex-wrap items-center justify-start gap-2 border-b border-slate-200/50 pb-2.5">
           <button
             id="tab-view-kiosk"
             onClick={() => setActiveTab("kiosk")}
@@ -442,6 +455,32 @@ export default function App() {
             )}
           </button>
 
+          <button
+            id="tab-view-super-admin"
+            onClick={() => {
+              if (isAdminAuthenticated) {
+                setActiveTab("super-admin");
+              } else {
+                setAdminPasswordInput("");
+                setAdminPasswordError(false);
+                setIsAdminLoginModalOpen(true);
+              }
+            }}
+            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
+              activeTab === "super-admin"
+                ? "bg-rose-700 text-white border-transparent shadow shadow-red-100"
+                : "bg-white text-rose-750 border-rose-200 hover:bg-rose-50 hover:text-rose-900"
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-amber-500" />
+            <span>Super Administrador</span>
+            {isAdminAuthenticated ? (
+              <Unlock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+            ) : (
+              <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0 animate-pulse" />
+            )}
+          </button>
+
           {/* Quick link to Hide Menu/Option Tabs */}
           <button
             id="btn-hide-navigation-menu"
@@ -458,169 +497,10 @@ export default function App() {
 
       {/* MAIN RENDER AREA */}
       <main className={`max-w-7xl mx-auto w-full px-4 md:px-8 flex-grow ${isHeaderHidden ? "pt-8" : ""}`}>
-        {activeTab === "combined" && (
-          /* Multi-screen side-by-side dashboard */
-          <div className="space-y-6">
-            
-            {/* GIANT DEEP BLUE HERO BLOCK */}
-            <div className="w-full bg-gradient-to-r from-[#122e70] to-[#1d428a] text-white rounded-2xl p-8 md:p-10 text-center relative overflow-hidden shadow-md flex flex-col justify-center items-center">
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-blue-600/30 via-transparent to-transparent opacity-75"></div>
-              
-              <div className="relative z-10 max-w-4xl mx-auto space-y-4">
-                <span className="px-3 py-1 text-[10px] font-mono tracking-widest bg-blue-500/20 text-blue-200 border border-blue-400/40 font-black rounded uppercase">
-                  ✓ PORTAL OFICIAL DE ATENCIÓN CIUDADANA
-                </span>
-                <h2 className="text-3xl md:text-5xl font-black font-display uppercase tracking-wider text-white">
-                  PORTAL DE CITAS TECNOLÓGICAS
-                </h2>
-                <p className="text-sm md:text-base text-blue-100 font-medium leading-relaxed max-w-2xl mx-auto">
-                  Evite filas y programe su atención presencial obligatoria para servicios de Cédula, Registro Civil y Extranjería de manera transparente, rápida y garantizada.
-                </p>
-                
-                {/* Embedded Simulation system controls */}
-                <div className="pt-4 flex flex-wrap items-center justify-center gap-3.5">
-                  <button
-                    id="btn-fast-simulation-start"
-                    onClick={() => setIsSimulationActive(!isSimulationActive)}
-                    className={`py-3 px-5 rounded-xl font-black tracking-wider text-xs uppercase cursor-pointer transition-all flex items-center gap-2 shadow-md ${
-                      isSimulationActive 
-                        ? "bg-amber-500 text-white shadow-amber-900/20" 
-                        : "bg-emerald-600 text-white shadow-emerald-900/20 hover:bg-emerald-700"
-                    }`}
-                  >
-                    <span className="relative flex h-2.5 w-2.5">
-                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isSimulationActive ? 'bg-amber-300' : 'bg-emerald-300'}`}></span>
-                      <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isSimulationActive ? 'bg-white' : 'bg-emerald-250'}`}></span>
-                    </span>
-                    <span>{isSimulationActive ? "PAUSAR FLUJO AUTOMÁTICO" : "ACTIVAR TRÁFICO DE CIUDADANOS"}</span>
-                  </button>
-
-                  <button
-                    id="btn-trigger-single-instant-client-hero"
-                    onClick={handleCreateRandomTicket}
-                    className="py-3 px-5 bg-white hover:bg-slate-50 text-[#122e70] font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-2"
-                  >
-                    <UserPlus className="w-4 h-4 text-[#122e70]" />
-                    <span>Generar Turno Al Instante</span>
-                  </button>
-                  
-                  <button
-                    id="btn-reset-system"
-                    onClick={() => {
-                      if (window.confirm("¿Estás seguro de que quieres reiniciar totalmente el sistema de tickets? Se vaciarán colas e históricos.")) {
-                        resetSystem();
-                      }
-                    }}
-                    className="py-3 px-5 bg-red-600 hover:bg-red-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-md flex items-center gap-2"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    <span>REINICIAR TODO</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Combined 4-panel Grid Layout */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-              
-              {/* KIOSK SCREEN */}
-              <div className="space-y-2">
-                <span className="text-[10px] tracking-[0.25em] uppercase font-bold text-slate-400 block font-mono">
-                  [PANTALLA 01] REGISTRO DE TRÁMITE
-                </span>
-                <WelcomeKiosk onCreateTicket={createTicket} />
-              </div>
-
-              {/* PUBLIC TV BOARD SCREEN */}
-              <div className="space-y-2 xl:col-span-1">
-                <span className="text-[10px] tracking-[0.25em] uppercase font-bold text-slate-400 block font-mono">
-                  [PANTALLA 02] MONITOR DE SALA
-                </span>
-                <MainScreen
-                  tickets={tickets}
-                  cubicles={cubicles}
-                  activeCall={activeCall}
-                  onClearActiveCall={() => setActiveCall(null)}
-                  onTestSpeaker={handleTestSpeaker}
-                />
-              </div>
-
-              {/* AGENT CONSOLE & CONTROLS */}
-              <div className="space-y-2 lg:col-span-2 xl:col-span-1 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-6 md:gap-4 xl:gap-0">
-                <div className="space-y-2">
-                  <span className="text-[10px] tracking-[0.25em] uppercase font-bold text-slate-400 block font-mono">
-                    [PANTALLA 03] CONSOLA OPERATIVA
-                  </span>
-                  <AgentConsole
-                    tickets={tickets}
-                    cubicles={cubicles}
-                    onCallNext={callNextTicket}
-                    onStartAttending={startAttendingTicket}
-                    onComplete={completeTicket}
-                    onMiss={markTicketAsMissed}
-                    onRecall={recallCurrentTicket}
-                    onChangeStatus={changeCubicleStatus}
-                    onUpdateCubicleConfig={updateCubicleConfig}
-                  />
-                </div>
-
-                <div className="space-y-2 xl:mt-6">
-                  <span className="text-[10px] tracking-[0.25em] uppercase font-bold text-slate-400 block font-mono flex items-center justify-between">
-                    <span>[PANTALLA 04] CENTRO DE CONTROL</span>
-                    {!isAdminAuthenticated && (
-                      <span className="flex items-center gap-1 text-[9px] font-black bg-red-50 text-red-700 px-1.5 py-0.5 rounded uppercase">
-                        <Lock className="w-2.5 h-2.5" /> Protegido
-                      </span>
-                    )}
-                  </span>
-                  {isAdminAuthenticated ? (
-                    <ControlDashboard
-                      tickets={tickets}
-                      cubicles={cubicles}
-                      isSimulationActive={isSimulationActive}
-                      onToggleSimulation={setIsSimulationActive}
-                      simulationSpeed={simulationSpeed}
-                      onSetSimulationSpeed={setSimulationSpeed}
-                      onCreateRandomTicket={handleCreateRandomTicket}
-                      onResetSystem={resetSystem}
-                      isAutoAssignActive={isAutoAssignActive}
-                      onToggleAutoAssign={setIsAutoAssignActive}
-                    />
-                  ) : (
-                    <div className="bg-white border-2 border-dashed border-slate-200 p-6 rounded-2xl flex flex-col items-center justify-center text-center space-y-4 min-h-[250px] shadow-sm">
-                      <div className="w-12 h-12 bg-red-50 text-red-650 rounded-full flex items-center justify-center border border-red-100">
-                        <Lock className="w-5 h-5 text-red-650" />
-                      </div>
-                      <div className="space-y-1">
-                        <h4 className="text-xs font-black uppercase tracking-wider text-slate-850">Centro de Control Bloqueado</h4>
-                        <p className="text-[10px] text-slate-500 max-w-xs leading-normal">
-                          Para modificar simulaciones, velocidades de atención o reiniciar el sistema de tickets, desbloquee el acceso.
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => {
-                          setAdminPasswordInput("");
-                          setAdminPasswordError(false);
-                          setIsAdminLoginModalOpen(true);
-                        }}
-                        className="px-4.5 py-2.5 bg-[#122e70] hover:bg-blue-800 text-white text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1.5"
-                      >
-                        <Unlock className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Desbloquear Acceso</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-            </div>
-          </div>
-        )}
-
         {/* INDIVIDUAL MAXIMIZED VIEWPORTS */}
         {activeTab === "kiosk" && (
           <div className="w-full py-4">
-            <WelcomeKiosk onCreateTicket={createTicket} />
+            <WelcomeKiosk onCreateTicket={createTicket} currentOfficeId={currentOfficeId} />
           </div>
         )}
 
@@ -632,6 +512,7 @@ export default function App() {
               activeCall={activeCall}
               onClearActiveCall={() => setActiveCall(null)}
               onTestSpeaker={handleTestSpeaker}
+              currentOfficeId={currentOfficeId}
             />
           </div>
         )}
@@ -666,6 +547,7 @@ export default function App() {
                 onResetSystem={resetSystem}
                 isAutoAssignActive={isAutoAssignActive}
                 onToggleAutoAssign={setIsAutoAssignActive}
+                onPurgeOldTickets={purgeOldTickets}
               />
             ) : (
               <div className="bg-white border-2 border-dashed border-slate-200 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-6 max-w-lg mx-auto shadow-sm my-8">
@@ -688,6 +570,42 @@ export default function App() {
                 >
                   <Unlock className="w-4 h-4 text-amber-400" />
                   <span>Desbloquear Administración</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === "super-admin" && (
+          <div className="w-full py-4">
+            {isAdminAuthenticated ? (
+              <SuperAdminConsole
+                officeTickets={officeTickets}
+                setOfficeTickets={setOfficeTickets}
+                officeCubicles={officeCubicles}
+                setOfficeCubicles={setOfficeCubicles}
+              />
+            ) : (
+              <div className="bg-white border-2 border-dashed border-slate-200 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-6 max-w-lg mx-auto shadow-sm my-8">
+                <div className="w-16 h-16 bg-red-50 text-red-650 rounded-full flex items-center justify-center border border-red-100">
+                  <Lock className="w-8 h-8 text-red-600" />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-900">Acceso a Super Administrador Bloqueado</h3>
+                  <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
+                    Usted no ha iniciado sesión de super administración. Por favor introduzca la clave autorizada para abrir el panel de control unificado y clasificador de las 16 oficinas.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setAdminPasswordInput("");
+                    setAdminPasswordError(false);
+                    setIsAdminLoginModalOpen(true);
+                  }}
+                  className="px-6 py-3 bg-[#122e70] hover:bg-blue-800 text-white text-xs font-black uppercase tracking-widest rounded-xl transition-all cursor-pointer shadow-md flex items-center justify-center gap-2"
+                >
+                  <Unlock className="w-4 h-4 text-amber-400" />
+                  <span>Desbloquear Super Administrador</span>
                 </button>
               </div>
             )}

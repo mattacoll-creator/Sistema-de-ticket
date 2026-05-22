@@ -131,3 +131,93 @@ export interface Cubicle {
   supportedPhases: TicketPhase[]; // Phases handled by this cubicle (Caja, Triada, Fotografía, Trámite)
   totalAttendedCount: number;
 }
+
+export interface Office {
+  id: string;
+  name: string;
+  address: string;
+}
+
+export const OFFICES_CONFIG: Office[] = [
+  {
+    id: "OFF-1",
+    name: "Tribunal Electoral de Panamá (Sede Principal)",
+    address: "Avenida Omar Torrijos Herrera, Ancón"
+  },
+  {
+    id: "OFF-2",
+    name: "Dirección Regional de Bocas del Toro",
+    address: "Bocas del Toro"
+  },
+  {
+    id: "OFF-3",
+    name: "Dirección Regional de Coclé",
+    address: "Coclé"
+  },
+  {
+    id: "OFF-4",
+    name: "Dirección Regional de Colón",
+    address: "Colón"
+  },
+  {
+    id: "OFF-5",
+    name: "Dirección Regional de Chiriquí",
+    address: "Chiriquí"
+  },
+  {
+    id: "OFF-6",
+    name: "Dirección Regional de Darién",
+    address: "Darién"
+  },
+  {
+    id: "OFF-7",
+    name: "Dirección Regional de Herrera",
+    address: "Herrera"
+  },
+  {
+    id: "OFF-8",
+    name: "Dirección Regional de Los Santos",
+    address: "Los Santos"
+  },
+  {
+    id: "OFF-9",
+    name: "Dirección Regional de Panamá Centro",
+    address: "Panamá Centro"
+  },
+  {
+    id: "OFF-10",
+    name: "Dirección Regional de Panamá Norte",
+    address: "Panamá Norte"
+  },
+  {
+    id: "OFF-11",
+    name: "Dirección Regional de Panamá Este",
+    address: "Panamá Este"
+  },
+  {
+    id: "OFF-12",
+    name: "Dirección Regional de Panamá Oeste",
+    address: "Panamá Oeste"
+  },
+  {
+    id: "OFF-13",
+    name: "Dirección Regional de San Miguelito",
+    address: "San Miguelito"
+  },
+  {
+    id: "OFF-14",
+    name: "Dirección Regional de Veraguas",
+    address: "Veraguas"
+  },
+  {
+    id: "OFF-15",
+    name: "Dirección Regional de Guna Yala",
+    address: "Guna Yala"
+  },
+  {
+    id: "OFF-16",
+    name: "Regional Especial de Arraiján",
+    address: "Arraiján"
+  }
+];
+

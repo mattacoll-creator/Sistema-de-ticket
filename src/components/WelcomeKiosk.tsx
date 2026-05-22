@@ -4,15 +4,16 @@
  */
 
 import React, { useState } from "react";
-import { ServiceType, SERVICES_CONFIG, Ticket } from "../types";
+import { ServiceType, SERVICES_CONFIG, Ticket, OFFICES_CONFIG } from "../types";
 import { motion } from "motion/react";
 import { User, Accessibility, Printer, CheckCircle2, Ticket as TicketIcon, HelpCircle } from "lucide-react";
 
 interface WelcomeKioskProps {
   onCreateTicket: (name: string, serviceType: ServiceType, priority: boolean) => Ticket;
+  currentOfficeId?: string;
 }
 
-export default function WelcomeKiosk({ onCreateTicket }: WelcomeKioskProps) {
+export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1" }: WelcomeKioskProps) {
   const [name, setName] = useState("");
   const [priority, setPriority] = useState(false);
   const [selectedService, setSelectedService] = useState<ServiceType | null>(null);
@@ -21,6 +22,8 @@ export default function WelcomeKiosk({ onCreateTicket }: WelcomeKioskProps) {
 
   // Focus simulation
   const [inputFocused, setInputFocused] = useState(false);
+
+  const office = OFFICES_CONFIG.find(o => o.id === currentOfficeId) || OFFICES_CONFIG[0];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,7 +54,9 @@ export default function WelcomeKiosk({ onCreateTicket }: WelcomeKioskProps) {
               <h3 className="text-sm font-black uppercase tracking-wider text-slate-900 leading-tight">
                 Emisión de Turnos
               </h3>
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-0.5">Autoservicio Kiosco</p>
+              <p className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest mt-0.5">
+                Kiosco — {office.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
+              </p>
             </div>
           </div>
           <span className="px-2 py-1 text-[8.5px] uppercase tracking-widest font-mono bg-emerald-50 text-emerald-700 font-extrabold rounded border border-emerald-200 shadow-sm animate-pulse">
@@ -202,7 +207,12 @@ export default function WelcomeKiosk({ onCreateTicket }: WelcomeKioskProps) {
                   className="h-12 w-auto object-contain mb-2.5" 
                 />
                 <h4 className="font-extrabold text-sm uppercase tracking-wider text-slate-900">TICKET DE TURNO</h4>
-                <p className="text-[9px] text-slate-400 uppercase tracking-widest mt-0.5 font-bold">SISTEMA CONTROL DIGITAL</p>
+                <p className="text-[10px] font-black text-[#122e70] uppercase tracking-wide mt-1 text-center leading-tight">
+                  {office.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
+                </p>
+                <p className="text-[8px] text-slate-400 uppercase mt-1 text-center font-bold tracking-tight max-w-[220px] leading-normal">
+                  {office.address}
+                </p>
               </div>
 
               <div className="text-center py-4 space-y-1">

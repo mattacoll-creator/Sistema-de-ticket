@@ -410,7 +410,11 @@ export default function AgentConsole({
                 </div>
                 
                 <p className="text-[11px] uppercase text-[#122e70] text-center font-bold bg-blue-50/50 py-1.5 border border-blue-100/40 rounded-lg">
-                  {activeTicket.currentPhase === TicketPhase.CAJA && "➔ Al finalizar en caja, el tiquet pasará automáticamente a la siguiente cola de Tríada y Fotografía."}
+                  {activeTicket.currentPhase === TicketPhase.CAJA && (
+                    (activeTicket.serviceType === ServiceType.ELECTORAL || activeTicket.serviceType === ServiceType.REGISTRO)
+                      ? "➔ Flujo Corto (Caja): Al finalizar, el ticket se completará y cerrará directamente."
+                      : "➔ Flujo Largo (Tríada): Al finalizar, el ticket pasará automáticamente a la cola de Tríada y Fotografía."
+                  )}
                   {activeTicket.currentPhase === TicketPhase.TRIADA && "➔ Fase final de atención. Al pulsar Completar, el ciudadano se completa."}
                 </p>
               </div>

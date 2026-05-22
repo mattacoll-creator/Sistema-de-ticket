@@ -22,9 +22,15 @@ import {
   HelpCircle,
   FileText,
   Download,
-  Volume2
+  Volume2,
+  Cpu,
+  SlidersHorizontal,
+  SunDim,
+  RefreshCw,
+  Sparkle
 } from "lucide-react";
 import { generatePDFReport } from "../utils/reportGenerator";
+import { playCallingChime, speakCall } from "../utils/audio";
 
 interface ControlDashboardProps {
   tickets: Ticket[];
@@ -37,6 +43,7 @@ interface ControlDashboardProps {
   onResetSystem: () => void;
   isAutoAssignActive?: boolean;
   onToggleAutoAssign?: (active: boolean) => void;
+  onPurgeOldTickets?: () => void;
 }
 
 export default function ControlDashboard({
@@ -49,8 +56,70 @@ export default function ControlDashboard({
   onCreateRandomTicket,
   onResetSystem,
   isAutoAssignActive = true,
-  onToggleAutoAssign
+  onToggleAutoAssign,
+  onPurgeOldTickets
 }: ControlDashboardProps) {
+
+  // --- ESTADOS LOCALES PARA LAS 4 OPTIMIZACIONES ---
+  const [ttsRate, setTtsRate] = React.useState<number>(() => {
+    const saved = localStorage.getItem("ticket_tts_rate");
+    return saved ? parseFloat(saved) : 0.95;
+  });
+  const [ttsPitch, setTtsPitch] = React.useState<number>(() => {
+    const saved = localStorage.getItem("ticket_tts_pitch");
+    return saved ? parseFloat(saved) : 1.05;
+  });
+  const [ttsVoicePref, setTtsVoicePref] = React.useState<string>(() => {
+    return localStorage.getItem("ticket_tts_voice_pref") || "female";
+  });
+  const [ecoMode, setEcoMode] = React.useState<boolean>(() => {
+    return localStorage.getItem("eco_mode_active") === "true";
+  });
+  const [limitHistory, setLimitHistory] = React.useState<boolean>(() => {
+    return localStorage.getItem("limitar_historial_tv") !== "false";
+  });
+  const [purgeSuccess, setPurgeSuccess] = React.useState<boolean>(false);
+
+  // Guardado automático y despacho de eventos en localStorage
+  React.useEffect(() => {
+    localStorage.setItem("ticket_tts_rate", ttsRate.toString());
+  }, [ttsRate]);
+
+  React.useEffect(() => {
+    localStorage.setItem("ticket_tts_pitch", ttsPitch.toString());
+  }, [ttsPitch]);
+
+  React.useEffect(() => {
+    localStorage.setItem("ticket_tts_voice_pref", ttsVoicePref);
+  }, [ttsVoicePref]);
+
+  React.useEffect(() => {
+    localStorage.setItem("eco_mode_active", ecoMode ? "true" : "false");
+    window.dispatchEvent(new Event("storage"));
+  }, [ecoMode]);
+
+  React.useEffect(() => {
+    localStorage.setItem("limitar_historial_tv", limitHistory ? "true" : "false");
+    window.dispatchEvent(new Event("storage"));
+  }, [limitHistory]);
+
+  const handleTestTtsLocal = async () => {
+    try {
+      await playCallingChime();
+      await new Promise(r => setTimeout(r, 450));
+      await speakCall("OP-04", "Juan Pérez", "Módulo de Prueba Optimizada");
+    } catch (e) {
+      console.warn("Speech Synthesis blocked inside browser sandbox.", e);
+    }
+  };
+
+  const handleTriggerPurge = () => {
+    if (onPurgeOldTickets) {
+      onPurgeOldTickets();
+      setPurgeSuccess(true);
+      setTimeout(() => setPurgeSuccess(false), 3000);
+    }
+  };
   
   // Calculate analytics metrics
   const totalCreated = tickets.length;
@@ -291,6 +360,192 @@ export default function ControlDashboard({
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        {/* --- PERFORMANCE GEARS & SYSTEM OPTIMIZER --- */}
+        <div id="system-optimization-suite" className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3 shadow-sm">
+          <div className="flex items-center justify-between">
+            <h4 className="text-[10px] font-black text-slate-700 uppercase tracking-widest flex items-center gap-1.5 font-mono">
+              <Cpu className="w-4 h-4 text-indigo-650" />
+              Optimización y Ajustes de Rendimiento
+            </h4>
+            <span className="text-[8px] bg-indigo-50 border border-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded font-black font-mono">
+              SUITE OPTIMUS
+            </span>
+          </div>
+
+          <p className="text-[10px] font-medium text-slate-550 leading-relaxed font-sans">
+            Ajuste el timbre de los altavoces, limpie registros viejos de memoria local y configure recursos de visualización óptimos.
+          </p>
+
+          <div className="space-y-3 pt-1">
+            {/* 1. TTS CONFIGURATOR (SLIDERS) */}
+            <div className="bg-white border border-slate-200 p-3 rounded-lg space-y-2.5 shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-black uppercase text-slate-700 tracking-wider flex items-center gap-1">
+                  <Volume2 className="w-3.5 h-3.5 text-indigo-650" />
+                  Sintonizador de Voces (TTS)
+                </span>
+                
+                {/* Voice Selection Toggle */}
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setTtsVoicePref("female")}
+                    className={`px-1.5 py-0.5 text-[8px] font-extrabold uppercase rounded transition-all cursor-pointer ${
+                      ttsVoicePref === "female"
+                        ? "bg-indigo-600 text-white shadow-xs"
+                        : "bg-slate-100 text-slate-550 hover:bg-slate-150"
+                    }`}
+                  >
+                    Fm
+                  </button>
+                  <button
+                    onClick={() => setTtsVoicePref("male")}
+                    className={`px-1.5 py-0.5 text-[8px] font-extrabold uppercase rounded transition-all cursor-pointer ${
+                      ttsVoicePref === "male"
+                        ? "bg-indigo-600 text-white shadow-xs"
+                        : "bg-slate-100 text-slate-550 hover:bg-slate-150"
+                    }`}
+                  >
+                    Ms
+                  </button>
+                </div>
+              </div>
+
+              {/* TTS Speed Rate Slider */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[8px] font-bold text-slate-550 font-mono">
+                  <span>VELOCIDAD DE VOZ</span>
+                  <span className="text-indigo-650 font-black">{ttsRate.toFixed(2)}x</span>
+                </div>
+                <input
+                  type="range"
+                  min={0.6}
+                  max={1.5}
+                  step={0.05}
+                  value={ttsRate}
+                  onChange={(e) => setTtsRate(parseFloat(e.target.value))}
+                  className="w-full h-1 bg-slate-150 rounded-lg appearance-none cursor-pointer accent-indigo-650"
+                  title="Configura la velocidad a la que habla el sintetizador de voz"
+                />
+              </div>
+
+              {/* TTS Pitch Tone Slider */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[8px] font-bold text-slate-550 font-mono">
+                  <span>TONALIDAD / AGUDEZA (PITCH)</span>
+                  <span className="text-indigo-650 font-black">{ttsPitch.toFixed(2)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={2.0}
+                  step={0.05}
+                  value={ttsPitch}
+                  onChange={(e) => setTtsPitch(parseFloat(e.target.value))}
+                  className="w-full h-1 bg-slate-150 rounded-lg appearance-none cursor-pointer accent-indigo-650"
+                  title="Fija la agudeza o gravedad de la modulación hablada"
+                />
+              </div>
+
+              {/* TTS Test Trigger button */}
+              <button
+                onClick={handleTestTtsLocal}
+                className="w-full py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-150 text-indigo-750 font-extrabold text-[9px] uppercase tracking-wider rounded transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1"
+                title="Reproduce un arpegio y dicta un código de prueba para validar el volumen del navegador"
+              >
+                <SlidersHorizontal className="w-3 h-3 text-indigo-700 animate-spin-slow" />
+                Probar Altavoz Sintetizado
+              </button>
+            </div>
+
+            {/* 2. MEMORY CLEANER BUTTON */}
+            <div className="bg-white border border-slate-200 p-3 rounded-lg flex items-center justify-between shadow-xs">
+              <div className="space-y-0.5 max-w-[170px]">
+                <span className="block text-[9px] font-black uppercase text-slate-700 tracking-wider">
+                  Purgador de Memoria
+                </span>
+                <p className="text-[8px] font-medium text-slate-400 leading-tight">
+                  Mantenga colas rápidas eliminando tickets antiguos resueltos de la memoria local.
+                </p>
+              </div>
+
+              <button
+                onClick={handleTriggerPurge}
+                className={`py-2 px-3 text-[9px] font-black uppercase rounded-lg transition-all cursor-pointer border flex items-center gap-1 ${
+                  purgeSuccess
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                    : "bg-[#122e70] hover:bg-indigo-800 border-[#122e70] text-white shadow-xs"
+                }`}
+                title="Purga y limpia los turnos inactivos e históricos liberando recursos de la memoria de React"
+              >
+                {purgeSuccess ? (
+                  <>
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                    ¡LIMPIO!
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-3 h-3 text-white" />
+                    PURGAR
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* 3. LIMITE HISTORIAL / PAGING TOGGLE */}
+            <div className="bg-white border border-slate-200 p-3 rounded-lg flex items-center justify-between shadow-xs">
+              <div className="space-y-0.5 max-w-[190px]">
+                <span className="block text-[9px] font-black uppercase text-slate-700 tracking-wider font-sans">
+                  Páginación de Turnos (Historial)
+                </span>
+                <p className="text-[8px] font-medium text-slate-400 leading-tight font-sans">
+                  Limita la TV de la sala de espera a mostrar solo los 10 turnos completados más recientes.
+                </p>
+              </div>
+
+              <div className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={limitHistory}
+                  onChange={(e) => setLimitHistory(e.target.checked)}
+                  className="sr-only peer"
+                  id="toggle-limit-history"
+                />
+                <label
+                  htmlFor="toggle-limit-history"
+                  className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-indigo-650 cursor-pointer"
+                ></label>
+              </div>
+            </div>
+
+            {/* 4. ECO-MODE SCREEN BURN-IN TOGGLE */}
+            <div className="bg-white border border-slate-200 p-3 rounded-lg flex items-center justify-between shadow-xs">
+              <div className="space-y-0.5 max-w-[190px]">
+                <span className="text-[9px] font-black uppercase text-slate-705 tracking-wider flex items-center gap-1 font-sans">
+                  <SunDim className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+                  Protección de Pantalla (Modo Eco)
+                </span>
+                <p className="text-[8px] font-medium text-slate-404 leading-tight font-sans">
+                  Evita que las pantallas estáticas LED de recepción sufran quemado visual atenuando automáticamente el panel principal si la sala está inactiva.
+                </p>
+              </div>
+
+              <div className="relative inline-flex items-center cursor-pointer font-bold">
+                <input
+                  type="checkbox"
+                  checked={ecoMode}
+                  onChange={(e) => setEcoMode(e.target.checked)}
+                  className="sr-only peer"
+                  id="toggle-eco-mode"
+                />
+                <label
+                  htmlFor="toggle-eco-mode"
+                  className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-emerald-500 cursor-pointer"
+                ></label>
+              </div>
+            </div>
           </div>
         </div>
 

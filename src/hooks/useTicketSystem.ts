@@ -11,7 +11,11 @@ const STORAGE_KEYS = {
   TICKETS: "ticket_system_tickets_v1",
   CUBICLES: "ticket_system_cubicles_v1",
   STATS: "ticket_system_stats_v1",
-  AUTO_ASSIGN: "ticket_system_auto_assign_v1"
+  AUTO_ASSIGN: "ticket_system_auto_assign_v1",
+  CURRENT_OFFICE: "ticket_system_current_office_v1",
+  OFFICE_TICKETS: "ticket_system_office_tickets_v1",
+  OFFICE_CUBICLES: "ticket_system_office_cubicles_v1",
+  OFFICE_AUTO_ASSIGN: "ticket_system_office_auto_assign_v1"
 };
 
 const INITIAL_CUBICLES: Cubicle[] = [
@@ -171,37 +175,95 @@ const INITIAL_CUBICLES: Cubicle[] = [
 ];
 
 export function useTicketSystem() {
-  const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [cubicles, setCubicles] = useState<Cubicle[]>(INITIAL_CUBICLES);
+  const [currentOfficeId, setCurrentOfficeId] = useState<string>("OFF-1");
+  const [officeTickets, setOfficeTickets] = useState<Record<string, Ticket[]>>({});
+  const [officeCubicles, setOfficeCubicles] = useState<Record<string, Cubicle[]>>({});
+  const [officeAutoAssign, setOfficeAutoAssign] = useState<Record<string, boolean>>({});
+
   const [activeCall, setActiveCall] = useState<{ ticket: Ticket; cubicle: Cubicle } | null>(null);
-  const [isAutoAssignActive, setIsAutoAssignActive] = useState<boolean>(true);
   
   // Simulation states
   const [isSimulationActive, setIsSimulationActive] = useState<boolean>(false);
   const [simulationSpeed, setSimulationSpeed] = useState<number>(10000); // ms per user arrival (10s default)
   const simulationTimer = useRef<NodeJS.Timeout | null>(null);
 
+  // Derived state for the active office
+  const tickets = officeTickets[currentOfficeId] || [];
+  const cubicles = officeCubicles[currentOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c }));
+  const isAutoAssignActive = officeAutoAssign[currentOfficeId] !== false;
+
+  const setTicketsForCurrentOffice = useCallback((updater: Ticket[] | ((prev: Ticket[]) => Ticket[])) => {
+    setOfficeTickets(prev => {
+      const currentVal = prev[currentOfficeId] || [];
+      const newVal = typeof updater === "function" ? updater(currentVal) : updater;
+      return {
+        ...prev,
+        [currentOfficeId]: newVal
+      };
+    });
+  }, [currentOfficeId]);
+
+  const setCubiclesForCurrentOffice = useCallback((updater: Cubicle[] | ((prev: Cubicle[]) => Cubicle[])) => {
+    setOfficeCubicles(prev => {
+      const currentVal = prev[currentOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c }));
+      const newVal = typeof updater === "function" ? updater(currentVal) : updater;
+      return {
+        ...prev,
+        [currentOfficeId]: newVal
+      };
+    });
+  }, [currentOfficeId]);
+
+  const setIsAutoAssignActive = useCallback((active: boolean) => {
+    setOfficeAutoAssign(prev => ({
+      ...prev,
+      [currentOfficeId]: active
+    }));
+  }, [currentOfficeId]);
+
   // 1. Load from localStorage
   useEffect(() => {
     try {
-      const storedTickets = localStorage.getItem(STORAGE_KEYS.TICKETS);
-      const storedCubicles = localStorage.getItem(STORAGE_KEYS.CUBICLES);
-      const storedAutoAssign = localStorage.getItem(STORAGE_KEYS.AUTO_ASSIGN);
-
-      if (storedTickets) {
-        setTickets(JSON.parse(storedTickets));
+      const storedOffice = localStorage.getItem(STORAGE_KEYS.CURRENT_OFFICE);
+      if (storedOffice) {
+        setCurrentOfficeId(storedOffice);
       }
-      if (storedCubicles) {
-        const parsed = JSON.parse(storedCubicles);
-        if (parsed.length !== INITIAL_CUBICLES.length) {
-          setCubicles(INITIAL_CUBICLES);
-        } else {
-          setCubicles(parsed);
+
+      const storedOfficeTickets = localStorage.getItem(STORAGE_KEYS.OFFICE_TICKETS);
+      let loadedTickets: Record<string, Ticket[]> = {};
+      if (storedOfficeTickets) {
+        loadedTickets = JSON.parse(storedOfficeTickets);
+      } else {
+        const oldTickets = localStorage.getItem("ticket_system_tickets_v1");
+        if (oldTickets) {
+          loadedTickets["OFF-1"] = JSON.parse(oldTickets);
         }
       }
-      if (storedAutoAssign !== null) {
-        setIsAutoAssignActive(JSON.parse(storedAutoAssign));
+      setOfficeTickets(loadedTickets);
+
+      const storedOfficeCubicles = localStorage.getItem(STORAGE_KEYS.OFFICE_CUBICLES);
+      let loadedCubicles: Record<string, Cubicle[]> = {};
+      if (storedOfficeCubicles) {
+        loadedCubicles = JSON.parse(storedOfficeCubicles);
+      } else {
+        const oldCubicles = localStorage.getItem("ticket_system_cubicles_v1");
+        if (oldCubicles) {
+          loadedCubicles["OFF-1"] = JSON.parse(oldCubicles);
+        }
       }
+      setOfficeCubicles(loadedCubicles);
+
+      const storedOfficeAutoAssign = localStorage.getItem(STORAGE_KEYS.OFFICE_AUTO_ASSIGN);
+      let loadedAutoAssign: Record<string, boolean> = {};
+      if (storedOfficeAutoAssign) {
+        loadedAutoAssign = JSON.parse(storedOfficeAutoAssign);
+      } else {
+        const oldAutoAssign = localStorage.getItem("ticket_system_auto_assign_v1");
+        if (oldAutoAssign !== null) {
+          loadedAutoAssign["OFF-1"] = JSON.parse(oldAutoAssign);
+        }
+      }
+      setOfficeAutoAssign(loadedAutoAssign);
     } catch (e) {
       console.error("Error loading states from localStorage", e);
     }
@@ -210,36 +272,72 @@ export function useTicketSystem() {
   // 2. Persist to localStorage on changes
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(tickets));
+      if (Object.keys(officeTickets).length > 0) {
+        localStorage.setItem(STORAGE_KEYS.OFFICE_TICKETS, JSON.stringify(officeTickets));
+      }
     } catch (e) {
-      console.error("Error saving tickets code to storage", e);
+      console.error("Error saving office tickets", e);
     }
-  }, [tickets]);
+  }, [officeTickets]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.CUBICLES, JSON.stringify(cubicles));
+      if (Object.keys(officeCubicles).length > 0) {
+        localStorage.setItem(STORAGE_KEYS.OFFICE_CUBICLES, JSON.stringify(officeCubicles));
+      }
     } catch (e) {
-      console.error("Error saving cubicles to storage", e);
+      console.error("Error saving office cubicles", e);
     }
-  }, [cubicles]);
+  }, [officeCubicles]);
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEYS.AUTO_ASSIGN, JSON.stringify(isAutoAssignActive));
+      if (Object.keys(officeAutoAssign).length > 0) {
+        localStorage.setItem(STORAGE_KEYS.OFFICE_AUTO_ASSIGN, JSON.stringify(officeAutoAssign));
+      }
     } catch (e) {
-      console.error("Error saving auto assignment state to storage", e);
+      console.error("Error saving office auto assignment", e);
     }
-  }, [isAutoAssignActive]);
+  }, [officeAutoAssign]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_OFFICE, currentOfficeId);
+    } catch (e) {
+      console.error("Error saving current office", e);
+    }
+  }, [currentOfficeId]);
 
   // Clean / Reset the whole system
   const resetSystem = useCallback(() => {
-    setTickets([]);
-    setCubicles(INITIAL_CUBICLES);
+    setTicketsForCurrentOffice([]);
+    setCubiclesForCurrentOffice(INITIAL_CUBICLES.map(c => ({ ...c })));
     setActiveCall(null);
     setIsSimulationActive(false);
     setIsAutoAssignActive(true);
-  }, []);
+  }, [setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setIsAutoAssignActive]);
+
+  // Purga inteligente de memoria para optimizar rendimiento de colas
+  const purgeOldTickets = useCallback(() => {
+    setTicketsForCurrentOffice(prev => {
+      const active = prev.filter(t => 
+        t.status === TicketStatus.WAITING || 
+        t.status === TicketStatus.CALLING || 
+        t.status === TicketStatus.ATTENDING
+      );
+      const finished = prev.filter(t => 
+        t.status === TicketStatus.COMPLETED || 
+        t.status === TicketStatus.MISSED
+      );
+      
+      // Conservamos solo los 15 terminados más recientes para estadísticas
+      finished.sort((a, b) => b.createdAt - a.createdAt);
+      const trimmedFinished = finished.slice(0, 15);
+      
+      // Unir y ordenar por fecha de creación original
+      return [...active, ...trimmedFinished].sort((a, b) => a.createdAt - b.createdAt);
+    });
+  }, [setTicketsForCurrentOffice]);
 
   // 3. Create ticket
   const createTicket = useCallback((name: string, serviceType: ServiceType, priority: boolean = false): Ticket => {
@@ -264,13 +362,13 @@ export function useTicketSystem() {
       priority
     };
 
-    setTickets(prev => [...prev, newTicket]);
+    setTicketsForCurrentOffice(prev => [...prev, newTicket]);
     
     // Automatically flag available booths that can service this ticket!
     // But do NOT auto-assign, instead let it be in the general queue.
     // However, if we want to immediately tell them "Go to Cubicle X" if the agent is idle, we can trigger that:
     return newTicket;
-  }, [tickets]);
+  }, [tickets, setTicketsForCurrentOffice]);
 
   // 4. Assign / Call next ticket for a specific cubicle
   const callNextTicket = useCallback(async (cubicleId: string) => {
@@ -307,7 +405,13 @@ export function useTicketSystem() {
         let finalCompletedAt: number | undefined = undefined;
 
         if (t.currentPhase === TicketPhase.CAJA) {
-          nextPhase = TicketPhase.TRIADA;
+          const isShortFlow = t.serviceType === ServiceType.ELECTORAL || t.serviceType === ServiceType.REGISTRO;
+          if (isShortFlow) {
+            nextStatus = TicketStatus.COMPLETED;
+            finalCompletedAt = Date.now();
+          } else {
+            nextPhase = TicketPhase.TRIADA;
+          }
         } else {
           nextStatus = TicketStatus.COMPLETED;
           finalCompletedAt = Date.now();
@@ -365,10 +469,10 @@ export function useTicketSystem() {
     });
 
     // Update tickets state
-    setTickets(updatedTickets);
+    setTicketsForCurrentOffice(updatedTickets);
 
     // Update cubicle status
-    setCubicles(prev => prev.map(c => {
+    setCubiclesForCurrentOffice(prev => prev.map(c => {
       if (c.id === cubicleId) {
         return {
           ...c,
@@ -389,26 +493,32 @@ export function useTicketSystem() {
 
   // 5. Active ticket actions (start actual attending or finish)
   const startAttendingTicket = useCallback((cubicleId: string) => {
-    setTickets(prev => prev.map(t => {
+    setTicketsForCurrentOffice(prev => prev.map(t => {
       if (t.assignedCubicleId === cubicleId && t.status === TicketStatus.CALLING) {
         return { ...t, status: TicketStatus.ATTENDING };
       }
       return t;
     }));
-  }, []);
+  }, [setTicketsForCurrentOffice]);
 
   const completeTicket = useCallback((cubicleId: string) => {
     const targetCubicle = cubicles.find(c => c.id === cubicleId);
     if (!targetCubicle || !targetCubicle.currentTicketId) return;
 
-    setTickets(prev => prev.map(t => {
+    setTicketsForCurrentOffice(prev => prev.map(t => {
       if (t.id === targetCubicle.currentTicketId) {
         let nextPhase: TicketPhase | null = null;
         let nextStatus = TicketStatus.WAITING;
         let finalCompletedAt: number | undefined = undefined;
 
         if (t.currentPhase === TicketPhase.CAJA) {
-          nextPhase = TicketPhase.TRIADA;
+          const isShortFlow = t.serviceType === ServiceType.ELECTORAL || t.serviceType === ServiceType.REGISTRO;
+          if (isShortFlow) {
+            nextStatus = TicketStatus.COMPLETED;
+            finalCompletedAt = Date.now();
+          } else {
+            nextPhase = TicketPhase.TRIADA;
+          }
         } else {
           // TRIADA is final step
           nextStatus = TicketStatus.COMPLETED;
@@ -456,7 +566,7 @@ export function useTicketSystem() {
       return t;
     }));
 
-    setCubicles(prev => prev.map(c => {
+    setCubiclesForCurrentOffice(prev => prev.map(c => {
       if (c.id === cubicleId) {
         return {
           ...c,
@@ -467,20 +577,20 @@ export function useTicketSystem() {
       }
       return c;
     }));
-  }, [cubicles]);
+  }, [cubicles, setTicketsForCurrentOffice, setCubiclesForCurrentOffice]);
 
   const markTicketAsMissed = useCallback((cubicleId: string) => {
     const targetCubicle = cubicles.find(c => c.id === cubicleId);
     if (!targetCubicle || !targetCubicle.currentTicketId) return;
 
-    setTickets(prev => prev.map(t => {
+    setTicketsForCurrentOffice(prev => prev.map(t => {
       if (t.id === targetCubicle.currentTicketId) {
         return { ...t, status: TicketStatus.MISSED, completedAt: Date.now() };
       }
       return t;
     }));
 
-    setCubicles(prev => prev.map(c => {
+    setCubiclesForCurrentOffice(prev => prev.map(c => {
       if (c.id === cubicleId) {
         return {
           ...c,
@@ -490,7 +600,7 @@ export function useTicketSystem() {
       }
       return c;
     }));
-  }, [cubicles]);
+  }, [cubicles, setTicketsForCurrentOffice, setCubiclesForCurrentOffice]);
 
   const recallCurrentTicket = useCallback((cubicleId: string) => {
     const targetCubicle = cubicles.find(c => c.id === cubicleId);
@@ -507,7 +617,7 @@ export function useTicketSystem() {
   // 6. Change cubicle status (e.g., transition to BREAK or OFFLINE)
   const changeCubicleStatus = useCallback((cubicleId: string, newStatus: CubicleStatus) => {
     // If transitioning to break/offline, complete modern work
-    setCubicles(prev => prev.map(c => {
+    setCubiclesForCurrentOffice(prev => prev.map(c => {
       if (c.id === cubicleId) {
         return {
           ...c,
@@ -521,18 +631,18 @@ export function useTicketSystem() {
 
     // If there was an active ticket being attended, set it to missed or completed
     if (newStatus === CubicleStatus.BREAK || newStatus === CubicleStatus.OFFLINE) {
-      setTickets(prev => prev.map(t => {
+      setTicketsForCurrentOffice(prev => prev.map(t => {
         if (t.assignedCubicleId === cubicleId && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING)) {
           return { ...t, status: TicketStatus.COMPLETED, completedAt: Date.now() };
         }
         return t;
       }));
     }
-  }, []);
+  }, [setCubiclesForCurrentOffice, setTicketsForCurrentOffice]);
 
   // Configures cubicle capabilities dynamically
   const updateCubicleConfig = useCallback((cubicleId: string, supportedPhases: TicketPhase[], supportedServices: ServiceType[]) => {
-    setCubicles(prev => prev.map(c => {
+    setCubiclesForCurrentOffice(prev => prev.map(c => {
       if (c.id === cubicleId) {
         return {
           ...c,
@@ -542,7 +652,7 @@ export function useTicketSystem() {
       }
       return c;
     }));
-  }, []);
+  }, [setCubiclesForCurrentOffice]);
 
   // Auto Assignment Engine Logic
   const triggerAutoAssignment = useCallback(async (
@@ -612,8 +722,8 @@ export function useTicketSystem() {
     }
 
     if (assignedCount > 0) {
-      setTickets(updatedTickets);
-      setCubicles(updatedCubicles);
+      setTicketsForCurrentOffice(updatedTickets);
+      setCubiclesForCurrentOffice(updatedCubicles);
 
       if (callsToTrigger.length > 0) {
         const latestCall = callsToTrigger[callsToTrigger.length - 1];
@@ -690,6 +800,8 @@ export function useTicketSystem() {
   }, [isSimulationActive, simulationSpeed, createTicket]);
 
   return {
+    currentOfficeId,
+    setCurrentOfficeId,
     tickets,
     cubicles,
     activeCall,
@@ -708,6 +820,11 @@ export function useTicketSystem() {
     recallCurrentTicket,
     changeCubicleStatus,
     updateCubicleConfig,
-    resetSystem
+    resetSystem,
+    purgeOldTickets,
+    officeTickets,
+    setOfficeTickets,
+    officeCubicles,
+    setOfficeCubicles
   };
 }
