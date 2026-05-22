@@ -769,9 +769,13 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         </div>
 
         {/* --- FOOTER: TICKERS AND RECENT LOGS --- */}
-        <div id="logs-panel" className="pt-4 border-t border-white/5 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 text-xs">
+        <div id="logs-panel" className={`pt-4 border-t flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 text-xs ${
+          isTriadaChannel ? "border-slate-300" : "border-white/5"
+        }`}>
           <div className="flex items-center gap-3 w-full">
-            <span className="text-[10px] font-black text-sky-300/40 min-w-max uppercase font-mono tracking-widest block font-bold">
+            <span className={`text-[10px] font-black min-w-max uppercase font-mono tracking-widest block font-bold ${
+              isTriadaChannel ? "text-slate-500" : "text-sky-305/45"
+            }`}>
               📢 ÚLTIMAS ATENCIONES REALIZADAS:
             </span>
             {recentHistory.length > 0 ? (
@@ -781,17 +785,25 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                     key={h.id}
                     className={`px-3 py-1 text-xs font-mono rounded-lg font-bold flex items-center gap-1.5 shrink-0 border ${
                       h.status === TicketStatus.COMPLETED 
-                        ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30 shadow-sm" 
-                        : "bg-slate-900/50 text-slate-400 border-white/5"
+                        ? isTriadaChannel
+                          ? "bg-emerald-100/70 text-emerald-900 border-emerald-300 shadow-sm"
+                          : "bg-emerald-500/10 text-emerald-300 border-emerald-500/30 shadow-sm"
+                        : isTriadaChannel
+                          ? "bg-slate-100 text-slate-605 border-slate-205"
+                          : "bg-slate-900/50 text-slate-400 border-white/5"
                     }`}
                   >
                     <span>{h.numberCode}</span>
-                    <span className="text-[10px] text-slate-400 font-sans truncate max-w-[80px] uppercase font-bold">{h.name}</span>
+                    <span className={`text-[10px] font-sans truncate max-w-[80px] uppercase font-bold ${
+                      isTriadaChannel ? "text-slate-500" : "text-slate-400"
+                    }`}>{h.name}</span>
                   </span>
                 ))}
               </div>
             ) : (
-              <span className="text-[10px] text-slate-405 font-sans tracking-widest font-black uppercase">SIN HISTORIAL RECIENTE</span>
+              <span className={`text-[10px] font-sans tracking-widest font-black uppercase ${
+                isTriadaChannel ? "text-slate-400" : "text-slate-500"
+              }`}>SIN HISTORIAL RECIENTE</span>
             )}
           </div>
         </div>
