@@ -368,6 +368,11 @@ export default function AgentConsole({
                       ★ PRIORITARIO
                     </span>
                   )}
+                  {activeTicket.isAppointment && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-sky-600 text-white font-black text-[10px] uppercase mt-2 tracking-widest shadow-sm rounded-lg animate-pulse">
+                      📅 CITA PREVIA
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -533,6 +538,11 @@ export default function AgentConsole({
                       {item.priority && (
                         <span className="px-2 py-0.5 bg-amber-500 text-white text-[9px] font-black uppercase rounded-lg tracking-widest font-sans">
                           ★ PREF
+                        </span>
+                      )}
+                      {item.isAppointment && (
+                        <span className="px-2 py-0.5 bg-sky-600 text-white text-[9px] font-black uppercase rounded-lg tracking-widest font-sans">
+                          📅 CITA
                         </span>
                       )}
                       <span className="text-[10px] text-slate-400 font-bold">

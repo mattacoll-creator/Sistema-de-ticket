@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Ticket, TicketStatus, TicketPhase, Cubicle, CubicleStatus, ServiceType, SERVICES_CONFIG } from "../types";
 import { announceAndCall } from "../utils/audio";
+import { getSupabaseClient } from "../utils/supabaseClient";
 
 const STORAGE_KEYS = {
   TICKETS: "ticket_system_tickets_v1",
@@ -308,6 +309,112 @@ export function useTicketSystem() {
     }
   }, [currentOfficeId]);
 
+  // --- INTEGRACIÓN REAL CON SUPABASE ---
+  const [supabaseSyncStatus, setSupabaseSyncStatus] = useState<"idle" | "offline" | "syncing" | "success" | "error">("idle");
+
+  // Sync to Supabase reactively with a 1.5s debounce to cluster fast UI sequential actions
+  useEffect(() => {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setSupabaseSyncStatus("offline");
+      return;
+    }
+
+    setSupabaseSyncStatus("syncing");
+    const timeoutId = setTimeout(async () => {
+      try {
+        const { error } = await supabase
+          .from("office_state")
+          .upsert({
+            office_id: currentOfficeId,
+            tickets: officeTickets[currentOfficeId] || [],
+            cubicles: officeCubicles[currentOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c })),
+            auto_assign: officeAutoAssign[currentOfficeId] !== false,
+            updated_at: new Date().toISOString()
+          }, { onConflict: "office_id" });
+
+        if (error) {
+          throw error;
+        }
+        setSupabaseSyncStatus("success");
+      } catch (err) {
+        console.error("Supabase sync issue:", err);
+        setSupabaseSyncStatus("error");
+      }
+    }, 1500);
+
+    return () => clearTimeout(timeoutId);
+  }, [officeTickets, officeCubicles, officeAutoAssign, currentOfficeId]);
+
+  // Load initial office data from Supabase
+  const pullOfficeFromSupabase = useCallback(async (targetOfficeId: string = currentOfficeId) => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return false;
+
+    setSupabaseSyncStatus("syncing");
+    try {
+      const { data, error } = await supabase
+        .from("office_state")
+        .select("*")
+        .eq("office_id", targetOfficeId)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (data) {
+        const remoteTickets = (data.tickets || []) as Ticket[];
+        const remoteCubicles = (data.cubicles || []) as Cubicle[];
+        const remoteAutoAssign = data.auto_assign as boolean;
+
+        setOfficeTickets(prev => ({ ...prev, [targetOfficeId]: remoteTickets }));
+        setOfficeCubicles(prev => ({ ...prev, [targetOfficeId]: remoteCubicles }));
+        setOfficeAutoAssign(prev => ({ ...prev, [targetOfficeId]: remoteAutoAssign }));
+        
+        setSupabaseSyncStatus("success");
+        return true;
+      }
+    } catch (err) {
+      console.error("Error pulling from Supabase:", err);
+      setSupabaseSyncStatus("error");
+    }
+    return false;
+  }, [currentOfficeId]);
+
+  // Push immediate manual trigger
+  const pushOfficeToSupabase = useCallback(async (targetOfficeId: string = currentOfficeId) => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return false;
+
+    setSupabaseSyncStatus("syncing");
+    try {
+      const { error } = await supabase
+        .from("office_state")
+        .upsert({
+          office_id: targetOfficeId,
+          tickets: officeTickets[targetOfficeId] || [],
+          cubicles: officeCubicles[targetOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c })),
+          auto_assign: officeAutoAssign[targetOfficeId] !== false,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "office_id" });
+
+      if (error) throw error;
+      setSupabaseSyncStatus("success");
+      return true;
+    } catch (err) {
+      console.error("Error pushing to Supabase:", err);
+      setSupabaseSyncStatus("error");
+      return false;
+    }
+  }, [officeTickets, officeCubicles, officeAutoAssign, currentOfficeId]);
+
+  // Initial pull trigger for active office if Supabase keys exist
+  useEffect(() => {
+    const config = getSupabaseClient();
+    if (config) {
+      pullOfficeFromSupabase(currentOfficeId);
+    }
+  }, [currentOfficeId, pullOfficeFromSupabase]);
+
   // Clean / Reset the whole system
   const resetSystem = useCallback(() => {
     setTicketsForCurrentOffice([]);
@@ -340,7 +447,7 @@ export function useTicketSystem() {
   }, [setTicketsForCurrentOffice]);
 
   // 3. Create ticket
-  const createTicket = useCallback((name: string, serviceType: ServiceType, priority: boolean = false): Ticket => {
+  const createTicket = useCallback((name: string, serviceType: ServiceType, priority: boolean = false, isAppointment: boolean = false): Ticket => {
     const cleanName = name.trim() || "Anónimo";
     const config = SERVICES_CONFIG[serviceType];
     
@@ -348,6 +455,12 @@ export function useTicketSystem() {
     const sameServiceTickets = tickets.filter(t => t.serviceType === serviceType);
     const orderNumber = sameServiceTickets.length + 1;
     const formattedNumber = `${config.prefix}-${orderNumber.toString().padStart(3, "0")}`;
+
+    // Priority rule: The first 15 tickets of Cedulación each day are reserved and tagged for appointments
+    let finalIsAppointment = isAppointment;
+    if (serviceType === ServiceType.CEDULACION && orderNumber <= 15) {
+      finalIsAppointment = true;
+    }
 
     const newTicket: Ticket = {
       id: Math.random().toString(36).substring(2, 9),
@@ -359,7 +472,8 @@ export function useTicketSystem() {
       currentPhase: TicketPhase.CAJA,
       phaseHistory: [{ phase: TicketPhase.CAJA, timestamp: Date.now() }],
       createdAt: Date.now(),
-      priority
+      priority,
+      isAppointment: finalIsAppointment
     };
 
     setTicketsForCurrentOffice(prev => [...prev, newTicket]);
@@ -388,10 +502,13 @@ export function useTicketSystem() {
 
     if (candidates.length === 0) return;
 
-    // Sorting: Priority (true first), then oldest (createdAt smaller first)
+    // Sorting: Priority High (score 4) gets absolute top, then prior appointments (score 2) get second, then walk-ins (score 0), then oldest first
     candidates.sort((a, b) => {
-      if (a.priority && !b.priority) return -1;
-      if (!a.priority && b.priority) return 1;
+      const valA = (a.priority ? 4 : 0) + (a.isAppointment ? 2 : 0);
+      const valB = (b.priority ? 4 : 0) + (b.isAppointment ? 2 : 0);
+      if (valA !== valB) {
+        return valB - valA;
+      }
       return a.createdAt - b.createdAt;
     });
 
@@ -825,6 +942,9 @@ export function useTicketSystem() {
     officeTickets,
     setOfficeTickets,
     officeCubicles,
-    setOfficeCubicles
+    setOfficeCubicles,
+    supabaseSyncStatus,
+    pullOfficeFromSupabase,
+    pushOfficeToSupabase
   };
 }

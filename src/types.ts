@@ -112,6 +112,7 @@ export interface Ticket {
   completedAt?: number;
   assignedCubicleId?: string;
   priority: boolean; // Priority ticket (pregnant, elderly, disabled)
+  isAppointment?: boolean; // Prior appointment ticket (Cita Previa)
 }
 
 export enum CubicleStatus {

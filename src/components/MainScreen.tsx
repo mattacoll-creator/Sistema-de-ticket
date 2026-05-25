@@ -7,6 +7,7 @@ import React, { useState, useEffect } from "react";
 import { Ticket, Cubicle, TicketStatus, SERVICES_CONFIG, TicketPhase, PHASES_CONFIG, OFFICES_CONFIG } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { Volume2, VolumeX, Tv, UserCheck, Users, HelpCircle, ArrowRight, UserMinus, ShieldAlert, Clock } from "lucide-react";
+import { getOfficeSchedule } from "../utils/scheduleStorage";
 
 interface MainScreenProps {
   tickets: Ticket[];
@@ -33,6 +34,19 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   const officeConfig = OFFICES_CONFIG.find(o => o.id === currentOfficeId) || OFFICES_CONFIG[0];
   const isTriadaChannel = selectedChannel === TicketPhase.TRIADA;
 
+  const [schedule, setSchedule] = useState(() => getOfficeSchedule(currentOfficeId));
+
+  useEffect(() => {
+    const checkSchedule = () => {
+      setSchedule(getOfficeSchedule(currentOfficeId));
+    };
+    checkSchedule();
+    window.addEventListener("storage", checkSchedule);
+    return () => {
+      window.removeEventListener("storage", checkSchedule);
+    };
+  }, [currentOfficeId]);
+
   useEffect(() => {
     const checkSettings = () => {
       setEcoModeActive(localStorage.getItem("eco_mode_active") === "true");
@@ -55,10 +69,13 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   // Fetch tickets currently waiting
   const waitingTickets = tickets.filter(t => t.status === TicketStatus.WAITING);
   
-  // Sorted waiting queue (Priority gets moved to front)
+  // Sorted waiting queue (Priority and Appointments get moved to front)
   const sortedWaiting = [...waitingTickets].sort((a, b) => {
-    if (a.priority && !b.priority) return -1;
-    if (!a.priority && b.priority) return 1;
+    const valA = (a.priority ? 4 : 0) + (a.isAppointment ? 2 : 0);
+    const valB = (b.priority ? 4 : 0) + (b.isAppointment ? 2 : 0);
+    if (valA !== valB) {
+      return valB - valA;
+    }
     return a.createdAt - b.createdAt;
   });
 
@@ -370,6 +387,57 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
           </div>
         </div>
 
+        {/* Dynamic office schedules & business rules banners (educating users in real time) */}
+        <div className={`grid grid-cols-1 md:grid-cols-2 gap-3.5 p-3.5 rounded-xl border font-sans text-xs ${
+          isTriadaChannel
+            ? "bg-slate-50 border-slate-200 text-slate-805"
+            : "bg-slate-950/20 border-white/5 text-slate-200"
+        }`}>
+          {/* Sede Schedules Column */}
+          <div className="flex items-start gap-2.5">
+            <span className={`p-1.5 rounded-lg shrink-0 text-sm ${
+              isTriadaChannel ? "bg-slate-200 text-slate-800" : "bg-white/5 text-sky-400"
+            }`}>
+              🕒
+            </span>
+            <div>
+              <span className="block font-black text-[9px] uppercase tracking-wider opacity-60">
+                Horario de Sede Seleccionada {schedule.tempClosed && "— (CERRADO EVENTUAL)"}
+              </span>
+              <p className="font-extrabold text-sky-400 mt-0.5">
+                {officeConfig.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}: {schedule.openTime} a {schedule.closeTime}
+              </p>
+              <p className="text-[10.5px] mt-1 leading-normal opacity-80">
+                {schedule.tempClosed 
+                  ? `AVISO DE CIERRE: ${schedule.tempClosedReason}` 
+                  : "Días hábiles de lunes a viernes. Las colas automáticas del servidor se rigen por la zona horaria de Panamá."}
+              </p>
+            </div>
+          </div>
+
+          {/* Booking / Appointment Rules Column */}
+          <div className="flex items-start gap-2.5 border-t md:border-t-0 md:border-l pt-3 md:pt-0 md:pl-4 border-slate-200/10">
+            <span className={`p-1.5 rounded-lg shrink-0 text-sm ${
+              isTriadaChannel ? "bg-[#003087]/10 text-[#003087]" : "bg-emerald-500/10 text-emerald-350"
+            }`}>
+              📅
+            </span>
+            <div>
+              <span className="block font-black text-[9px] uppercase tracking-wider opacity-60">
+                Reserva de Turnos (Cedulación)
+              </span>
+              <p className={`font-extrabold mt-0.5 ${
+                isTriadaChannel ? "text-[#003087]" : "text-emerald-400"
+              }`}>
+                Los primeros 15 turnos de cada día se reservan para Citas Previas
+              </p>
+              <p className="text-[10.5px] mt-1 leading-normal opacity-80">
+                Los turnos de cita previa gozan de preferencia total y se posicionan por delante en la fila con respecto a turnos presenciales espontáneos.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* --- HERO: FLASHING CALL OUT SECTION --- */}
         <div id="hero-callout-screen" className="min-h-[190px] relative">
           <AnimatePresence mode="wait">
@@ -387,12 +455,12 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 <div className="absolute top-0 bottom-0 right-0 w-3 bg-amber-400 animate-pulse" />
 
                 <div className="space-y-4 text-center xl:text-left z-10 w-full xl:w-auto flex-grow">
-                  <div className="flex flex-wrap items-center justify-center xl:justify-start gap-3">
-                    <span className="px-5 py-1.5 text-xs font-mono tracking-widest font-black uppercase bg-rose-600 text-white rounded-lg animate-bounce shadow-md">
+                  <div className="flex flex-wrap items-center justify-center xl:justify-start gap-2.5">
+                    <span className="px-3 py-1 text-[10.5px] font-mono tracking-widest font-black uppercase bg-rose-600 text-white rounded-md animate-bounce shadow-md">
                       🛎️ TURNO LLAMADO
                     </span>
                     {displayedActiveCall.ticket.priority && (
-                      <span className="px-4 py-1.5 text-xs font-black bg-amber-500 text-white rounded-lg uppercase flex items-center gap-1.5 shadow-md animate-pulse">
+                      <span className="px-2.5 py-1 text-[10.5px] font-black bg-amber-500 text-white rounded-md uppercase flex items-center gap-1 shadow-md animate-pulse">
                         <ShieldAlert className="w-3.5 h-3.5" /> ATENCIÓN PRIORITARIA
                       </span>
                     )}
@@ -480,11 +548,11 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         </div>
 
         {/* --- BODY: DUAL GRID --- */}
-        <div className={`grid grid-cols-1 ${layoutFocus === "both" ? "lg:grid-cols-2" : "grid-cols-1"} gap-8 pt-3`}>
+        <div className={`grid grid-cols-1 ${layoutFocus === "both" ? "lg:grid-cols-12" : "grid-cols-1"} gap-8 pt-3`}>
           
           {/* COLUMN LEFT: Cubicle Monitors (Styled EXACTLY like the Photo) */}
           {layoutFocus !== "queue" && (
-            <div className="space-y-3 animate-fade-in">
+            <div className={`space-y-3 animate-fade-in ${layoutFocus === "both" ? "lg:col-span-7" : ""}`}>
               <div className={`flex items-center justify-between border-b pb-2 mb-2 ${
                 isTriadaChannel ? "border-slate-300" : "border-white/5"
               }`}>
@@ -579,7 +647,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
           {/* COLUMN RIGHT: Waiting List & Queue (OR SELECTIVE CHANNELS) */}
           {layoutFocus !== "cubicles" && (
-            <div className="space-y-3 animate-fade-in">
+            <div className={`space-y-3 animate-fade-in ${layoutFocus === "both" ? "lg:col-span-5" : ""}`}>
               {selectedChannel === "general" ? (
                 /* GENERAL MULTICHANNEL SCREEN SHOWING EXPLICIT INDEPENDENT PANELS */
                 <div className="space-y-3">
@@ -642,16 +710,20 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                             ? isTriadaChannel
                                               ? "bg-amber-100/75 text-amber-900 border-amber-300 shadow-xs"
                                               : "bg-amber-500/10 text-amber-250 border-amber-505/30 shadow-sm" 
-                                            : isTriadaChannel
-                                              ? "bg-slate-100 text-slate-805 border-slate-250 shadow-xs"
-                                              : "bg-[#0b244d] text-sky-200 border-sky-850/40"
+                                            : t.isAppointment
+                                              ? isTriadaChannel
+                                                ? "bg-sky-50 text-sky-900 border-sky-305 shadow-xs animate-pulse"
+                                                : "bg-emerald-500/15 text-emerald-200 border-emerald-500/30 shadow-sm animate-pulse"
+                                              : isTriadaChannel
+                                                ? "bg-slate-100 text-slate-805 border-slate-250 shadow-xs"
+                                                : "bg-[#0b244d] text-sky-200 border-sky-850/40"
                                       }`}
                                       title={`${t.name} - ${SERVICES_CONFIG[t.serviceType].name} (Espera: ${secondsWaiting}s)`}
                                     >
                                       {t.priority && !isOverdue && <span className="text-amber-500 font-bold">★</span>}
+                                      {t.isAppointment && !isOverdue && <span className="text-sky-455 font-bold">📅</span>}
                                       {isOverdue && <span className="text-white">⚠️</span>}
-                                      {t.numberCode}
-                                    </span>
+                                      {t.numberCode}</span>
                                   );
                                 })}
                               </div>
@@ -717,16 +789,20 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                 ? isTriadaChannel
                                   ? "bg-amber-50 border-amber-300 text-amber-950 shadow-sm"
                                   : "bg-amber-500/10 border-amber-500/40 text-amber-250 shadow-md"
-                                : isTriadaChannel
-                                  ? "bg-white border-slate-250 text-slate-805 hover:border-slate-300 shadow-sm"
-                                  : "bg-[#051c44]/80 border-blue-900/50 text-white hover:border-blue-700/60 shadow-md"
+                                : ticket.isAppointment
+                                  ? isTriadaChannel
+                                    ? "bg-sky-50 border-sky-350 text-sky-950 shadow-sm animate-pulse"
+                                    : "bg-emerald-500/10 border-emerald-500/40 text-emerald-200 shadow-md animate-pulse"
+                                  : isTriadaChannel
+                                    ? "bg-white border-slate-250 text-slate-805 hover:border-slate-300 shadow-sm"
+                                    : "bg-[#051c44]/80 border-blue-900/50 text-white hover:border-blue-700/60 shadow-md"
                             } ${layoutFocus === "queue" ? "p-6" : "p-3.5"}`}
                           >
                             <div className="space-y-1 truncate max-w-[200px]">
                               <span className={`text-[9px] font-mono font-black block leading-none ${
                                 isTriadaChannel ? "text-slate-400" : "text-[#00d0ff]/50"
                               }`}>
-                                ORDEN #{index+1}
+                                ORDEN #{index+1}{ticket.isAppointment && " • 📅 CITA PREVIA"}
                               </span>
                               <h5 className={`font-black tracking-wider uppercase truncate ${
                                 isTriadaChannel ? "text-slate-805" : "text-white"

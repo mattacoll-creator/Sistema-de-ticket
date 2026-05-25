@@ -262,7 +262,8 @@ export default function SuperAdminConsole({
           createdAt,
           calledAt,
           completedAt,
-          priority: Math.random() < 0.12
+          priority: Math.random() < 0.12,
+          isAppointment: Math.random() < 0.15
         });
       }
 

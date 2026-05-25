@@ -3,25 +3,47 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { ServiceType, SERVICES_CONFIG, Ticket, OFFICES_CONFIG } from "../types";
 import { motion } from "motion/react";
-import { User, Accessibility, Printer, CheckCircle2, Ticket as TicketIcon, HelpCircle } from "lucide-react";
+import { User, Accessibility, Printer, CheckCircle2, Ticket as TicketIcon, HelpCircle, Calendar, AlertTriangle, Play } from "lucide-react";
+import { isOfficeOpenNow, getOfficeSchedule, OfficeSchedule } from "../utils/scheduleStorage";
 
 interface WelcomeKioskProps {
-  onCreateTicket: (name: string, serviceType: ServiceType, priority: boolean) => Ticket;
+  onCreateTicket: (name: string, serviceType: ServiceType, priority: boolean, isAppointment?: boolean) => Ticket;
   currentOfficeId?: string;
 }
 
 export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1" }: WelcomeKioskProps) {
   const [name, setName] = useState("");
   const [priority, setPriority] = useState(false);
+  const [isAppointment, setIsAppointment] = useState(false);
   const [selectedService, setSelectedService] = useState<ServiceType | null>(null);
   const [printedTicket, setPrintedTicket] = useState<Ticket | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [ignoreSchedule, setIgnoreSchedule] = useState(false);
 
   // Focus simulation
   const [inputFocused, setInputFocused] = useState(false);
+
+  // Office schedule state checks
+  const [scheduleStatus, setScheduleStatus] = useState(() => isOfficeOpenNow(currentOfficeId));
+
+  useEffect(() => {
+    const checkSchedule = () => {
+      setScheduleStatus(isOfficeOpenNow(currentOfficeId));
+    };
+    checkSchedule();
+
+    // Listen to admin calendar and time changes immediately
+    window.addEventListener("storage", checkSchedule);
+    const interval = setInterval(checkSchedule, 5000); // Check every 5 seconds
+
+    return () => {
+      window.removeEventListener("storage", checkSchedule);
+      clearInterval(interval);
+    };
+  }, [currentOfficeId]);
 
   const office = OFFICES_CONFIG.find(o => o.id === currentOfficeId) || OFFICES_CONFIG[0];
 
@@ -33,12 +55,14 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
     
     // Simular retraso físico de la impresora térmica de tickets
     setTimeout(() => {
-      const ticket = onCreateTicket(name, selectedService, priority);
+      const sanitizedName = name.trim() || "Ciudadano";
+      const ticket = onCreateTicket(sanitizedName, selectedService, priority, isAppointment);
       setPrintedTicket(ticket);
       setIsPrinting(false);
       // Limpiar campos para la siguiente persona
       setName("");
       setPriority(false);
+      setIsAppointment(false);
       setSelectedService(null);
     }, 1250);
   };  return (
@@ -59,13 +83,82 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
               </p>
             </div>
           </div>
-          <span className="px-2 py-1 text-[8.5px] uppercase tracking-widest font-mono bg-emerald-50 text-emerald-700 font-extrabold rounded border border-emerald-200 shadow-sm animate-pulse">
-            DISPONIBLE
+          <span className={`px-2 py-1 text-[8.5px] uppercase tracking-widest font-mono font-extrabold rounded border shadow-sm ${
+            scheduleStatus.isOpen || ignoreSchedule
+              ? "bg-emerald-50 text-emerald-700 border-emerald-200 animate-pulse"
+              : "bg-rose-50 text-rose-700 border-rose-200"
+          }`}>
+            {scheduleStatus.isOpen || ignoreSchedule ? "DISPONIBLE" : "CERRADO"}
           </span>
         </div>
 
         {!printedTicket ? (
-          <form onSubmit={handleSubmit} className="space-y-5">
+          (!scheduleStatus.isOpen && !ignoreSchedule) ? (
+            <div className="bg-slate-50 border border-slate-200 p-6 rounded-2xl text-center space-y-5 animate-fadeIn">
+              <div className="w-14 h-14 bg-rose-50 text-rose-650 rounded-full flex items-center justify-center border border-rose-100 mx-auto">
+                <AlertTriangle className="w-7 h-7 text-rose-600 animate-bounce" />
+              </div>
+              <div className="space-y-2">
+                <h4 className="text-sm font-black text-rose-950 uppercase tracking-wider">Sede fuera de servicio</h4>
+                <div className="text-xs text-slate-800 font-bold leading-relaxed bg-rose-500/10 border border-rose-200 p-2.5 rounded-lg">
+                  {scheduleStatus.reason}
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-3 text-left font-sans text-[11px] text-slate-700 space-y-1.5 mt-2">
+                  <div className="flex justify-between font-bold border-b border-slate-100 pb-1">
+                    <span>Horario regular:</span>
+                    <span className="font-mono text-[#122e70]">{scheduleStatus.schedule.openTime} a.m. a {scheduleStatus.schedule.closeTime} p.m.</span>
+                  </div>
+                  <div className="flex justify-between font-medium">
+                    <span>Días laborables:</span>
+                    <span>Lunes a Viernes</span>
+                  </div>
+                  <div className="pt-1.5 text-[9.5px] text-slate-450 text-center block">
+                    Para citas de Cedulación, recuerde que los primeros 15 turnos de cada día se reservan de forma prioritaria en nuestro sistema.
+                  </div>
+                </div>
+              </div>
+              
+              <div className="pt-3 border-t border-slate-200 space-y-2">
+                <p className="text-[10px] text-slate-400 font-medium leading-normal">
+                  ¿Es usted un administrador o evaluador? Puede omitir temporalmente esta restricción horaria en caliente.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIgnoreSchedule(true)}
+                  className="px-4 py-2 bg-[#122e70] hover:bg-blue-850 text-white text-[10px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1.5 mx-auto"
+                >
+                  <Play className="w-3 h-3 text-amber-400 shrink-0 fill-amber-400" />
+                  <span>Omitir Horario (Modo Pruebas)</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-5">
+              {/* Dynamic Office Schedule Notice */}
+              <div className="bg-slate-50 border border-slate-150 p-3 rounded-xl space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[7.5px] uppercase font-black tracking-widest text-[#122e70] block">
+                    📆 SISTEMA DE HORARIOS ELECTORALES
+                  </span>
+                  {ignoreSchedule && (
+                    <span className="text-[8px] bg-amber-500 text-white font-extrabold px-1.5 rounded animate-pulse">
+                      HORARIO OMITIDO (PRUEBA)
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center justify-between text-[11px] font-sans">
+                  <span className="font-extrabold text-slate-700">
+                    {currentOfficeId === "OFF-1" ? "Sede Principal (Ancón)" : office.name.replace("Dirección Regional de ", "")}
+                  </span>
+                  <span className="font-mono text-slate-500 bg-white border border-slate-205 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                    {scheduleStatus.schedule.openTime} a.m. — {scheduleStatus.schedule.closeTime} p.m.
+                  </span>
+                </div>
+                <p className="text-[9.5px] text-slate-450 leading-relaxed font-medium">
+                  Atención de lunes a viernes. Procesado dinámico de colas electorales.
+                </p>
+              </div>
+
             {/* Input Name */}
             <div className="space-y-1.5">
               <label htmlFor="client-name-input" className="block text-xs font-extrabold uppercase tracking-wide text-slate-600">
@@ -115,6 +208,31 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
               </label>
             </div>
 
+            {/* Appointment Check */}
+            <div className="bg-sky-50/40 border border-sky-200 p-4 rounded-xl flex items-center justify-between gap-5 shadow-sm">
+              <div className="flex items-start gap-2.5">
+                <div className="p-1.5 bg-sky-600 text-white rounded-lg mt-0.5 shadow-sm">
+                  <Calendar className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-sky-900 uppercase tracking-wide">Tengo Cita Previa (Web)</h4>
+                  <p className="text-[10.5px] text-sky-850 mt-1 leading-relaxed font-medium">
+                    Prioriza su turno ante ciudadanos espontáneos que no reservaron cita con antelación.
+                  </p>
+                </div>
+              </div>
+              <label htmlFor="appointment-switch" className="relative inline-flex items-center cursor-pointer select-none">
+                <input
+                  id="appointment-switch"
+                  type="checkbox"
+                  checked={isAppointment}
+                  onChange={(e) => setIsAppointment(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-200/80 rounded-full border border-slate-305 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
+              </label>
+            </div>
+
             {/* Trámites / Service Selector */}
             <div className="space-y-2">
               <label className="block text-xs font-extrabold uppercase tracking-wide text-slate-600">
@@ -151,6 +269,12 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
                   );
                 })}
               </div>
+
+              {selectedService === ServiceType.CEDULACION && (
+                <div className="p-2.5 border border-sky-200 bg-sky-50 text-sky-950 rounded-lg text-[10px] leading-relaxed font-medium mt-2.5 animate-fadeIn">
+                  📅 <strong>Reserva de Turnos:</strong> Los primeros 15 turnos de <strong>Cedulación</strong> de cada día se reservan de forma automática para <strong>Citas Previas Web</strong> y toman precedencia prioritaria sobre los turnos presenciales generados en el kiosco.
+                </div>
+              )}
             </div>
 
             {/* Action Area */}
@@ -184,6 +308,7 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
               </button>
             </div>
           </form>
+          )
         ) : (
           /* Animated Thermal Invoice Ticket Output */
           <div className="space-y-4">
@@ -220,11 +345,18 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
                 <h2 className="text-5xl font-black text-[#122e70] tracking-wide font-sans py-1">
                   {printedTicket.numberCode}
                 </h2>
-                {printedTicket.priority && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500 text-white font-black text-[9px] uppercase tracking-wide rounded-md shadow-sm">
-                    <Accessibility className="w-3 h-3" /> PRIORIDAD ALTA
-                  </span>
-                )}
+                <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+                  {printedTicket.priority && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500 text-white font-black text-[9px] uppercase tracking-wide rounded-md shadow-sm">
+                      <Accessibility className="w-3 h-3" /> PRIORIDAD ALTA
+                    </span>
+                  )}
+                  {printedTicket.isAppointment && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-sky-600 text-white font-black text-[9px] uppercase tracking-wide rounded-md shadow-sm">
+                      <Calendar className="w-3 h-3" /> CITA PREVIA WEB
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-2 border-t-2 border-dashed border-slate-200 pt-3 text-[11px] text-slate-800">

@@ -60,7 +60,10 @@ export default function App() {
     officeTickets,
     setOfficeTickets,
     officeCubicles,
-    setOfficeCubicles
+    setOfficeCubicles,
+    supabaseSyncStatus,
+    pullOfficeFromSupabase,
+    pushOfficeToSupabase
   } = useTicketSystem();
 
   // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin"
@@ -496,7 +499,7 @@ export default function App() {
       )}
 
       {/* MAIN RENDER AREA */}
-      <main className={`max-w-7xl mx-auto w-full px-4 md:px-8 flex-grow ${isHeaderHidden ? "pt-8" : ""}`}>
+      <main className={`max-w-[1650px] 2xl:max-w-[95%] mx-auto w-full px-4 md:px-8 flex-grow ${isHeaderHidden ? "pt-8" : ""}`}>
         {/* INDIVIDUAL MAXIMIZED VIEWPORTS */}
         {activeTab === "kiosk" && (
           <div className="w-full py-4">
@@ -548,6 +551,14 @@ export default function App() {
                 isAutoAssignActive={isAutoAssignActive}
                 onToggleAutoAssign={setIsAutoAssignActive}
                 onPurgeOldTickets={purgeOldTickets}
+                officeTickets={officeTickets}
+                setOfficeTickets={setOfficeTickets}
+                officeCubicles={officeCubicles}
+                setOfficeCubicles={setOfficeCubicles}
+                supabaseSyncStatus={supabaseSyncStatus}
+                pullOfficeFromSupabase={pullOfficeFromSupabase}
+                pushOfficeToSupabase={pushOfficeToSupabase}
+                currentOfficeId={currentOfficeId}
               />
             ) : (
               <div className="bg-white border-2 border-dashed border-slate-200 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-6 max-w-lg mx-auto shadow-sm my-8">
