@@ -140,9 +140,12 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               
               {/* TE Logo styled precisely for Light Theme */}
               <div className="flex items-center gap-3 select-none">
-                <div className="font-sans text-4xl font-extrabold tracking-tighter text-[#003087] leading-none pr-1">
-                  TE
-                </div>
+                <img 
+                  src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/AGENDATE-01.png" 
+                  referrerPolicy="no-referrer"
+                  alt="TE" 
+                  className="h-12 w-auto object-contain pr-1" 
+                />
                 <div className="flex flex-col text-left border-l border-slate-300 pl-3">
                   <span className="text-sm font-black tracking-widest text-[#003087] leading-none uppercase font-sans">
                     TRIBUNAL ELECTORAL
@@ -200,9 +203,18 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
             <div className="flex flex-wrap items-center justify-between md:justify-start gap-4">
               {/* Authentically replica of the official "TRIBUNAL ELECTORAL" logo */}
               <div className="flex items-center gap-3 select-none">
-                <div className="font-sans text-4xl font-extrabold tracking-tighter text-[#00aaff] leading-none pr-1 drop-shadow-[0_2px_8px_rgba(0,170,255,0.45)]">
-                  TE
-                </div>
+                <img 
+                  src={selectedChannel === TicketPhase.CAJA
+                    ? "https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/Logo-TE-aniversario-256x256px-blanco-02.png"
+                    : "https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/AGENDATE-01.png"
+                  }
+                  referrerPolicy="no-referrer"
+                  alt="TE" 
+                  className={selectedChannel === TicketPhase.CAJA
+                    ? "h-20 md:h-24 w-auto object-contain pr-1 transition-all"
+                    : "h-12 w-auto object-contain pr-1 bg-white/10 p-1 rounded-lg transition-all"
+                  }
+                />
                 <div className="h-9 w-[1.5px] bg-sky-505/20 shrink-0" />
                 <div className="flex flex-col text-left">
                   <span className="text-sm font-black tracking-widest text-[#ffffff] leading-none uppercase font-sans">

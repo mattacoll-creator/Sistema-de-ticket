@@ -190,7 +190,13 @@ export function useTicketSystem() {
 
   // Derived state for the active office
   const tickets = officeTickets[currentOfficeId] || [];
-  const cubicles = officeCubicles[currentOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c }));
+  const rawCubicles = officeCubicles[currentOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c }));
+  const cubicles = currentOfficeId === "OFF-1"
+    ? rawCubicles
+    : rawCubicles.map(c => ({
+        ...c,
+        supportedServices: (c.supportedServices || []).filter(s => s !== ServiceType.EXTRANJERIA)
+      }));
   const isAutoAssignActive = officeAutoAssign[currentOfficeId] !== false;
 
   const setTicketsForCurrentOffice = useCallback((updater: Ticket[] | ((prev: Ticket[]) => Ticket[])) => {
@@ -207,7 +213,13 @@ export function useTicketSystem() {
   const setCubiclesForCurrentOffice = useCallback((updater: Cubicle[] | ((prev: Cubicle[]) => Cubicle[])) => {
     setOfficeCubicles(prev => {
       const currentVal = prev[currentOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c }));
-      const newVal = typeof updater === "function" ? updater(currentVal) : updater;
+      let newVal = typeof updater === "function" ? updater(currentVal) : updater;
+      if (currentOfficeId !== "OFF-1") {
+        newVal = newVal.map(c => ({
+          ...c,
+          supportedServices: (c.supportedServices || []).filter(s => s !== ServiceType.EXTRANJERIA)
+        }));
+      }
       return {
         ...prev,
         [currentOfficeId]: newVal
@@ -889,7 +901,7 @@ export function useTicketSystem() {
         ServiceType.REGISTRO,
         ServiceType.CEDULACION,
         ServiceType.EXTRANJERIA
-      ];
+      ].filter(s => s !== ServiceType.EXTRANJERIA || currentOfficeId === "OFF-1");
 
       const generateArrival = () => {
         const randomName = names[Math.floor(Math.random() * names.length)];

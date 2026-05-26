@@ -33,6 +33,7 @@ interface AgentConsoleProps {
   onRecall: (cubicleId: string) => void;
   onChangeStatus: (cubicleId: string, status: CubicleStatus) => void;
   onUpdateCubicleConfig: (cubicleId: string, phases: TicketPhase[], services: ServiceType[]) => void;
+  currentOfficeId?: string;
 }
 
 export default function AgentConsole({
@@ -44,7 +45,8 @@ export default function AgentConsole({
   onMiss,
   onRecall,
   onChangeStatus,
-  onUpdateCubicleConfig
+  onUpdateCubicleConfig,
+  currentOfficeId = "OFF-1"
 }: AgentConsoleProps) {
   // Act as which cubicle? Choose CUB-1 by default
   const [activeCubicleId, setActiveCubicleId] = useState<string>("CUB-1");
@@ -316,26 +318,28 @@ export default function AgentConsole({
                   Trámites Soportados en Pantalla:
                 </span>
                 <div className="grid grid-cols-2 gap-2.5">
-                  {Object.values(SERVICES_CONFIG).map((service) => {
-                    const isActive = (currentCubicle.supportedServices || []).includes(service.id);
-                    return (
-                      <button
-                        key={service.id}
-                        type="button"
-                        onClick={() => handleToggleService(service.id)}
-                        className={`px-3 py-2 text-xs text-left font-black tracking-wider uppercase border rounded-lg cursor-pointer flex items-center justify-between transition-all ${
-                          isActive 
-                            ? "bg-blue-50 text-[#122e70] border-blue-200" 
-                            : "bg-white text-slate-400 border-slate-200 hover:text-slate-655"
-                        }`}
-                      >
-                        <span className="truncate">{service.name}</span>
-                        <span className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-600 font-mono font-black border border-slate-200 rounded">
-                          {isActive ? "SÍ" : "NO"}
-                        </span>
-                      </button>
-                    );
-                  })}
+                  {Object.values(SERVICES_CONFIG)
+                    .filter((service) => !(currentOfficeId !== "OFF-1" && service.id === ServiceType.EXTRANJERIA))
+                    .map((service) => {
+                      const isActive = (currentCubicle.supportedServices || []).includes(service.id);
+                      return (
+                        <button
+                          key={service.id}
+                          type="button"
+                          onClick={() => handleToggleService(service.id)}
+                          className={`px-3 py-2 text-xs text-left font-black tracking-wider uppercase border rounded-lg cursor-pointer flex items-center justify-between transition-all ${
+                            isActive 
+                              ? "bg-blue-50 text-[#122e70] border-blue-200" 
+                              : "bg-white text-slate-400 border-slate-200 hover:text-slate-655"
+                          }`}
+                        >
+                          <span className="truncate">{service.name}</span>
+                          <span className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-600 font-mono font-black border border-slate-200 rounded">
+                            {isActive ? "SÍ" : "NO"}
+                          </span>
+                        </button>
+                      );
+                    })}
                 </div>
               </div>
             )}

@@ -130,7 +130,7 @@ export default function App() {
       ServiceType.REGISTRO,
       ServiceType.CEDULACION,
       ServiceType.EXTRANJERIA
-    ];
+    ].filter(s => s !== ServiceType.EXTRANJERIA || currentOfficeId === "OFF-1");
 
     const randomName = randomNames[Math.floor(Math.random() * randomNames.length)];
     const randomService = randomServices[Math.floor(Math.random() * randomServices.length)];
@@ -346,7 +346,7 @@ export default function App() {
           
           <div className="flex flex-col md:flex-row md:items-center gap-4 pl-1">
             <img 
-              src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/04/WhatsApp-Image-2026-04-30-at-09.45.35.png" 
+              src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/AGENDATE-01.png" 
               referrerPolicy="no-referrer" 
               alt="Tribunal Electoral de Panamá" 
               className="h-14 md:h-16 w-auto object-contain self-start md:self-center" 
@@ -532,6 +532,7 @@ export default function App() {
               onRecall={recallCurrentTicket}
               onChangeStatus={changeCubicleStatus}
               onUpdateCubicleConfig={updateCubicleConfig}
+              currentOfficeId={currentOfficeId}
             />
           </div>
         )}
