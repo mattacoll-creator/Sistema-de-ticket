@@ -30,7 +30,11 @@ import {
   Eye,
   EyeOff,
   Lock,
-  Unlock
+  Unlock,
+  Laptop,
+  Tablet,
+  Maximize2,
+  Minimize2
 } from "lucide-react";
 
 export default function App() {
@@ -68,6 +72,41 @@ export default function App() {
 
   // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin"
   const [activeTab, setActiveTab] = useState<string>("kiosk");
+
+  // Viewport adaptive display mode: "desktop" (laptops) | "tablet" (tablets)
+  const [viewType, setViewType] = useState<"desktop" | "tablet">("desktop");
+
+  // Track browser native fullscreen state
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  React.useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen();
+      } catch (err) {
+        console.warn("Fullscreen request failed", err);
+        alert(
+          "El navegador ha bloqueado la pantalla completa automática debido a las políticas de seguridad o a que usted se encuentra visualizando el sistema dentro del visor de AI Studio (iframe).\n\n💡 CÓMO SOLUCIONARLO PARA OCULTAR LA BARRA DE DIRECCIÓN:\n1. Presione el botón 'Abrir en Pestaña Nueva' (enlace destacado en color naranja dentro de la sección de impresión del kiosko)\n2. Una vez que el sistema se abra en su propia pestaña, haga clic en el botón de 'Pantalla Completa' y se activará al instante sin restricciones de iframe."
+        );
+      }
+    } else {
+      try {
+        await document.exitFullscreen();
+      } catch (err) {
+        console.warn("Error saliendo de pantalla completa", err);
+      }
+    }
+  };
 
   // Keep navigation menu hidden for dedicated device screen focus (Kiosk / TV screen lock)
   const [isHeaderHidden, setIsHeaderHidden] = useState<boolean>(false);
@@ -339,6 +378,65 @@ export default function App() {
         </div>
       )}
 
+      {/* MASTER SIMULATOR & COMPATIBILITY BAR */}
+      <div className="w-full bg-[#122e70] text-white py-2.5 px-4 md:px-8 border-b border-[#0d2150] flex flex-wrap items-center justify-between gap-3 shadow-md shrink-0">
+        <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-1.5 bg-blue-950/60 px-2.5 py-1 rounded-lg border border-blue-800 text-[9px] font-black tracking-widest uppercase">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block animate-pulse"></span>
+            <span>Controles de Pantalla</span>
+          </div>
+          <span className="text-[11px] font-semibold text-blue-200">
+            Ajustar visualización del Sistema de Turnos:
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Version Escritorio (Laptop) */}
+          <button
+            onClick={() => setViewType("desktop")}
+            className={`px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+              viewType === "desktop"
+                ? "bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-md font-sans border-none"
+                : "bg-[#122e70] text-blue-200 border border-blue-800 hover:bg-blue-800/50"
+            }`}
+            title="Versión Escritorio: Ajusta la pantalla completa optimizada para ordenadores portátiles y Laptops"
+          >
+            <Laptop className="w-3.5 h-3.5" />
+            <span>Versión Escritorio (Laptop)</span>
+          </button>
+
+          {/* Version Tablet */}
+          <button
+            onClick={() => setViewType("tablet")}
+            className={`px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+              viewType === "tablet"
+                ? "bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-md font-sans border-none"
+                : "bg-[#122e70] text-blue-200 border border-blue-800 hover:bg-blue-800/50"
+            }`}
+            title="Versión Tablet: Optimiza y encuadra la pantalla simulando una tableta de atención"
+          >
+            <Tablet className="w-3.5 h-3.5" />
+            <span>Versión Tablet</span>
+          </button>
+
+          <div className="h-5 w-[1.5px] bg-blue-800/80 mx-1 hidden sm:block" />
+
+          {/* Toggle Fullscreen Action */}
+          <button
+            onClick={toggleFullscreen}
+            className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+              isFullscreen
+                ? "bg-red-600 hover:bg-red-700 text-white border-none shadow-md"
+                : "bg-emerald-600 hover:bg-emerald-700 text-white border-none shadow-md"
+            }`}
+            title="Pantalla Completa: Pone la aplicación en pantalla completa para ocultar las barras y menús del navegador"
+          >
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5 animate-pulse" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            <span>{isFullscreen ? "Salir Pantalla Completa" : "Pantalla Completa"}</span>
+          </button>
+        </div>
+      </div>
+
       {/* HEADER SECTION */}
       {!isHeaderHidden && (
         <header className="max-w-7xl mx-auto w-full px-4 md:px-8 pt-6 space-y-5">
@@ -498,8 +596,19 @@ export default function App() {
       </header>
       )}
 
-      {/* MAIN RENDER AREA */}
-      <main className={`max-w-[1650px] 2xl:max-w-[95%] mx-auto w-full px-4 md:px-8 flex-grow ${isHeaderHidden ? "pt-8" : ""}`}>
+      {/* MAIN RENDER AREA WITH ADAPTIVE SIMULATED FRAMES */}
+      <div className={viewType === "tablet" ? "max-w-[1024px] mx-auto w-full border-[14px] border-slate-950 rounded-[40px] shadow-2xl bg-white p-4 md:p-6 transition-all duration-300 relative my-6 shrink-0" : "w-full flex-grow flex flex-col"}>
+        {viewType === "tablet" && (
+          <>
+            {/* Tablet Camera cutout */}
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-slate-950 opacity-90 z-20" />
+            {/* Volume buttons simulator */}
+            <div className="absolute -left-[14px] top-20 w-1 h-8 bg-slate-950 rounded-l-md" />
+            <div className="absolute -left-[14px] top-32 w-1 h-8 bg-slate-950 rounded-l-md" />
+          </>
+        )}
+        
+        <main className={viewType === "tablet" ? "w-full flex-grow transition-all duration-300" : `max-w-[1650px] 2xl:max-w-[95%] mx-auto w-full px-4 md:px-8 flex-grow transition-all duration-300 ${isHeaderHidden ? "pt-8" : ""}`}>
         {/* INDIVIDUAL MAXIMIZED VIEWPORTS */}
         {activeTab === "kiosk" && (
           <div className="w-full py-4">
@@ -623,7 +732,13 @@ export default function App() {
             )}
           </div>
         )}
-      </main>
+       </main>
+        
+        {viewType === "tablet" && (
+          /* Tablet Home Bar indicator */
+          <div className="w-36 h-1 bg-slate-950 rounded-full mx-auto mt-5 opacity-35 shrink-0" />
+        )}
+      </div>
 
       {/* FOOTER BAR */}
       <footer className="max-w-7xl mx-auto w-full py-6 border-t border-slate-200 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-4">
