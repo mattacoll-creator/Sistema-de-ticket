@@ -13,3 +13,137 @@ html, body, #root {
   --font-display: 'Space Grotesk', sans-serif;
 }
 
+/* --- OPTIMIZED THERMAL PRINTER DOCKET MEDIA QUERY --- */
+.print-only {
+  display: none !important;
+}
+
+@media print {
+  /* Hide every root-level element in body except our Portaled receipt areas */
+  body > * {
+    display: none !important;
+  }
+
+  body > #thermal-receipt-print-area {
+    display: block !important;
+    visibility: visible !important;
+  }
+
+  /* Reset global document configurations for roll feed paper */
+  html, body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Force visibility of our portaled ticket area and keep nested layouts functional */
+  #thermal-receipt-print-area * {
+    visibility: visible !important;
+  }
+
+  #thermal-receipt-print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    margin: 0 !important;
+    font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+    color: #000000 !important;
+    background-color: #ffffff !important;
+    text-align: center !important;
+    page-break-inside: avoid !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 80mm Standard settings (3-inch wide roll, default for Bixolon SRP-Q302) */
+  #thermal-receipt-print-area.paper-80mm {
+    width: 72mm !important; /* Perfect print width for Bixolon SRP-Q302 80mm paper */
+    padding: 2mm 1mm 4mm 1mm !important;
+  }
+
+  /* 58mm Optional/Compact settings (2-inch wide roll partition/adapter) */
+  #thermal-receipt-print-area.paper-58mm {
+    width: 50mm !important; /* Perfect print width for Bixolon SRP-Q302 with 58mm partition card */
+    padding: 1.5mm 0.5mm 3mm 0.5mm !important;
+  }
+
+  #thermal-receipt-print-area img {
+    max-height: 20mm !important;
+    height: auto !important;
+    width: auto !important;
+    margin: 0 auto 3mm auto !important;
+    display: block !important;
+    filter: brightness(0.2) contrast(3) grayscale(100%) !important; /* Pure black and white optimization for thermal print heads */
+  }
+
+  #thermal-receipt-print-area.paper-58mm img {
+    max-height: 14mm !important;
+    margin-bottom: 1.5mm !important;
+  }
+
+  #thermal-receipt-print-area .ticket-title {
+    font-size: 16pt !important;
+    font-weight: 900 !important;
+    margin: 4mm 0 !important;
+    letter-spacing: 1px !important;
+  }
+
+  #thermal-receipt-print-area.paper-58mm .ticket-title {
+    font-size: 11pt !important;
+    margin: 2mm 0 !important;
+  }
+
+  #thermal-receipt-print-area h1.big-number {
+    font-size: 36pt !important;
+    font-weight: 900 !important;
+    margin: 5px 0 !important;
+  }
+
+  #thermal-receipt-print-area.paper-58mm h1.big-number {
+    font-size: 26pt !important;
+    margin: 3px 0 !important;
+  }
+
+  #thermal-receipt-print-area .meta-row {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: space-between !important;
+    font-size: 8pt !important;
+    margin-bottom: 1.5mm !important;
+    border-bottom: 1px dashed #000000 !important;
+    padding-bottom: 1mm !important;
+  }
+
+  #thermal-receipt-print-area.paper-58mm .meta-row {
+    font-size: 7.2pt !important;
+    margin-bottom: 1.2mm !important;
+  }
+
+  #thermal-receipt-print-area .meta-label {
+    float: left !important;
+    font-weight: bold !important;
+    text-align: left !important;
+  }
+
+  #thermal-receipt-print-area.paper-58mm .meta-label,
+  #thermal-receipt-print-area.paper-58mm .meta-value {
+    font-size: 7pt !important;
+  }
+
+  #thermal-receipt-print-area .meta-value {
+    float: right !important;
+    text-align: right !important;
+    font-weight: bold !important;
+  }
+
+  @page {
+    size: auto; /* Dynamic sizing fallback so standard printer driver options guide physical hardware limits */
+    margin: 0mm !important;
+  }
+}
+

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Ticket, TicketStatus, TicketPhase, Cubicle, CubicleStatus, ServiceType, SERVICES_CONFIG } from "../types";
 import { announceAndCall } from "../utils/audio";
 import { getSupabaseClient } from "../utils/supabaseClient";
@@ -175,6 +175,22 @@ const INITIAL_CUBICLES: Cubicle[] = [
   }
 ];
 
+const EMPTY_TICKETS: Ticket[] = [];
+const DEFAULT_CUBICLES_CACHE: Record<string, Cubicle[]> = {};
+
+function getDefaultCubiclesForOffice(officeId: string): Cubicle[] {
+  if (!DEFAULT_CUBICLES_CACHE[officeId]) {
+    DEFAULT_CUBICLES_CACHE[officeId] = INITIAL_CUBICLES.map(c => {
+      const cubicle = { ...c };
+      if (officeId !== "OFF-1") {
+        cubicle.supportedServices = (cubicle.supportedServices || []).filter(s => s !== ServiceType.EXTRANJERIA);
+      }
+      return cubicle;
+    });
+  }
+  return DEFAULT_CUBICLES_CACHE[officeId];
+}
+
 export function useTicketSystem() {
   const [currentOfficeId, setCurrentOfficeId] = useState<string>("OFF-1");
   const [officeTickets, setOfficeTickets] = useState<Record<string, Ticket[]>>({});
@@ -188,20 +204,23 @@ export function useTicketSystem() {
   const [simulationSpeed, setSimulationSpeed] = useState<number>(10000); // ms per user arrival (10s default)
   const simulationTimer = useRef<NodeJS.Timeout | null>(null);
 
-  // Derived state for the active office
-  const tickets = officeTickets[currentOfficeId] || [];
-  const rawCubicles = officeCubicles[currentOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c }));
-  const cubicles = currentOfficeId === "OFF-1"
-    ? rawCubicles
-    : rawCubicles.map(c => ({
-        ...c,
-        supportedServices: (c.supportedServices || []).filter(s => s !== ServiceType.EXTRANJERIA)
-      }));
+  // Derived state for the active office - memoized to prevent infinite re-renders or stale dependencies
+  const tickets = useMemo(() => {
+    return officeTickets[currentOfficeId] || EMPTY_TICKETS;
+  }, [officeTickets, currentOfficeId]);
+
+  const cubicles = useMemo(() => {
+    return officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId);
+  }, [officeCubicles, currentOfficeId]);
+
+  const ticketsRef = useRef<Ticket[]>(EMPTY_TICKETS);
+  ticketsRef.current = tickets;
+
   const isAutoAssignActive = officeAutoAssign[currentOfficeId] !== false;
 
   const setTicketsForCurrentOffice = useCallback((updater: Ticket[] | ((prev: Ticket[]) => Ticket[])) => {
     setOfficeTickets(prev => {
-      const currentVal = prev[currentOfficeId] || [];
+      const currentVal = prev[currentOfficeId] || EMPTY_TICKETS;
       const newVal = typeof updater === "function" ? updater(currentVal) : updater;
       return {
         ...prev,
@@ -212,7 +231,7 @@ export function useTicketSystem() {
 
   const setCubiclesForCurrentOffice = useCallback((updater: Cubicle[] | ((prev: Cubicle[]) => Cubicle[])) => {
     setOfficeCubicles(prev => {
-      const currentVal = prev[currentOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c }));
+      const currentVal = prev[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId);
       let newVal = typeof updater === "function" ? updater(currentVal) : updater;
       if (currentOfficeId !== "OFF-1") {
         newVal = newVal.map(c => ({
@@ -464,7 +483,7 @@ export function useTicketSystem() {
     const config = SERVICES_CONFIG[serviceType];
     
     // Calculate ticket number based on how many tickets of this type have been created today
-    const sameServiceTickets = tickets.filter(t => t.serviceType === serviceType);
+    const sameServiceTickets = ticketsRef.current.filter(t => t.serviceType === serviceType);
     const orderNumber = sameServiceTickets.length + 1;
     const formattedNumber = `${config.prefix}-${orderNumber.toString().padStart(3, "0")}`;
 
@@ -494,7 +513,7 @@ export function useTicketSystem() {
     // But do NOT auto-assign, instead let it be in the general queue.
     // However, if we want to immediately tell them "Go to Cubicle X" if the agent is idle, we can trigger that:
     return newTicket;
-  }, [tickets, setTicketsForCurrentOffice]);
+  }, [setTicketsForCurrentOffice]);
 
   // 4. Assign / Call next ticket for a specific cubicle
   const callNextTicket = useCallback(async (cubicleId: string) => {
@@ -865,7 +884,7 @@ export function useTicketSystem() {
         }
       }
     }
-  }, []);
+  }, [setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
 
   // Monitor tickets and cubicles to trigger automatic assignment with guardrails
   useEffect(() => {
@@ -926,7 +945,7 @@ export function useTicketSystem() {
         clearInterval(simulationTimer.current);
       }
     };
-  }, [isSimulationActive, simulationSpeed, createTicket]);
+  }, [isSimulationActive, simulationSpeed, createTicket, currentOfficeId]);
 
   return {
     currentOfficeId,

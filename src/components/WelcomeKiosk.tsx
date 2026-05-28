@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { ServiceType, SERVICES_CONFIG, Ticket, OFFICES_CONFIG } from "../types";
 import { motion } from "motion/react";
 import { User, Accessibility, Printer, CheckCircle2, Ticket as TicketIcon, HelpCircle, Calendar, AlertTriangle, Play } from "lucide-react";
@@ -22,6 +23,14 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
   const [printedTicket, setPrintedTicket] = useState<Ticket | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
   const [ignoreSchedule, setIgnoreSchedule] = useState(false);
+  const [paperSize, setPaperSize] = useState<"80mm" | "58mm">(() => {
+    return (localStorage.getItem("ticket_system_paper_size_v1") as "80mm" | "58mm") || "80mm";
+  });
+
+  const handlePaperSizeChange = (size: "80mm" | "58mm") => {
+    setPaperSize(size);
+    localStorage.setItem("ticket_system_paper_size_v1", size);
+  };
 
   // Focus simulation
   const [inputFocused, setInputFocused] = useState(false);
@@ -45,6 +54,20 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
     };
   }, [currentOfficeId]);
 
+  // Trigger physical thermal printer immediately upon ticket generation
+  useEffect(() => {
+    if (printedTicket) {
+      const autoPrintTimer = setTimeout(() => {
+        try {
+          window.print();
+        } catch (error) {
+          console.error("Auto print triggered but restricted by browser sandbox:", error);
+        }
+      }, 750); // Give enough time for state rendering and ticket fade-ins
+      return () => clearTimeout(autoPrintTimer);
+    }
+  }, [printedTicket]);
+
   const office = OFFICES_CONFIG.find(o => o.id === currentOfficeId) || OFFICES_CONFIG[0];
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -65,9 +88,44 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
       setIsAppointment(false);
       setSelectedService(null);
     }, 1250);
-  };  return (
+  };
+
+  return (
     <div id="welcome-kiosk-panel" className="bg-white rounded-2xl border border-slate-250 p-6 flex flex-col justify-between h-full min-h-[580px] relative shadow-sm">
       <div className="space-y-4">
+        {/* Iframe Warning with direct link */}
+        {window.self !== window.top && (
+          <div className="bg-gradient-to-r from-[#122e70] to-blue-900 text-white rounded-xl p-4 shadow-md space-y-3 font-sans relative border-l-4 border-amber-500 animate-fadeIn">
+            <div className="flex items-start gap-2.5">
+              <div className="p-1 px-1.5 bg-amber-500 text-slate-950 font-black rounded text-[9px] uppercase tracking-wider shrink-0">
+                Impresora Bloqueada
+              </div>
+              <div>
+                <h4 className="text-xs font-black uppercase tracking-wider text-amber-300 leading-tight">
+                  Advertencia: Visor de AI Studio Bloquea Impresoras
+                </h4>
+                <p className="text-[11px] text-slate-100 mt-1 leading-relaxed">
+                  Por seguridad de su navegador, los cuadros integrados (iframes) de AI Studio <strong>no pueden abrir el selector de impresión</strong> para elegir su Bixolon SRP-Q302.
+                </p>
+              </div>
+            </div>
+            <div className="pt-1 flex flex-col sm:flex-row items-center gap-2.5">
+              <a
+                href={window.location.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full sm:w-auto px-4 py-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-[11px] uppercase tracking-wider rounded-lg shadow-sm text-center flex items-center justify-center gap-1.5 transition-all cursor-pointer hover:scale-[1.01]"
+              >
+                <Printer className="w-3.5 h-3.5 fill-slate-950 text-slate-950" />
+                <span>Abrir en Pestaña Nueva para Imprimir</span>
+              </a>
+              <span className="text-[10.5px] text-slate-300 font-semibold italic">
+                (¡Esto activará la selección de su impresora!)
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 pb-4">
           <div className="flex items-center gap-3">
@@ -404,21 +462,191 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
                 <CheckCircle2 className="w-5 h-5 text-emerald-500 animate-bounce" />
                 <span>Ticket Impreso con éxito</span>
               </div>
+
+              {/* Iframe Detection Warning */}
+              {window.self !== window.top && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-left text-[11.5px] text-amber-950 leading-relaxed font-sans mt-1 shadow-sm">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-900 mb-1">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span className="font-extrabold uppercase tracking-wide">⚠️ IMPRESIÓN BLOQUEADA EN ESTA PANTALLA</span>
+                  </div>
+                  <p className="text-slate-700 font-medium">
+                    Está visualizando el sistema dentro de AI Studio (iframe), espacio donde los navegadores <strong>restringen por seguridad el diálogo de elección de impresoras</strong>.
+                  </p>
+                  <div className="mt-2 bg-white border border-amber-200 p-2.5 rounded-lg text-slate-800 space-y-2">
+                    <p className="font-bold text-[#122e70]">
+                      👉 Solución de un solo paso:
+                    </p>
+                    <p className="text-[11px] font-medium text-slate-700">
+                      Presione el botón de abajo para clonar este sistema en una pestaña normal de su navegador. ¡Al hacerlo, el diálogo se activará inmediatamente para que elija su impresora <strong>Bixolon SRP-Q302</strong>!
+                    </p>
+                    <a
+                      href={window.location.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block w-full py-2 px-3 bg-amber-500 hover:bg-amber-600 font-extrabold text-slate-950 text-[10.5px] uppercase tracking-wider rounded-lg shadow-sm text-center transition-all cursor-pointer hover:scale-[1.01]"
+                    >
+                      🚀 Abrir en Pestaña Nueva e Imprimir
+                    </a>
+                  </div>
+                </div>
+              )}
               
-              <button
-                id="btn-confirm-printed"
-                onClick={() => setPrintedTicket(null)}
-                className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white font-sans text-xs font-bold uppercase tracking-wider rounded-xl shadow-sm cursor-pointer"
-              >
-                Listo, Entendido
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      window.print();
+                    } catch (e) {
+                      console.error("No se pudo iniciar el diálogo de impresión manual:", e);
+                    }
+                  }}
+                  className="py-3 px-3 w-full bg-blue-700 hover:bg-blue-800 text-white font-sans text-xs font-bold uppercase tracking-wider rounded-xl shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                  title="Mandar orden a la impresora física de tickets (Abre selección de impresora)"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Imprimir de Nuevo</span>
+                </button>
+                <button
+                  id="btn-confirm-printed"
+                  onClick={() => setPrintedTicket(null)}
+                  className="py-3 px-3 w-full bg-slate-900 hover:bg-slate-800 text-white font-sans text-xs font-bold uppercase tracking-wider rounded-xl shadow-sm cursor-pointer border border-slate-900 text-center"
+                >
+                  Confirmar
+                </button>
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      <div className="border-t border-slate-100 pt-3 text-center text-[9px] text-slate-400 tracking-widest font-mono uppercase font-bold">
-        SISTEMA DE EMISIÓN DIGITAL DE TURNOS
+      {/* 5. COPIA DE IMPRESIÓN FÍSICA PARA IMPRESORAS TÉRMICAS (VISIBLE EXCLUSIVAMENTE CON @media print RENDERIZADO FUERA DE #ROOT) */}
+      {printedTicket && createPortal(
+        <>
+          <style dangerouslySetInnerHTML={{
+            __html: `
+              @media print {
+                @page {
+                  size: ${paperSize === "58mm" ? "58mm" : "80mm"} auto !important;
+                  margin: 0mm !important;
+                }
+              }
+            `
+          }} />
+          <div id="thermal-receipt-print-area" className={`print-only ${paperSize === "58mm" ? "paper-58mm" : "paper-80mm"}`}>
+            <img 
+              src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/AGENDATE-01.png" 
+              referrerPolicy="no-referrer" 
+              alt="TE Logo"
+              className="h-12 mx-auto object-contain mb-2 ticket-header-logo"
+            />
+            <h3 className="text-xs font-black uppercase text-center tracking-tight" style={{ margin: "5px 0 2px 0" }}>
+              TRIBUNAL ELECTORAL DE PANAMÁ
+            </h3>
+            <p className="text-[8px] text-center uppercase tracking-wider font-bold mb-1">
+              {office.name}
+            </p>
+            <div style={{ borderBottom: "2px dashed #000000", margin: "8px 0" }}></div>
+            
+            <p className="text-[7.5px] uppercase font-bold text-center tracking-widest mt-1">
+              NÚMERO DE ATENCIÓN DE TURNO
+            </p>
+            <h1 className="big-number text-5xl font-black text-center font-mono my-3 leading-none" style={{ fontSize: "36pt", fontWeight: "900", margin: "5px 0" }}>
+              {printedTicket.numberCode}
+            </h1>
+            
+            <div className="flex flex-col items-center gap-1 my-1">
+              {printedTicket.priority && (
+                <span style={{ fontSize: "8.5pt", fontWeight: "bold", border: "1px solid #000", padding: "1px 6px", textTransform: "uppercase" }}>
+                  ** PRIORIDAD ALTA **
+                </span>
+              )}
+              {printedTicket.isAppointment && (
+                <span style={{ fontSize: "8.5pt", fontWeight: "bold", border: "1px solid #000", padding: "1px 6px", textTransform: "uppercase" }}>
+                  ** CITA PREVIA WEB **
+                </span>
+              )}
+            </div>
+
+            <div style={{ borderBottom: "2px dashed #000000", margin: "8px 0" }}></div>
+            
+            <div className="meta-row">
+              <span className="meta-label">Ciudadano:</span>
+              <span className="meta-value font-bold">{printedTicket.name}</span>
+            </div>
+            <div className="meta-row">
+              <span className="meta-label">Trámite:</span>
+              <span className="meta-value font-bold uppercase">{SERVICES_CONFIG[printedTicket.serviceType].name}</span>
+            </div>
+            <div className="meta-row">
+              <span className="meta-label">Registro:</span>
+              <span className="meta-value">{new Date(printedTicket.createdAt).toLocaleTimeString()}</span>
+            </div>
+            <div className="meta-row" style={{ borderBottom: "none" }}>
+              <span className="meta-label">Fecha:</span>
+              <span className="meta-value">{new Date(printedTicket.createdAt).toLocaleDateString()}</span>
+            </div>
+            
+            <div style={{ borderBottom: "2px dashed #000000", margin: "8px 0" }}></div>
+            
+            {/* Barcode Simulator */}
+            <div style={{ height: "14px", display: "flex", justifyContent: "center", gap: "1.5px", overflow: "hidden", margin: "8px 0 2px 0" }}>
+              {Array.from({ length: 32 }).map((_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    backgroundColor: "#000000",
+                    width: i % 3 === 0 ? "2px" : i % 5 === 0 ? "3.2px" : "1px",
+                    height: "100%"
+                  }}
+                />
+              ))}
+            </div>
+            <p className="text-[6.5px] text-center font-mono my-0.5 font-bold uppercase tracking-widest">
+              TE-{printedTicket.id.substring(0, 8).toUpperCase()}
+            </p>
+            
+            <p className="text-[8px] text-center font-serif font-black italic mt-3">
+              "La Patria la hacemos todos"
+            </p>
+            <p className="text-[7.5px] text-center font-sans mt-1">
+              Por favor espere su turno en los monitores de sala
+            </p>
+          </div>
+        </>,
+        document.body
+      )}
+
+      <div className="border-t border-slate-100 pt-3 flex flex-col sm:flex-row items-center gap-2 sm:gap-0 justify-between text-[9px] text-slate-400 font-mono uppercase font-bold">
+        <span className="tracking-widest">SISTEMA DE EMISIÓN DIGITAL DE TURNOS</span>
+        <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200 no-print">
+          <span className="text-[7.5px] px-1 text-slate-500 font-sans font-bold normal-case">Impresora Bixolon:</span>
+          <button
+            type="button"
+            onClick={() => handlePaperSizeChange("80mm")}
+            className={`px-1.5 py-0.5 rounded text-[8px] font-sans font-black transition-all cursor-pointer ${
+              paperSize === "80mm"
+                ? "bg-[#122e70] text-white shadow-xs"
+                : "text-slate-600 hover:bg-slate-200 bg-white"
+            }`}
+            title="Ancho estándar de 3 pulgadas (80mm)"
+          >
+            80mm
+          </button>
+          <button
+            type="button"
+            onClick={() => handlePaperSizeChange("58mm")}
+            className={`px-1.5 py-0.5 rounded text-[8px] font-sans font-black transition-all cursor-pointer ${
+              paperSize === "58mm"
+                ? "bg-[#122e70] text-white shadow-xs"
+                : "text-slate-600 hover:bg-slate-200 bg-white"
+            }`}
+            title="Ancho opcional de 2 pulgadas (58mm)"
+          >
+            58mm
+          </button>
+        </div>
       </div>
     </div>
   );
