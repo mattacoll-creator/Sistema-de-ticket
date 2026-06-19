@@ -71,6 +71,8 @@ create table if not exists office_state (
 -- Enable RLS and set public policies (for demo ease)
 alter table office_state enable row level security;
 
+drop policy if exists "Allow public access to office_state" on office_state;
+
 create policy "Allow public access to office_state" 
   on office_state for all 
   using (true) 
