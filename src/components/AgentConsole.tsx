@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from "react";
-import { Ticket, Cubicle, TicketStatus, CubicleStatus, SERVICES_CONFIG, ServiceType, TicketPhase, PHASES_CONFIG } from "../types";
+import { Ticket, Cubicle, TicketStatus, CubicleStatus, SERVICES_CONFIG, ServiceType, TicketPhase, PHASES_CONFIG, SystemUser, UserRole, OFFICES_CONFIG } from "../types";
 import { 
   UserCheck, 
   HelpCircle, 
@@ -20,7 +20,11 @@ import {
   ArrowRight,
   ShieldCheck,
   Award,
-  Settings
+  Settings,
+  Lock,
+  Unlock,
+  MapPin,
+  Users
 } from "lucide-react";
 
 interface AgentConsoleProps {
@@ -34,6 +38,9 @@ interface AgentConsoleProps {
   onChangeStatus: (cubicleId: string, status: CubicleStatus) => void;
   onUpdateCubicleConfig: (cubicleId: string, phases: TicketPhase[], services: ServiceType[]) => void;
   currentOfficeId?: string;
+  users: SystemUser[];
+  currentActiveUserId: string;
+  setCurrentActiveUserId: React.Dispatch<React.SetStateAction<string>>;
 }
 
 export default function AgentConsole({
@@ -46,12 +53,127 @@ export default function AgentConsole({
   onRecall,
   onChangeStatus,
   onUpdateCubicleConfig,
-  currentOfficeId = "OFF-1"
+  currentOfficeId = "OFF-1",
+  users = [],
+  currentActiveUserId,
+  setCurrentActiveUserId
 }: AgentConsoleProps) {
   // Act as which cubicle? Choose CUB-1 by default
   const [activeCubicleId, setActiveCubicleId] = useState<string>("CUB-1");
   const [activeRoleFilter, setActiveRoleFilter] = useState<TicketPhase>(TicketPhase.CAJA);
   const [showConfig, setShowConfig] = useState<boolean>(false);
+
+  // --- COMPORTAMIENTO DE INICIO DE SESIÓN INTEGRAL (GATEWAY) ---
+  const [selectedGatewayRole, setSelectedGatewayRole] = useState<"CAJA" | "TRIADA" | null>(null);
+  const [sessionUser, setSessionUser] = useState<SystemUser | null>(() => {
+    const saved = localStorage.getItem("agent_console_session");
+    if (saved) {
+      try {
+        const u = JSON.parse(saved);
+        // Verificar que el usuario aún exista en el sistema
+        const match = users.find(existing => existing.id === u.id);
+        if (match) {
+          return match;
+        }
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  const [usernameInput, setUsernameInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [loginError, setFormLoginError] = useState("");
+
+  React.useEffect(() => {
+    if (sessionUser) {
+      localStorage.setItem("agent_console_session", JSON.stringify(sessionUser));
+      setCurrentActiveUserId(sessionUser.id);
+    } else {
+      localStorage.removeItem("agent_console_session");
+    }
+  }, [sessionUser, setCurrentActiveUserId]);
+
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormLoginError("");
+
+    if (!usernameInput.trim()) {
+      setFormLoginError("Por favor, ingrese su nombre de usuario.");
+      return;
+    }
+
+    const cleanUser = usernameInput.trim().toLowerCase();
+    const foundUser = users.find(u => u.username.toLowerCase() === cleanUser);
+
+    if (!foundUser) {
+      setFormLoginError("Nombre de usuario no registrado.");
+      return;
+    }
+
+    // Validación según rol del Gateway seleccionado
+    if (selectedGatewayRole === "CAJA") {
+      if (foundUser.role !== UserRole.AGENT_CAJA && foundUser.role !== UserRole.SUPERVISOR && foundUser.role !== UserRole.SUPERADMIN) {
+        setFormLoginError("Este usuario no tiene un rol compatible con la Consola de Caja.");
+        return;
+      }
+    } else if (selectedGatewayRole === "TRIADA") {
+      if (foundUser.role !== UserRole.AGENT_TRIADA && foundUser.role !== UserRole.SUPERVISOR && foundUser.role !== UserRole.SUPERADMIN) {
+        setFormLoginError("Este usuario no tiene un rol compatible con la Consola de Tríada.");
+        return;
+      }
+    }
+
+    // Contraseña: si está especificada en el usuario, validar contra ella. De lo contrario, usar valores predeterminados.
+    const cleanPassword = passwordInput.trim();
+    const isPasswordValid = foundUser.password 
+      ? (cleanPassword === foundUser.password)
+      : (cleanPassword === foundUser.username || cleanPassword === "123456" || cleanPassword === "admin");
+
+    if (!isPasswordValid) {
+      setFormLoginError(
+        foundUser.password 
+          ? "Contraseña incorrecta. Utilice la contraseña generada para este usuario."
+          : "Contraseña incorrecta. Pruebe usando su propio usuario o '123456' como contraseña."
+      );
+      return;
+    }
+
+    // Todo correcto -> Iniciar sesión
+    setSessionUser(foundUser);
+    setFormLoginError("");
+    setUsernameInput("");
+    setPasswordInput("");
+  };
+
+  // --- COMPORTAMIENTO DE ACCESO, ROLES SECURITY Y REGIONALES ---
+  const loggedInUser = sessionUser || {
+    id: "default",
+    username: "mcruz",
+    fullName: "Mateo Cruz (Cajero Sede Ancón)",
+    role: UserRole.AGENT_CAJA,
+    officeId: "OFF-1"
+  };
+
+  const isCajaOnly = loggedInUser.role === UserRole.AGENT_CAJA;
+  const isTriadaOnly = loggedInUser.role === UserRole.AGENT_TRIADA;
+
+  React.useEffect(() => {
+    if (isCajaOnly && activeRoleFilter !== TicketPhase.CAJA) {
+      setActiveRoleFilter(TicketPhase.CAJA);
+      const firstCaja = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja"));
+      if (firstCaja) {
+        setActiveCubicleId(firstCaja.id);
+      }
+    } else if (isTriadaOnly && activeRoleFilter !== TicketPhase.TRIADA) {
+      setActiveRoleFilter(TicketPhase.TRIADA);
+      const firstTriada = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada"));
+      if (firstTriada) {
+        setActiveCubicleId(firstTriada.id);
+      }
+    }
+  }, [isCajaOnly, isTriadaOnly, activeRoleFilter, cubicles]);
 
   // Guarantee we filter cubicles for active selection:
   const filteredRoleCubicles = cubicles.filter(c => {
@@ -112,6 +234,170 @@ export default function AgentConsole({
     onUpdateCubicleConfig(currentCubicle.id, currentCubicle.supportedPhases || [], newServices);
   };
 
+  if (!sessionUser) {
+    return (
+      <div id="agent-auth-gateway" className="bg-white border border-slate-250 rounded-2xl p-8 flex flex-col justify-center items-center min-h-[750px] shadow-sm font-sans">
+        <div className="w-full max-w-lg space-y-8 animate-fadeIn">
+          
+          {/* Header */}
+          <div className="text-center space-y-3">
+            <div className="mx-auto w-16 h-16 bg-[#122e70] text-amber-400 rounded-2xl flex items-center justify-center shadow-md border border-[#122e70]/10">
+              <Lock className="w-8 h-8" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-2xl font-black uppercase tracking-widest text-[#122e70] leading-none">
+                Consola del Operador
+              </h3>
+              <p className="text-[10px] text-slate-450 font-extrabold uppercase tracking-widest leading-none">
+                Control de Acceso de Agentes & Regionales
+              </p>
+            </div>
+            <div className="h-[2px] bg-gradient-to-r from-transparent via-slate-200 to-transparent w-40 mx-auto"></div>
+          </div>
+
+          {!selectedGatewayRole ? (
+            /* PASO 1: SELECCIÓN DE AREA (2 BOTONES) */
+            <div className="space-y-6">
+              <p className="text-xs text-slate-500 font-semibold text-center uppercase tracking-wider">
+                Seleccione su área de atención reglamentaria para ingresar:
+              </p>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* BOTÓN CAJA */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedGatewayRole("CAJA")}
+                  className="p-6 bg-white hover:bg-emerald-50/30 border border-slate-200 hover:border-emerald-300 rounded-2xl cursor-pointer text-left transition-all duration-300 group shadow-xs hover:shadow-md flex flex-col justify-between min-h-[160px]"
+                >
+                  <div className="p-3 bg-emerald-100 text-emerald-800 rounded-xl w-fit group-hover:scale-105 transition-transform">
+                    <Users className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <span className="text-sm font-black text-slate-900 block uppercase tracking-wide">
+                      Agente de Caja
+                    </span>
+                    <span className="text-[10px] text-slate-450 font-bold block uppercase tracking-widest mt-1">
+                      Módulos de Cobro y Caja
+                    </span>
+                  </div>
+                </button>
+
+                {/* BOTÓN TRÍADA */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedGatewayRole("TRIADA")}
+                  className="p-6 bg-white hover:bg-cyan-50/30 border border-slate-200 hover:border-cyan-300 rounded-2xl cursor-pointer text-left transition-all duration-300 group shadow-xs hover:shadow-md flex flex-col justify-between min-h-[160px]"
+                >
+                  <div className="p-3 bg-cyan-100 text-cyan-800 rounded-xl w-fit group-hover:scale-105 transition-transform">
+                    <Activity className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <span className="text-sm font-black text-slate-900 block uppercase tracking-wide">
+                      Agente de Tríada
+                    </span>
+                    <span className="text-[10px] text-slate-450 font-bold block uppercase tracking-widest mt-1">
+                      Fotografía, Firma e Impresión
+                    </span>
+                  </div>
+                </button>
+              </div>
+
+              <div className="p-3.5 border border-sky-100 bg-sky-50 text-sky-950 rounded-xl text-[10px] leading-relaxed font-semibold text-center">
+                🛡️ <strong>Seguridad de Aislamiento de Colas:</strong> Al ingresar, el sistema aislará automáticamente los flujos correspondientes al área seleccionada.
+              </div>
+            </div>
+          ) : (
+            /* PASO 2: FORMULARIO DE USUARIO Y CONTRASEÑA */
+            <div className="bg-slate-50 border border-slate-200 p-6 rounded-2xl space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-250 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${selectedGatewayRole === "CAJA" ? "bg-emerald-500" : "bg-cyan-500"}`}></span>
+                  <span className="text-xs font-black uppercase text-slate-800">
+                    Ingresar como: {selectedGatewayRole === "CAJA" ? "Agente de Caja" : "Agente de Tríada"}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedGatewayRole(null);
+                    setFormLoginError("");
+                  }}
+                  className="text-[10px] font-black uppercase text-slate-450 hover:text-slate-800 cursor-pointer bg-transparent border-transparent"
+                >
+                  Volver ←
+                </button>
+              </div>
+
+              <form onSubmit={handleLoginSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Usuario del Sistema:
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ej: mcruz"
+                    value={usernameInput}
+                    onChange={(e) => setUsernameInput(e.target.value)}
+                    className="w-full px-3.5 py-2.5 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-400 font-bold"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Contraseña de Acceso:
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Ingrese su contraseña"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    className="w-full px-3.5 py-2.5 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-400 font-bold"
+                  />
+                </div>
+
+                {loginError && (
+                  <p className="text-[10px] text-red-650 bg-red-50 border border-red-200 rounded-lg p-2.5 font-bold uppercase tracking-wide">
+                    ⚠️ {loginError}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  className="w-full py-2.5 bg-[#122e70] hover:bg-blue-800 text-white text-[10px] font-black uppercase tracking-wider rounded-xl cursor-pointer shadow-sm transition-all text-center flex items-center justify-center gap-2 border-transparent"
+                >
+                  <Unlock className="w-4 h-4" />
+                  <span>Validar & Entrar</span>
+                </button>
+              </form>
+
+              <div className="text-[9.5px] leading-relaxed text-slate-400 border-t border-slate-200/60 pt-3 flex flex-col gap-1">
+                <span>💡 <strong>Cuentas Demo Sugeridas:</strong></span>
+                {selectedGatewayRole === "CAJA" ? (
+                  <>
+                    <span>- <strong>@mcruz</strong> (Mateo Cruz - Caja Sede Ancón)</span>
+                    <span>- <strong>@frios</strong> (Felipe Ríos - Caja Bocas del Toro)</span>
+                  </>
+                ) : (
+                  <>
+                    <span>- <strong>@jgutierrez</strong> (Julia Gutiérrez - Tríada Sede Ancón)</span>
+                    <span>- <strong>@spadilla</strong> (Silvia Padilla - Tríada Bocas del Toro)</span>
+                  </>
+                )}
+                <span>- O use cuentas creadas en <strong>Superadministrador → Gestión de Operadores</strong></span>
+                <span className="font-bold text-[#122e70]">🔑 Contraseña: El mismo nombre de usuario o "123456"</span>
+              </div>
+            </div>
+          )}
+
+        </div>
+      </div>
+    );
+  }
+
+  const isSupervisorOrSuperadmin = loggedInUser.role === UserRole.SUPERADMIN || loggedInUser.role === UserRole.SUPERVISOR;
+
   return (
     <div id="agent-console-panel" className="bg-white border border-slate-250 rounded-2xl p-8 flex flex-col justify-between h-full min-h-[820px] shadow-sm">
       <div className="space-y-6">
@@ -128,9 +414,116 @@ export default function AgentConsole({
               <p className="text-xs text-slate-400 font-extrabold uppercase tracking-widest mt-1">SISTEMA INTEGRAL DE LLAMADAS</p>
             </div>
           </div>
-          <span className="px-3.5 py-1.5 text-xs uppercase font-mono bg-slate-900 text-white border border-slate-900 font-black tracking-widest rounded-lg">
-            SALA / GESTIÓN
-          </span>
+          
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                setSessionUser(null);
+                setCurrentActiveUserId("");
+              }}
+              className="py-1.5 px-3 bg-rose-50 text-rose-750 hover:bg-rose-100 border border-rose-200 font-black text-[10px] uppercase tracking-wider rounded-lg cursor-pointer transition-colors flex items-center justify-center gap-1.5"
+              title="Cerrar la sesión de agente actual"
+            >
+              <Power className="w-3.5 h-3.5" />
+              <span>Cerrar Sesión</span>
+            </button>
+
+            <span className="px-3.5 py-1.5 text-xs uppercase font-mono bg-slate-900 text-white border border-slate-900 font-black tracking-widest rounded-lg">
+              SALA / GESTIÓN
+            </span>
+          </div>
+        </div>
+
+        {/* OPERATOR CREDENTIAL CONTROL BAR */}
+        <div id="operator-credential-control" className="bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-3.5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 font-sans">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-[#122e70]" />
+              <span className="text-[11px] font-black uppercase tracking-wider text-slate-800">
+                Credencial de Operación Activa
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-slate-500 font-extrabold uppercase">Oficina Detectada:</span>
+              <span className="text-[10px] text-indigo-750 font-black uppercase bg-indigo-50 border border-indigo-150 px-2 py-0.5 rounded-md">
+                {OFFICES_CONFIG.find(o => o.id === currentOfficeId)?.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "") || currentOfficeId}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center font-sans">
+            <div className="md:col-span-8">
+              {isSupervisorOrSuperadmin ? (
+                <div className="space-y-1">
+                  <span className="text-[9px] text-slate-400 font-bold block uppercase tracking-wide">Cambiar operador (Poder administrativo):</span>
+                  <select
+                    value={currentActiveUserId}
+                    onChange={(e) => {
+                      const selectedUser = users.find(u => u.id === e.target.value);
+                      if (selectedUser) {
+                        setSessionUser(selectedUser);
+                        setCurrentActiveUserId(selectedUser.id);
+                      }
+                    }}
+                    className="w-full px-4 py-2.5 bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none font-bold text-slate-750 text-xs sm:text-sm cursor-pointer"
+                  >
+                    {users.map(u => {
+                      const uOffice = OFFICES_CONFIG.find(o => o.id === u.officeId);
+                      const oShort = uOffice 
+                        ? uOffice.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")
+                        : "Sede Central";
+                      let roleStr = "Operador";
+                      if (u.role === UserRole.SUPERADMIN) roleStr = "Superadministrador";
+                      else if (u.role === UserRole.SUPERVISOR) roleStr = "Supervisor";
+                      else if (u.role === UserRole.AGENT_CAJA) roleStr = "Caja";
+                      else if (u.role === UserRole.AGENT_TRIADA) roleStr = "Tríada";
+                      
+                      return (
+                        <option key={u.id} value={u.id}>
+                          {u.fullName} ({roleStr} - {oShort})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              ) : (
+                <div className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-755 text-xs sm:text-sm flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                    <span className="text-slate-600 font-medium">Conectado como:</span>
+                    <span className="text-slate-900 font-black">{loggedInUser.fullName}</span>
+                  </div>
+                  <span className="text-[10px] text-indigo-850 font-mono font-bold bg-indigo-50/50 border border-indigo-100 px-2 py-0.5 rounded-md">
+                    @{loggedInUser.username}
+                  </span>
+                </div>
+              )}
+            </div>
+            
+            <div className="md:col-span-4 flex items-center gap-2 text-[11px] font-black uppercase font-sans">
+              {isCajaOnly && (
+                <div className="w-full flex items-center justify-center gap-2 bg-emerald-55 border border-emerald-250 p-2.5 rounded-xl text-emerald-800">
+                  <span className="animate-pulse w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span>🔒 SÓLO CAJA</span>
+                </div>
+              )}
+              {isTriadaOnly && (
+                <div className="w-full flex items-center justify-center gap-2 bg-cyan-55 border border-cyan-250 p-2.5 rounded-xl text-cyan-800">
+                  <span className="animate-pulse w-2 h-2 rounded-full bg-cyan-500"></span>
+                  <span>🔒 SÓLO TRÍADA</span>
+                </div>
+              )}
+              {!isCajaOnly && !isTriadaOnly && (
+                <div className="w-full flex items-center justify-center gap-2 bg-purple-55 border border-purple-250 p-2.5 rounded-xl text-purple-850">
+                  <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                  <span>🔓 ACCESO TOTAL</span>
+                </div>
+              )}
+            </div>
+          </div>
+          <p className="text-[9.5px] leading-normal text-slate-450 font-medium pt-1 font-sans">
+            * Su usuario determina de forma segura su aislamiento regional y los módulos que puede gestionar. Para cambiarse, cierre la sesión.
+          </p>
         </div>
 
         {/* PROMINENT ROLE INDICATOR & SELECTION BUTTONS AT THE TOP */}
@@ -142,40 +535,45 @@ export default function AgentConsole({
             <span className="text-[10px] bg-[#122e70] text-white px-2 py-0.5 rounded-md font-black">ACTIVO</span>
           </div>
           
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4 font-sans">
             <button
               id="role-filter-caja"
               type="button"
+              disabled={isTriadaOnly}
               onClick={() => {
+                if (isTriadaOnly) return;
                 setActiveRoleFilter(TicketPhase.CAJA);
-                // Default to first matching modulo
                 const firstCaja = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja"));
                 if (firstCaja) setActiveCubicleId(firstCaja.id);
               }}
-              className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center cursor-pointer border ${
+              className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center border relative ${
                 activeRoleFilter === TicketPhase.CAJA
                   ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
                   : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
-              }`}
+              } ${isTriadaOnly ? "opacity-45 cursor-not-allowed bg-slate-100 text-slate-405" : "cursor-pointer"}`}
             >
-              🏧 VER SÓLO CAJAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja")).length})
+              <span className="block">🏧 VER SÓLO CAJAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja")).length})</span>
+              {isTriadaOnly && <span className="block text-[8px] text-red-550 mt-1 font-sans font-extrabold uppercase tracking-wider">🔒 BLOQUEADO</span>}
             </button>
+
             <button
               id="role-filter-triada"
               type="button"
+              disabled={isCajaOnly}
               onClick={() => {
+                if (isCajaOnly) return;
                 setActiveRoleFilter(TicketPhase.TRIADA);
-                // Default to first matching modulo 
                 const firstTriada = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada"));
                 if (firstTriada) setActiveCubicleId(firstTriada.id);
               }}
-              className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center cursor-pointer border ${
+              className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center border relative ${
                 activeRoleFilter === TicketPhase.TRIADA
                   ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
                   : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
-              }`}
+              } ${isCajaOnly ? "opacity-45 cursor-not-allowed bg-slate-100 text-slate-405" : "cursor-pointer"}`}
             >
-              📸 VER SÓLO TRÍADAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada")).length})
+              <span className="block">📸 VER SÓLO TRÍADAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada")).length})</span>
+              {isCajaOnly && <span className="block text-[8px] text-red-550 mt-1 font-sans font-extrabold uppercase tracking-wider">🔒 BLOQUEADO</span>}
             </button>
           </div>
         </div>

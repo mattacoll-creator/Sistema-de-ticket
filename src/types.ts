@@ -222,3 +222,20 @@ export const OFFICES_CONFIG: Office[] = [
   }
 ];
 
+export enum UserRole {
+  SUPERADMIN = "SUPERADMIN",
+  SUPERVISOR = "SUPERVISOR",      // Administrador / Supervisor por Regional
+  AGENT_CAJA = "AGENT_CAJA",      // Consola de Agente - Caja por Regional
+  AGENT_TRIADA = "AGENT_TRIADA"    // Consola de Agente - Tríada por Regional
+}
+
+export interface SystemUser {
+  id: string;
+  username: string;
+  fullName: string;
+  role: UserRole;
+  officeId: string; // Regional asignada
+  password?: string; // Contraseña generada o asignada
+}
+
+

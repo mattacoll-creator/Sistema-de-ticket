@@ -5,8 +5,9 @@
 
 import React, { useState } from "react";
 import { useTicketSystem } from "./hooks/useTicketSystem";
-import { ServiceType, SERVICES_CONFIG, OFFICES_CONFIG } from "./types";
+import { ServiceType, SERVICES_CONFIG, OFFICES_CONFIG, UserRole, SystemUser } from "./types";
 import { playCallingChime, speakCall } from "./utils/audio";
+
 
 // Import custom components
 import WelcomeKiosk from "./components/WelcomeKiosk";
@@ -70,8 +71,87 @@ export default function App() {
     pushOfficeToSupabase
   } = useTicketSystem();
 
+  // --- INTEGRACIÓN GESTIÓN DE ROLES Y USUARIOS ---
+  const DEFAULT_USERS: SystemUser[] = [
+    {
+      id: "user-super",
+      username: "superadmin",
+      fullName: "Administrador Central",
+      role: UserRole.SUPERADMIN,
+      officeId: "OFF-1" // Sede Ancón
+    },
+    {
+      id: "user-sup-ancon",
+      username: "rsanchez",
+      fullName: "Ricardo Sánchez (Supervisor Sede Ancón)",
+      role: UserRole.SUPERVISOR,
+      officeId: "OFF-1" // Sede Ancón
+    },
+    {
+      id: "user-sup-bocas",
+      username: "amora",
+      fullName: "Ana María Mora (Supervisor Regional Bocas)",
+      role: UserRole.SUPERVISOR,
+      officeId: "OFF-2" // Bocas del Toro
+    },
+    {
+      id: "user-caja-ancon",
+      username: "mcruz",
+      fullName: "Mateo Cruz (Cajero Sede Ancón)",
+      role: UserRole.AGENT_CAJA,
+      officeId: "OFF-1" // Sede Ancón
+    },
+    {
+      id: "user-triada-ancon",
+      username: "jgutierrez",
+      fullName: "Julia Gutiérrez (Tríada Sede Ancón)",
+      role: UserRole.AGENT_TRIADA,
+      officeId: "OFF-1" // Sede Ancón
+    },
+    {
+      id: "user-caja-bocas",
+      username: "frios",
+      fullName: "Felipe Ríos (Cajero Bocas del Toro)",
+      role: UserRole.AGENT_CAJA,
+      officeId: "OFF-2" // Bocas del Toro
+    },
+    {
+      id: "user-triada-bocas",
+      username: "spadilla",
+      fullName: "Silvia Padilla (Tríada Bocas del Toro)",
+      role: UserRole.AGENT_TRIADA,
+      officeId: "OFF-2" // Bocas del Toro
+    }
+  ];
+
+  const [users, setUsers] = useState<SystemUser[]>(() => {
+    const saved = localStorage.getItem("system_users");
+    try {
+      return saved ? JSON.parse(saved) : DEFAULT_USERS;
+    } catch {
+      return DEFAULT_USERS;
+    }
+  });
+
+  const [currentActiveUserId, setCurrentActiveUserId] = useState<string>(() => {
+    return localStorage.getItem("current_active_user_id") || "user-caja-ancon";
+  });
+
+  React.useEffect(() => {
+    localStorage.setItem("system_users", JSON.stringify(users));
+  }, [users]);
+
+  React.useEffect(() => {
+    localStorage.setItem("current_active_user_id", currentActiveUserId);
+    const targetUser = users.find(u => u.id === currentActiveUserId);
+    if (targetUser && targetUser.officeId) {
+      setCurrentOfficeId(targetUser.officeId);
+    }
+  }, [currentActiveUserId, users, setCurrentOfficeId]);
+
   // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin"
-  const [activeTab, setActiveTab] = useState<string>("kiosk");
+  const [activeTab, setActiveTab ] = useState<string>("kiosk");
+
 
   // Viewport adaptive display mode: "desktop" (laptops) | "tablet" (tablets)
   const [viewType, setViewType] = useState<"desktop" | "tablet">("desktop");
@@ -642,6 +722,9 @@ export default function App() {
               onChangeStatus={changeCubicleStatus}
               onUpdateCubicleConfig={updateCubicleConfig}
               currentOfficeId={currentOfficeId}
+              users={users}
+              currentActiveUserId={currentActiveUserId}
+              setCurrentActiveUserId={setCurrentActiveUserId}
             />
           </div>
         )}
@@ -705,6 +788,8 @@ export default function App() {
                 setOfficeTickets={setOfficeTickets}
                 officeCubicles={officeCubicles}
                 setOfficeCubicles={setOfficeCubicles}
+                users={users}
+                setUsers={setUsers}
               />
             ) : (
               <div className="bg-white border-2 border-dashed border-slate-200 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-6 max-w-lg mx-auto shadow-sm my-8">

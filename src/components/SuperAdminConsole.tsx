@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useMemo } from "react";
-import { Ticket, Cubicle, TicketStatus, OFFICES_CONFIG, ServiceType, SERVICES_CONFIG } from "../types";
+import { Ticket, Cubicle, TicketStatus, OFFICES_CONFIG, ServiceType, SERVICES_CONFIG, SystemUser, UserRole } from "../types";
 import { 
   Building2, 
   TrendingUp, 
@@ -21,7 +21,9 @@ import {
   HelpCircle,
   FileSpreadsheet,
   Trash2,
-  Sparkles
+  Sparkles,
+  Users,
+  UserPlus
 } from "lucide-react";
 import { jsPDF } from "jspdf";
 
@@ -30,6 +32,8 @@ interface SuperAdminConsoleProps {
   setOfficeTickets: React.Dispatch<React.SetStateAction<Record<string, Ticket[]>>>;
   officeCubicles: Record<string, Cubicle[]>;
   setOfficeCubicles: React.Dispatch<React.SetStateAction<Record<string, Cubicle[]>>>;
+  users: SystemUser[];
+  setUsers: React.Dispatch<React.SetStateAction<SystemUser[]>>;
 }
 
 type Timeframe = "dia" | "semana" | "mes" | "ano";
@@ -38,11 +42,114 @@ export default function SuperAdminConsole({
   officeTickets,
   setOfficeTickets,
   officeCubicles,
-  setOfficeCubicles
+  setOfficeCubicles,
+  users,
+  setUsers
 }: SuperAdminConsoleProps) {
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>("mes");
   const [selectedOfficeDetailId, setSelectedOfficeDetailId] = useState<string>("OFF-1");
   const [isGeneratingMock, setIsGeneratingMock] = useState(false);
+
+  // Estados locales para la gestión de usuarios y roles con autogeneración
+  const [newFullName, setNewFullName] = useState("");
+  const [newUsername, setNewUsername] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newRole, setNewRole] = useState<UserRole>(UserRole.AGENT_CAJA);
+  const [newOfficeId, setNewOfficeId] = useState("OFF-1");
+  const [formError, setFormError] = useState("");
+  const [formSuccess, setFormSuccess] = useState("");
+
+  const handleFullNameChange = (val: string) => {
+    setNewFullName(val);
+    
+    if (!val.trim()) {
+      setNewUsername("");
+      setNewPassword("");
+      return;
+    }
+
+    // Generar nombre de usuario: primera letra nombre + primer apellido o similar
+    const cleanStr = val.trim().toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // eliminar tildes/acentos
+      .replace(/[^a-zA-Z0-9\s]/g, ""); // eliminar caracteres especiales
+      
+    const parts = cleanStr.split(/\s+/);
+      
+    let generatedUser = "";
+    if (parts.length >= 2) {
+      const firstLetter = parts[0].substring(0, 1);
+      const lastName = parts[parts.length - 1];
+      generatedUser = firstLetter + lastName;
+    } else if (parts.length === 1 && parts[0]) {
+      generatedUser = parts[0];
+    }
+    
+    // Evitar duplicados iterando
+    let finalUser = generatedUser;
+    let counter = 1;
+    while (users.some(u => u.username === finalUser)) {
+      finalUser = generatedUser + counter;
+      counter++;
+    }
+    setNewUsername(finalUser);
+
+    // Generar contraseña aleatoria tipo de 6 dígitos numéricos o letras
+    // Generaremos ej: "te" + número de 4 dígitos
+    const randomNum = Math.floor(1000 + Math.random() * 9000);
+    setNewPassword(`te${randomNum}`);
+  };
+
+  const handleCreateUser = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError("");
+    setFormSuccess("");
+
+    if (!newFullName.trim()) {
+      setFormError("Debe ingresar el nombre completo.");
+      return;
+    }
+    if (!newUsername.trim()) {
+      setFormError("Debe ingresar un nombre de usuario.");
+      return;
+    }
+    if (!newPassword.trim()) {
+      setFormError("Debe ingresar o generar una contraseña.");
+      return;
+    }
+
+    const cleanedUsername = newUsername.trim().toLowerCase().replace(/\s+/g, "");
+
+    // Check if duplicate username
+    if (users.some(u => u.username === cleanedUsername)) {
+      setFormError(`El usuario "${cleanedUsername}" ya existe.`);
+      return;
+    }
+
+    const newUser: SystemUser = {
+      id: "user_" + Date.now(),
+      fullName: newFullName.trim(),
+      username: cleanedUsername,
+      role: newRole,
+      officeId: newOfficeId,
+      password: newPassword.trim()
+    };
+
+    setUsers(prev => [...prev, newUser]);
+    setNewFullName("");
+    setNewUsername("");
+    setNewPassword("");
+    setFormSuccess("¡Usuario creado con credenciales autogeneradas!");
+    setTimeout(() => setFormSuccess(""), 5300);
+  };
+
+  const handleDeleteUser = (userId: string) => {
+    const userToDel = users.find(u => u.id === userId);
+    if (!userToDel) return;
+    
+    if (confirm(`¿Está seguro de eliminar al usuario "${userToDel.fullName}"?`)) {
+      setUsers(prev => prev.filter(u => u.id !== userId));
+    }
+  };
 
   // Timeframe limits helper
   const now = Date.now();
@@ -906,6 +1013,226 @@ export default function SuperAdminConsole({
               </p>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* 4. SECCIÓN NACIONAL DE USUARIOS, ROLES Y ACCESOS REGIONALES */}
+      <div id="roles-user-management-section" className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
+        <div className="border-b border-slate-150 pb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="space-y-1">
+            <h3 className="text-sm font-black uppercase tracking-widest text-[#122e70] flex items-center gap-2">
+              <Users className="w-5 h-5 text-[#122e70]" />
+              Gestión de Operadores, Supervisores y Roles de Turnos
+            </h3>
+            <p className="text-xs text-slate-450 font-medium font-sans">
+              Cree credenciales para su personal de atención nacional. Establezca roles diferenciados por oficina y supervise el aislamiento estricto de vistas del sistema.
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-[#122e70]/5 border border-[#122e70]/15 rounded-full font-mono text-[9px] font-black uppercase text-[#122e70] w-fit">
+            <span>Control de Seguridad Corporativo</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 font-sans">
+          
+          {/* USER CREATION PANEL (4 cols) */}
+          <div className="lg:col-span-4 bg-slate-50/70 p-5 border border-slate-200 rounded-xl space-y-4">
+            <div className="flex items-center gap-2 text-slate-800 border-b border-slate-200/60 pb-2.5">
+              <UserPlus className="w-4.5 h-4.5 text-blue-650" />
+              <span className="text-xs font-black uppercase tracking-wider block">Crear Nueva Credencial</span>
+            </div>
+
+            <form onSubmit={handleCreateUser} className="space-y-4">
+              {/* Full Name input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-widest">Nombre Completo:</label>
+                  <span className="text-[8px] text-indigo-700 font-extrabold uppercase tracking-wider bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">Generación Activa</span>
+                </div>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej: Lic. Carlos Castillero"
+                  value={newFullName}
+                  onChange={(e) => handleFullNameChange(e.target.value)}
+                  className="w-full px-3.5 py-2 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-450 font-medium"
+                />
+              </div>
+
+              {/* Username input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-widest">Nombre de Usuario:</label>
+                  {newUsername && (
+                    <span className="text-[8px] text-emerald-700 font-extrabold bg-emerald-50 border border-emerald-150 px-1.5 py-0.5 rounded uppercase tracking-wider">✓ Autogenerado</span>
+                  )}
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-2 text-xs text-slate-400 font-mono font-medium">@</span>
+                  <input
+                    type="text"
+                    required
+                    placeholder="ccastillero"
+                    value={newUsername}
+                    onChange={(e) => setNewUsername(e.target.value.replace(/[^a-zA-Z0-9]/g, ""))}
+                    className="w-full pl-7 pr-3.5 py-2 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-450 font-mono font-bold"
+                  />
+                </div>
+              </div>
+
+              {/* Password input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-widest">Contraseña Generada:</label>
+                  {newPassword && (
+                    <span className="text-[8px] text-emerald-700 font-extrabold bg-emerald-50 border border-emerald-150 px-1.5 py-0.5 rounded uppercase tracking-wider">⚡ Autogenerada</span>
+                  )}
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-2 text-xs text-slate-400 font-mono font-medium">🔑</span>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Contraseña autogenerada"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full pl-8 pr-3.5 py-2 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-450 font-mono font-bold text-indigo-950"
+                  />
+                </div>
+              </div>
+
+              {/* Role selection */}
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-widest">Rol del Operador:</label>
+                <select
+                  value={newRole}
+                  onChange={(e) => setNewRole(e.target.value as UserRole)}
+                  className="w-full px-3.5 py-2 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none font-bold text-slate-705 cursor-pointer"
+                >
+                  <option value={UserRole.AGENT_CAJA}>🏧 Agente de Caja (Cajas únicamente)</option>
+                  <option value={UserRole.AGENT_TRIADA}>📸 Agente de Tríada (Tríada / Foto únicamente)</option>
+                  <option value={UserRole.SUPERVISOR}>👑 Administrador / Supervisor Regional</option>
+                  <option value={UserRole.SUPERADMIN}>🛡️ Super Administrador Central</option>
+                </select>
+              </div>
+
+              {/* Office/Regional selection */}
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-widest">Oficina / Regional Asignada:</label>
+                <select
+                  value={newOfficeId}
+                  onChange={(e) => setNewOfficeId(e.target.value)}
+                  className="w-full px-3.5 py-2 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none font-bold text-slate-705"
+                >
+                  {OFFICES_CONFIG.map(office => (
+                    <option key={office.id} value={office.id}>
+                      {office.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {formError && (
+                <p className="text-[10px] text-red-650 bg-red-50 border border-red-200 rounded-lg p-2.5 font-bold uppercase tracking-wide">
+                  ⚠️ {formError}
+                </p>
+              )}
+
+              {formSuccess && (
+                <p className="text-[10px] text-emerald-750 bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 font-black uppercase tracking-wide">
+                  ✓ {formSuccess}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-[#122e70] hover:bg-blue-800 text-white border-transparent text-[10px] font-black uppercase tracking-wider rounded-xl cursor-pointer shadow-sm transition-all flex items-center justify-center gap-2"
+              >
+                <span>Crear Registro</span>
+              </button>
+            </form>
+          </div>
+
+          {/* USERS DIRECTORY GRID (8 cols) */}
+          <div className="lg:col-span-8 space-y-4">
+            <div className="flex items-center justify-between text-slate-800 border-b border-slate-200 pb-2.5">
+              <span className="text-xs font-black uppercase tracking-wider block">Directorio de Cuentas del Sistema ({users.length})</span>
+              <span className="text-[10px] text-slate-400 font-mono font-bold uppercase">Sincronización en Directo</span>
+            </div>
+
+            {/* List with scrollbar is highly performant */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[460px] overflow-y-auto pr-1">
+              {users.map((u) => {
+                const assignedOffice = OFFICES_CONFIG.find(o => o.id === u.officeId);
+                const shortOfficeName = assignedOffice 
+                  ? assignedOffice.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")
+                  : "Desconocida";
+
+                let roleBadgeColor = "bg-amber-100 text-amber-950 border-amber-300";
+                let roleLabel: string = u.role;
+                if (u.role === UserRole.SUPERADMIN) {
+                  roleBadgeColor = "bg-purple-100 text-purple-950 border-purple-300 font-black";
+                  roleLabel = "🛡️ Super Administrador";
+                } else if (u.role === UserRole.SUPERVISOR) {
+                  roleBadgeColor = "bg-amber-500/10 text-amber-950 border-amber-400/30 font-black";
+                  roleLabel = "👑 Supervisor Regional";
+                } else if (u.role === UserRole.AGENT_CAJA) {
+                  roleBadgeColor = "bg-emerald-500/10 text-emerald-950 border-emerald-400/30 font-black";
+                  roleLabel = "🏧 Agente de Caja";
+                } else if (u.role === UserRole.AGENT_TRIADA) {
+                  roleBadgeColor = "bg-cyan-500/10 text-cyan-950 border-cyan-400/30 font-black";
+                  roleLabel = "📸 Agente de Tríada";
+                }
+
+                return (
+                  <div key={u.id} className="p-4 bg-white border border-slate-200 rounded-xl space-y-3 shadow-xs hover:border-slate-350 hover:shadow-sm transition-all relative">
+                    <div className="space-y-1">
+                      <div className="flex items-start justify-between gap-2.5 border-b border-slate-100 pb-2">
+                        <div>
+                          <span className="text-xs font-black text-slate-800 block uppercase tracking-wide leading-tight">{u.fullName}</span>
+                          <div className="flex flex-col gap-0.5 mt-1">
+                            <span className="text-[10px] text-slate-500 font-mono font-bold leading-none">
+                              Usuario: <strong className="text-slate-800">@{u.username}</strong>
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono font-bold leading-none">
+                              Contraseña: <strong className="text-indigo-805 bg-indigo-50 px-1 py-0.1 rounded">{u.password || `"${u.username}" o 123456`}</strong>
+                            </span>
+                          </div>
+                        </div>
+                        {/* Can't delete default admin accounts */}
+                        {u.id !== "user-super" && u.id !== "user-sup-ancon" && u.id !== "user-sup-bocas" && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteUser(u.id)}
+                            className="p-1 px-1.5 hover:bg-rose-50 hover:text-rose-600 text-slate-400 border border-transparent hover:border-rose-100 rounded-lg cursor-pointer transition-all shrink-0"
+                            title="Eliminar esta cuenta"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="pt-1.5 space-y-2">
+                        <span className={`inline-flex py-1 px-2 text-[9px] uppercase tracking-wide font-sans rounded-md border ${roleBadgeColor}`}>
+                          {roleLabel}
+                        </span>
+                        
+                        <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-extrabold uppercase font-sans">
+                          <MapPin className="w-3.5 h-3.5 text-slate-450 shrink-0" />
+                          <span className="truncate text-slate-600" title={assignedOffice?.name}>Sede: {shortOfficeName}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="p-3.5 border border-sky-100 bg-sky-50 text-sky-950 rounded-xl text-[10px] leading-relaxed font-semibold">
+              ℹ️ <strong>Seguridad del Kiosko y Consolas:</strong> Los agentes creados aquí son inmediatamente funcionales. La división entre <strong>Usuarios de Caja</strong> y <strong>Usuarios de Tríada</strong> es estricta: un agente de Caja no tiene permitido ver los datos ni las colas del equipo de Tríada, garantizando la confidencialidad, optimización del caudal y mitigación de errores de flujos cruzados.
+            </div>
+          </div>
+
         </div>
       </div>
     </div>
