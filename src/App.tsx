@@ -149,8 +149,11 @@ export default function App() {
     }
   }, [currentActiveUserId, users, setCurrentOfficeId]);
 
-  // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin"
+  // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin" | "super-admin"
   const [activeTab, setActiveTab ] = useState<string>("kiosk");
+
+  // Track the tab requested during login redirection
+  const [pendingAuthTab, setPendingAuthTab] = useState<string>("admin");
 
 
   // Viewport adaptive display mode: "desktop" (laptops) | "tablet" (tablets)
@@ -219,9 +222,17 @@ export default function App() {
       setIsAdminLoginModalOpen(false);
       setAdminPasswordInput("");
       setAdminPasswordError(false);
+      setActiveTab(pendingAuthTab);
     } else {
       setAdminPasswordError(true);
     }
+  };
+
+  const handleTriggerAdminLogin = (callbackTab: string) => {
+    setPendingAuthTab(callbackTab);
+    setAdminPasswordInput("");
+    setAdminPasswordError(false);
+    setIsAdminLoginModalOpen(true);
   };
 
   // Speaker Test trigger
@@ -616,6 +627,7 @@ export default function App() {
               if (isAdminAuthenticated) {
                 setActiveTab("admin");
               } else {
+                setPendingAuthTab("admin");
                 setAdminPasswordInput("");
                 setAdminPasswordError(false);
                 setIsAdminLoginModalOpen(true);
@@ -642,6 +654,7 @@ export default function App() {
               if (isAdminAuthenticated) {
                 setActiveTab("super-admin");
               } else {
+                setPendingAuthTab("super-admin");
                 setAdminPasswordInput("");
                 setAdminPasswordError(false);
                 setIsAdminLoginModalOpen(true);
