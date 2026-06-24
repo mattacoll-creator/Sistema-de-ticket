@@ -19,157 +19,258 @@ const STORAGE_KEYS = {
   OFFICE_AUTO_ASSIGN: "ticket_system_office_auto_assign_v1"
 };
 
+export function canCubicleServeProcedure(cubicleId: string, procedure?: string): boolean {
+  if (!procedure) return true; // Non-procedure tickets (like Cedulación) can be served normally
+  
+  const num = parseInt(cubicleId.replace("CUB-", ""), 10);
+  if (isNaN(num)) return true;
+
+  // Routing rules requested:
+  // - OR: Cubículos 2 a 8
+  if (procedure === "OR") {
+    return num >= 2 && num <= 8;
+  }
+  // - SI y OI: Cubículo 9
+  if (procedure === "SI" || procedure === "OI") {
+    return num === 9;
+  }
+  // - ED: Cubículo 10
+  if (procedure === "ED") {
+    return num === 10;
+  }
+  // - RS: Cubículo 11
+  if (procedure === "RS") {
+    return num === 11;
+  }
+  // - RTMA / RMAT: Cubículos 12 a 14
+  if (procedure === "RMAT" || procedure === "RTMA") {
+    return num >= 12 && num <= 14;
+  }
+  // - SAU: Cubículo 15
+  if (procedure === "SAU") {
+    return num === 15;
+  }
+  // - OHV: Cubículos 16 a 20
+  if (procedure === "OHV") {
+    return num >= 16 && num <= 20;
+  }
+  // - STR: Cubículo 23
+  if (procedure === "STR") {
+    return num === 23;
+  }
+  // - OTR: Cubículo 1
+  if (procedure === "OTR") {
+    return num === 1;
+  }
+
+  return true;
+}
+
 const INITIAL_CUBICLES: Cubicle[] = [
   {
     id: "CUB-1",
-    name: "Caja 1",
+    name: "Cubículo 1 (OTR)",
     agentName: "Juan Pérez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.CAJA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-2",
-    name: "Caja 2",
+    name: "Cubículo 2 (OR)",
     agentName: "Laura Martínez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.CAJA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-3",
-    name: "Caja 3",
+    name: "Cubículo 3 (OR)",
     agentName: "Carlos Sánchez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.CAJA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-4",
-    name: "Caja 4",
+    name: "Cubículo 4 (OR)",
     agentName: "Ana Rodríguez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.CAJA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-5",
-    name: "Caja 5",
+    name: "Cubículo 5 (OR)",
     agentName: "Pedro Gómez",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.CAJA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-6",
-    name: "Caja 6",
+    name: "Cubículo 6 (OR)",
     agentName: "Sofía Díaz",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.CAJA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-7",
-    name: "Caja 7",
+    name: "Cubículo 7 (OR)",
     agentName: "Diego Torres",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.CAJA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-8",
-    name: "Caja 8",
+    name: "Cubículo 8 (OR)",
     agentName: "Camila Ríos",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.CAJA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-9",
-    name: "Caja 9",
+    name: "Cubículo 9 (SI / OI)",
     agentName: "Mateo Vargas",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.CAJA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-10",
-    name: "Tríada / Foto 1",
+    name: "Cubículo 10 (ED)",
     agentName: "Lucas Silva",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-11",
-    name: "Tríada / Foto 2",
+    name: "Cubículo 11 (RS)",
     agentName: "Elena Rocha",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-12",
-    name: "Tríada / Foto 3",
+    name: "Cubículo 12 (RMAT)",
     agentName: "Facundo Ortiz",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-13",
-    name: "Tríada / Foto 4",
+    name: "Cubículo 13 (RMAT)",
     agentName: "Valentina Luna",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-14",
-    name: "Tríada / Foto 5",
+    name: "Cubículo 14 (RMAT)",
     agentName: "Thiago Medina",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-15",
-    name: "Tríada / Foto 6",
+    name: "Cubículo 15 (SAU)",
     agentName: "Isabella Castro",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-16",
-    name: "Tríada / Foto 7",
+    name: "Cubículo 16 (OHV)",
     agentName: "Nicolás Peña",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   },
   {
     id: "CUB-17",
-    name: "Tríada / Foto 8",
+    name: "Cubículo 17 (OHV)",
     agentName: "Martina Paz",
     status: CubicleStatus.ONLINE_AVAILABLE,
-    supportedPhases: [TicketPhase.TRIADA],
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-18",
+    name: "Cubículo 18 (OHV)",
+    agentName: "Andrés Méndez",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-19",
+    name: "Cubículo 19 (OHV)",
+    agentName: "Sofía Rojas",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-20",
+    name: "Cubículo 20 (OHV)",
+    agentName: "Gabriela Ramos",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-21",
+    name: "Cubículo 21",
+    agentName: "Felipe Ruiz",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-22",
+    name: "Cubículo 22",
+    agentName: "Daniela Sosa",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
+    supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
+    totalAttendedCount: 0
+  },
+  {
+    id: "CUB-23",
+    name: "Cubículo 23 (STR)",
+    agentName: "Ricardo Espino",
+    status: CubicleStatus.ONLINE_AVAILABLE,
+    supportedPhases: [TicketPhase.CAJA, TicketPhase.TRIADA],
     supportedServices: [ServiceType.ELECTORAL, ServiceType.REGISTRO, ServiceType.CEDULACION, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
   }
@@ -217,6 +318,15 @@ export function useTicketSystem() {
   ticketsRef.current = tickets;
 
   const isAutoAssignActive = officeAutoAssign[currentOfficeId] !== false;
+
+  // Evitar loops infinitos y colisiones de sincronización con Supabase
+  const lastSupabaseStateRef = useRef<string>("");
+  const currentStateRef = useRef<string>("");
+  currentStateRef.current = JSON.stringify({
+    tickets: officeTickets[currentOfficeId] || [],
+    cubicles: officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
+    auto_assign: officeAutoAssign[currentOfficeId] !== false
+  });
 
   const setTicketsForCurrentOffice = useCallback((updater: Ticket[] | ((prev: Ticket[]) => Ticket[])) => {
     setOfficeTickets(prev => {
@@ -277,6 +387,18 @@ export function useTicketSystem() {
       let loadedCubicles: Record<string, Cubicle[]> = {};
       if (storedOfficeCubicles) {
         loadedCubicles = JSON.parse(storedOfficeCubicles);
+        // Migrate or replace if cubicle list has changed
+        Object.keys(loadedCubicles).forEach(officeId => {
+          if (loadedCubicles[officeId].length < INITIAL_CUBICLES.length) {
+            loadedCubicles[officeId] = INITIAL_CUBICLES.map(c => {
+              const cubicle = { ...c };
+              if (officeId !== "OFF-1") {
+                cubicle.supportedServices = (cubicle.supportedServices || []).filter(s => s !== ServiceType.EXTRANJERIA);
+              }
+              return cubicle;
+            });
+          }
+        });
       } else {
         const oldCubicles = localStorage.getItem("ticket_system_cubicles_v1");
         if (oldCubicles) {
@@ -351,6 +473,18 @@ export function useTicketSystem() {
       return;
     }
 
+    const currentState = JSON.stringify({
+      tickets: officeTickets[currentOfficeId] || [],
+      cubicles: officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
+      auto_assign: officeAutoAssign[currentOfficeId] !== false
+    });
+
+    // Si el estado local ya coincide exactamente con lo último que se recibió/envió a Supabase, no hacemos nada
+    if (currentState === lastSupabaseStateRef.current) {
+      setSupabaseSyncStatus("success");
+      return;
+    }
+
     setSupabaseSyncStatus("syncing");
     const timeoutId = setTimeout(async () => {
       try {
@@ -367,6 +501,8 @@ export function useTicketSystem() {
         if (error) {
           throw error;
         }
+        
+        lastSupabaseStateRef.current = currentState;
         setSupabaseSyncStatus("success");
       } catch (err) {
         console.error("Supabase sync issue:", err);
@@ -394,8 +530,25 @@ export function useTicketSystem() {
 
       if (data) {
         const remoteTickets = (data.tickets || []) as Ticket[];
-        const remoteCubicles = (data.cubicles || []) as Cubicle[];
+        let remoteCubicles = (data.cubicles || []) as Cubicle[];
+        if (remoteCubicles.length < INITIAL_CUBICLES.length) {
+          remoteCubicles = INITIAL_CUBICLES.map(c => {
+            const cubicle = { ...c };
+            if (targetOfficeId !== "OFF-1") {
+              cubicle.supportedServices = (cubicle.supportedServices || []).filter(s => s !== ServiceType.EXTRANJERIA);
+            }
+            return cubicle;
+          });
+        }
         const remoteAutoAssign = data.auto_assign as boolean;
+
+        const remoteStateStr = JSON.stringify({
+          tickets: remoteTickets,
+          cubicles: remoteCubicles,
+          auto_assign: remoteAutoAssign
+        });
+
+        lastSupabaseStateRef.current = remoteStateStr;
 
         setOfficeTickets(prev => ({ ...prev, [targetOfficeId]: remoteTickets }));
         setOfficeCubicles(prev => ({ ...prev, [targetOfficeId]: remoteCubicles }));
@@ -416,19 +569,30 @@ export function useTicketSystem() {
     const supabase = getSupabaseClient();
     if (!supabase) return false;
 
+    const currentTickets = officeTickets[targetOfficeId] || [];
+    const currentCubicles = officeCubicles[targetOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c }));
+    const currentAutoAssign = officeAutoAssign[targetOfficeId] !== false;
+
     setSupabaseSyncStatus("syncing");
     try {
       const { error } = await supabase
         .from("office_state")
         .upsert({
           office_id: targetOfficeId,
-          tickets: officeTickets[targetOfficeId] || [],
-          cubicles: officeCubicles[targetOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c })),
-          auto_assign: officeAutoAssign[targetOfficeId] !== false,
+          tickets: currentTickets,
+          cubicles: currentCubicles,
+          auto_assign: currentAutoAssign,
           updated_at: new Date().toISOString()
         }, { onConflict: "office_id" });
 
       if (error) throw error;
+
+      lastSupabaseStateRef.current = JSON.stringify({
+        tickets: currentTickets,
+        cubicles: currentCubicles,
+        auto_assign: currentAutoAssign
+      });
+
       setSupabaseSyncStatus("success");
       return true;
     } catch (err) {
@@ -436,7 +600,63 @@ export function useTicketSystem() {
       setSupabaseSyncStatus("error");
       return false;
     }
-  }, [officeTickets, officeCubicles, officeAutoAssign, currentOfficeId]);
+  }, [officeTickets, officeCubicles, officeAutoAssign]);
+
+  // Realtime subscription to keep other devices/browsers perfectly synchronized in real-time
+  useEffect(() => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+
+    const channelName = `realtime-office-${currentOfficeId}`;
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "office_state",
+          filter: `office_id=eq.${currentOfficeId}`
+        },
+        (payload: any) => {
+          if (payload.new) {
+            const remoteTickets = (payload.new.tickets || []) as Ticket[];
+            let remoteCubicles = (payload.new.cubicles || []) as Cubicle[];
+            if (remoteCubicles.length < INITIAL_CUBICLES.length) {
+              remoteCubicles = INITIAL_CUBICLES.map(c => {
+                const cubicle = { ...c };
+                if (currentOfficeId !== "OFF-1") {
+                  cubicle.supportedServices = (cubicle.supportedServices || []).filter(s => s !== ServiceType.EXTRANJERIA);
+                }
+                return cubicle;
+              });
+            }
+            const remoteAutoAssign = payload.new.auto_assign !== false;
+
+            const incomingStateStr = JSON.stringify({
+              tickets: remoteTickets,
+              cubicles: remoteCubicles,
+              auto_assign: remoteAutoAssign
+            });
+
+            // Solo aplicamos si el estado recibido difiere del estado local actual
+            if (incomingStateStr !== currentStateRef.current) {
+              lastSupabaseStateRef.current = incomingStateStr;
+              
+              setOfficeTickets(prev => ({ ...prev, [currentOfficeId]: remoteTickets }));
+              setOfficeCubicles(prev => ({ ...prev, [currentOfficeId]: remoteCubicles }));
+              setOfficeAutoAssign(prev => ({ ...prev, [currentOfficeId]: remoteAutoAssign }));
+              setSupabaseSyncStatus("success");
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentOfficeId]);
 
   // Initial pull trigger for active office if Supabase keys exist
   useEffect(() => {
@@ -478,14 +698,19 @@ export function useTicketSystem() {
   }, [setTicketsForCurrentOffice]);
 
   // 3. Create ticket
-  const createTicket = useCallback((name: string, serviceType: ServiceType, priority: boolean = false, isAppointment: boolean = false): Ticket => {
+  const createTicket = useCallback((name: string, serviceType: ServiceType, priority: boolean = false, isAppointment: boolean = false, procedure?: string): Ticket => {
     const cleanName = name.trim() || "Anónimo";
     const config = SERVICES_CONFIG[serviceType];
     
-    // Calculate ticket number based on how many tickets of this type have been created today
-    const sameServiceTickets = ticketsRef.current.filter(t => t.serviceType === serviceType);
+    // Calculate ticket number based on how many tickets of this type/procedure have been created today
+    const sameServiceTickets = ticketsRef.current.filter(t => 
+      procedure 
+        ? (t.serviceType === serviceType && t.procedure === procedure)
+        : (t.serviceType === serviceType && !t.procedure)
+    );
     const orderNumber = sameServiceTickets.length + 1;
-    const formattedNumber = `${config.prefix}-${orderNumber.toString().padStart(3, "0")}`;
+    const prefix = procedure || config.prefix;
+    const formattedNumber = `${prefix}-${orderNumber.toString().padStart(3, "0")}`;
 
     // Priority rule: The first 15 tickets of Cedulación each day are reserved and tagged for appointments
     let finalIsAppointment = isAppointment;
@@ -504,7 +729,8 @@ export function useTicketSystem() {
       phaseHistory: [{ phase: TicketPhase.CAJA, timestamp: Date.now() }],
       createdAt: Date.now(),
       priority,
-      isAppointment: finalIsAppointment
+      isAppointment: finalIsAppointment,
+      procedure
     };
 
     setTicketsForCurrentOffice(prev => [...prev, newTicket]);
@@ -528,7 +754,8 @@ export function useTicketSystem() {
     // Get all candidates that are in WAITING status and whose currentPhase is supported by this cubicle
     const candidates = tickets.filter(t => {
       if (t.status !== TicketStatus.WAITING) return false;
-      return targetCubicle.supportedPhases.includes(t.currentPhase);
+      if (!targetCubicle.supportedPhases.includes(t.currentPhase)) return false;
+      return canCubicleServeProcedure(cubicleId, t.procedure);
     });
 
     if (candidates.length === 0) return;
@@ -821,7 +1048,8 @@ export function useTicketSystem() {
       // Find best candidate for this cubicle
       const candidates = updatedTickets.filter(t => {
         if (t.status !== TicketStatus.WAITING) return false;
-        return cubicle.supportedPhases.includes(t.currentPhase);
+        if (!cubicle.supportedPhases.includes(t.currentPhase)) return false;
+        return canCubicleServeProcedure(cubicle.id, t.procedure);
       });
 
       if (candidates.length === 0) continue;

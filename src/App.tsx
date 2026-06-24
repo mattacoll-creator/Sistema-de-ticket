@@ -15,6 +15,7 @@ import MainScreen from "./components/MainScreen";
 import AgentConsole from "./components/AgentConsole";
 import ControlDashboard from "./components/ControlDashboard";
 import SuperAdminConsole from "./components/SuperAdminConsole";
+import GatewayScreen from "./components/GatewayScreen";
 
 import { 
   Tv, 
@@ -152,6 +153,9 @@ export default function App() {
   // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin" | "super-admin"
   const [activeTab, setActiveTab ] = useState<string>("kiosk");
 
+  // Track selected gateway option: "select" | "cedulacion" | "registro_civil"
+  const [gatewaySelection, setGatewaySelection] = useState<"select" | "cedulacion" | "registro_civil">("select");
+
   // Track the tab requested during login redirection
   const [pendingAuthTab, setPendingAuthTab] = useState<string>("admin");
 
@@ -268,6 +272,10 @@ export default function App() {
 
     createTicket(randomName, randomService, randomPriority);
   };
+
+  if (gatewaySelection === "select") {
+    return <GatewayScreen onSelectOption={(option) => setGatewaySelection(option)} />;
+  }
 
   return (
     <div className="min-h-screen bg-[#f1f5f9] font-sans text-slate-900 pb-12 flex flex-col justify-between relative">
@@ -471,14 +479,26 @@ export default function App() {
 
       {/* MASTER SIMULATOR & COMPATIBILITY BAR */}
       <div className="w-full bg-[#122e70] text-white py-2.5 px-4 md:px-8 border-b border-[#0d2150] flex flex-wrap items-center justify-between gap-3 shadow-md shrink-0">
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center gap-1.5 bg-blue-950/60 px-2.5 py-1 rounded-lg border border-blue-800 text-[9px] font-black tracking-widest uppercase">
+        <div className="flex items-center gap-3.5 flex-wrap">
+          <div className="flex items-center gap-1.5 bg-blue-950/60 px-2.5 py-1 rounded-lg border border-blue-800 text-[9px] font-black tracking-widest uppercase shrink-0">
             <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block animate-pulse"></span>
-            <span>Controles de Pantalla</span>
+            <span>Controles</span>
           </div>
-          <span className="text-[11px] font-semibold text-blue-200">
-            Ajustar visualización del Sistema de Turnos:
-          </span>
+          <div className="flex items-center gap-2 text-[11px] font-semibold text-blue-200">
+            <span>Departamento:</span>
+            <span className={`px-2.5 py-0.5 rounded-md text-[10.5px] font-black uppercase tracking-wider ${
+              gatewaySelection === "registro_civil" ? "bg-blue-600 text-white" : "bg-amber-500 text-slate-950"
+            }`}>
+              {gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"}
+            </span>
+            <button
+              onClick={() => setGatewaySelection("select")}
+              className="ml-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 hover:text-white border border-white/20 hover:border-white/40 text-blue-100 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer active:scale-95"
+              title="Volver a la selección inicial"
+            >
+              Cambiar Sede/Trámite
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -705,7 +725,7 @@ export default function App() {
         {/* INDIVIDUAL MAXIMIZED VIEWPORTS */}
         {activeTab === "kiosk" && (
           <div className="w-full py-4">
-            <WelcomeKiosk onCreateTicket={createTicket} currentOfficeId={currentOfficeId} />
+            <WelcomeKiosk onCreateTicket={createTicket} currentOfficeId={currentOfficeId} gatewaySelection={gatewaySelection} />
           </div>
         )}
 
@@ -718,6 +738,7 @@ export default function App() {
               onClearActiveCall={() => setActiveCall(null)}
               onTestSpeaker={handleTestSpeaker}
               currentOfficeId={currentOfficeId}
+              gatewaySelection={gatewaySelection}
             />
           </div>
         )}
@@ -738,6 +759,7 @@ export default function App() {
               users={users}
               currentActiveUserId={currentActiveUserId}
               setCurrentActiveUserId={setCurrentActiveUserId}
+              gatewaySelection={gatewaySelection}
             />
           </div>
         )}

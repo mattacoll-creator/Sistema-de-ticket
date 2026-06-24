@@ -16,12 +16,13 @@ interface MainScreenProps {
   onClearActiveCall: () => void;
   onTestSpeaker: () => void;
   currentOfficeId?: string;
+  gatewaySelection?: "select" | "cedulacion" | "registro_civil";
 }
 
-export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, currentOfficeId = "OFF-1" }: MainScreenProps) {
+export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: MainScreenProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase>("general");
+  const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV">("general");
   const [layoutFocus, setLayoutFocus] = useState<"both" | "cubicles" | "queue" >("both");
 
   const [ecoModeActive, setEcoModeActive] = useState<boolean>(() => {
@@ -71,8 +72,10 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   
   // Sorted waiting queue (Priority and Appointments get moved to front)
   const sortedWaiting = [...waitingTickets].sort((a, b) => {
-    const valA = (a.priority ? 4 : 0) + (a.isAppointment ? 2 : 0);
-    const valB = (b.priority ? 4 : 0) + (b.isAppointment ? 2 : 0);
+    const isAppA = a.isAppointment && gatewaySelection !== "registro_civil";
+    const isAppB = b.isAppointment && gatewaySelection !== "registro_civil";
+    const valA = (a.priority ? 4 : 0) + (isAppA ? 2 : 0);
+    const valB = (b.priority ? 4 : 0) + (isAppB ? 2 : 0);
     if (valA !== valB) {
       return valB - valA;
     }
@@ -82,17 +85,36 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   // Filter based on active channel selection
   const filteredWaiting = selectedChannel === "general"
     ? sortedWaiting
-    : sortedWaiting.filter(t => t.currentPhase === selectedChannel);
+    : selectedChannel === "OR"
+      ? sortedWaiting.filter(t => t.procedure === "OR")
+      : selectedChannel === "OHV"
+        ? sortedWaiting.filter(t => t.procedure === "OHV")
+        : sortedWaiting.filter(t => t.currentPhase === selectedChannel);
 
   // Filter active call based on channel selection
-  const displayedActiveCall = activeCall && (selectedChannel === "general" || activeCall.ticket.currentPhase === selectedChannel)
+  const displayedActiveCall = activeCall && (
+    selectedChannel === "general" || 
+    (selectedChannel === "OR" && activeCall.ticket.procedure === "OR") ||
+    (selectedChannel === "OHV" && activeCall.ticket.procedure === "OHV") ||
+    activeCall.ticket.currentPhase === selectedChannel
+  )
     ? activeCall
     : null;
 
   // Filter cubicles based on channel selection
   const filteredCubicles = selectedChannel === "general"
     ? cubicles
-    : cubicles.filter(c => c.supportedPhases?.includes(selectedChannel));
+    : selectedChannel === "OR"
+      ? cubicles.filter(c => {
+          const num = parseInt(c.id.replace("CUB-", ""), 10);
+          return num >= 2 && num <= 8;
+        })
+      : selectedChannel === "OHV"
+        ? cubicles.filter(c => {
+            const num = parseInt(c.id.replace("CUB-", ""), 10);
+            return num >= 16 && num <= 20;
+          })
+        : cubicles.filter(c => c.supportedPhases?.includes(selectedChannel as TicketPhase));
 
   // Recent completed or missed tickets (dynamic size depending on limitHistory config)
   const recentHistory = tickets
@@ -287,14 +309,56 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               selectedChannel === "general"
                 ? "bg-[#0081f9] text-white font-bold shadow-md shadow-blue-900/45 border-transparent"
                 : isTriadaChannel
-                  ? "bg-white text-slate-700 hover:text-slate-900 border border-slate-300 hover:bg-slate-50"
+                  ? "bg-white text-slate-705 hover:text-slate-900 border border-slate-300 hover:bg-slate-50"
                   : "bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 border border-white/5"
             }`}
           >
             📺 MULTICANAL (TODOS)
           </button>
+
+          <button
+            onClick={() => setSelectedChannel("OR")}
+            className={`px-4 py-2 text-xs font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-2 border ${
+              selectedChannel === "OR"
+                ? "bg-blue-600 text-white border-transparent font-extrabold shadow-sm"
+                : isTriadaChannel
+                  ? "bg-white text-slate-700 hover:bg-slate-50 border-slate-300"
+                  : "bg-white/5 text-slate-300 hover:bg-white/10 border-white/5"
+            }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
+            <span>📺 PANTALLA CUBÍCULOS OR</span>
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 font-bold rounded ${
+              sortedWaiting.filter(t => t.procedure === "OR").length > 0
+                ? "bg-rose-900/50 text-rose-200 border border-rose-800/40"
+                : "bg-white/5 text-slate-400"
+            }`}>
+              {sortedWaiting.filter(t => t.procedure === "OR").length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setSelectedChannel("OHV")}
+            className={`px-4 py-2 text-xs font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-2 border ${
+              selectedChannel === "OHV"
+                ? "bg-blue-600 text-white border-transparent font-extrabold shadow-sm"
+                : isTriadaChannel
+                  ? "bg-white text-slate-700 hover:bg-slate-50 border-slate-300"
+                  : "bg-white/5 text-slate-300 hover:bg-white/10 border-white/5"
+            }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+            <span>📺 PANTALLA CUBÍCULOS OHV</span>
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 font-bold rounded ${
+              sortedWaiting.filter(t => t.procedure === "OHV").length > 0
+                ? "bg-rose-900/50 text-rose-200 border border-rose-800/40"
+                : "bg-white/5 text-slate-400"
+            }`}>
+              {sortedWaiting.filter(t => t.procedure === "OHV").length}
+            </span>
+          </button>
           
-          {Object.entries(PHASES_CONFIG).map(([key, phase]) => {
+          {gatewaySelection !== "registro_civil" && Object.entries(PHASES_CONFIG).map(([key, phase]) => {
             const isActive = selectedChannel === key;
             const waitingCount = sortedWaiting.filter(t => t.currentPhase === key).length;
             return (
@@ -400,7 +464,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         </div>
 
         {/* Dynamic office schedules & business rules banners (educating users in real time) */}
-        <div className={`grid grid-cols-1 md:grid-cols-2 gap-3.5 p-3.5 rounded-xl border font-sans text-xs ${
+        <div className={`grid grid-cols-1 ${gatewaySelection === "registro_civil" ? "" : "md:grid-cols-2"} gap-3.5 p-3.5 rounded-xl border font-sans text-xs ${
           isTriadaChannel
             ? "bg-slate-50 border-slate-200 text-slate-805"
             : "bg-slate-950/20 border-white/5 text-slate-200"
@@ -428,26 +492,28 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
           </div>
 
           {/* Booking / Appointment Rules Column */}
-          <div className="flex items-start gap-2.5 border-t md:border-t-0 md:border-l pt-3 md:pt-0 md:pl-4 border-slate-200/10">
-            <span className={`p-1.5 rounded-lg shrink-0 text-sm ${
-              isTriadaChannel ? "bg-[#003087]/10 text-[#003087]" : "bg-emerald-500/10 text-emerald-350"
-            }`}>
-              📅
-            </span>
-            <div>
-              <span className="block font-black text-[9px] uppercase tracking-wider opacity-60">
-                Reserva de Turnos (Cedulación)
-              </span>
-              <p className={`font-extrabold mt-0.5 ${
-                isTriadaChannel ? "text-[#003087]" : "text-emerald-400"
+          {gatewaySelection !== "registro_civil" && (
+            <div className="flex items-start gap-2.5 border-t md:border-t-0 md:border-l pt-3 md:pt-0 md:pl-4 border-slate-200/10">
+              <span className={`p-1.5 rounded-lg shrink-0 text-sm ${
+                isTriadaChannel ? "bg-[#003087]/10 text-[#003087]" : "bg-emerald-500/10 text-emerald-350"
               }`}>
-                Los primeros 15 turnos de cada día se reservan para Citas Previas
-              </p>
-              <p className="text-[10.5px] mt-1 leading-normal opacity-80">
-                Los turnos de cita previa gozan de preferencia total y se posicionan por delante en la fila con respecto a turnos presenciales espontáneos.
-              </p>
+                📅
+              </span>
+              <div>
+                <span className="block font-black text-[9px] uppercase tracking-wider opacity-60">
+                  Reserva de Turnos (Cedulación)
+                </span>
+                <p className={`font-extrabold mt-0.5 ${
+                  isTriadaChannel ? "text-[#003087]" : "text-emerald-400"
+                }`}>
+                  Los primeros 15 turnos de cada día se reservan para Citas Previas
+                </p>
+                <p className="text-[10.5px] mt-1 leading-normal opacity-80">
+                  Los turnos de cita previa gozan de preferencia total y se posicionan por delante en la fila con respecto a turnos presenciales espontáneos.
+                </p>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* --- HERO: FLASHING CALL OUT SECTION --- */}
@@ -533,13 +599,23 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       ? "bg-slate-100 text-[#003087] border-slate-205"
                       : "bg-sky-955/70 text-sky-400 border border-sky-850/50"
                   }`}>
-                    {selectedChannel === "general" ? "🔍 RECOMENDACIÓN DE SALA" : `📺 DETALLE DE PANTALLA: FASE DE ${PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()}`}
+                    {selectedChannel === "general" 
+                      ? "🔍 RECOMENDACIÓN DE SALA" 
+                      : selectedChannel === "OR"
+                        ? "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OR"
+                        : selectedChannel === "OHV"
+                          ? "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OHV"
+                          : `📺 DETALLE DE PANTALLA: FASE DE ${PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()}`}
                   </span>
                   <h2 className={`text-2xl font-black uppercase tracking-widest leading-tight ${isTriadaChannel ? "text-slate-900" : "text-white"}`}>Turnos Pendientes de Atención</h2>
                   <p className={`text-sm max-w-2xl leading-relaxed font-semibold ${isTriadaChannel ? "text-slate-500" : "text-sky-200/70"}`}>
                     {selectedChannel === "general" 
                       ? "Por favor, observe las pantallas inferiores. Conservará su mismo número de turno durante todo su trayecto y el sistema lo guiará por voz de llamada en cada sección."
-                      : `Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de ${PHASES_CONFIG[selectedChannel as TicketPhase].name}.`}
+                      : selectedChannel === "OR"
+                        ? "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Recepción (OR) - Cubículos 2 al 8."
+                        : selectedChannel === "OHV"
+                          ? "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Hechos Vitales (OHV) - Cubículos 16 al 20."
+                          : `Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de ${PHASES_CONFIG[selectedChannel as TicketPhase].name}.`}
                   </p>
                 </div>
                 
@@ -557,24 +633,30 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               </div>
             )}
           </AnimatePresence>
-        </div>
-
-        {/* --- BODY: DUAL GRID --- */}
-        <div className={`grid grid-cols-1 ${layoutFocus === "both" ? "lg:grid-cols-12" : "grid-cols-1"} gap-8 pt-3`}>
-          
-          {/* COLUMN LEFT: Cubicle Monitors (Styled EXACTLY like the Photo) */}
-          {layoutFocus !== "queue" && (
-            <div className={`space-y-3 animate-fade-in ${layoutFocus === "both" ? "lg:col-span-7" : ""}`}>
-              <div className={`flex items-center justify-between border-b pb-2 mb-2 ${
-                isTriadaChannel ? "border-slate-300" : "border-white/5"
-              }`}>
-                <span className={`text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 ${
-                  isTriadaChannel ? "text-slate-800" : "text-sky-400"
-                }`}>
-                  <UserCheck className={`w-5 h-5 ${isTriadaChannel ? "text-[#003087]" : "text-sky-455"}`} />
-                  MÓDULOS DE ATENCIÓN {selectedChannel !== "general" ? `(FILTRADOS POR ${PHASES_CONFIG[selectedChannel as TicketPhase].shortName.toUpperCase()})` : ""}
-                </span>
-                <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
+         </div>
+ 
+         {/* --- BODY: DUAL GRID --- */}
+         <div className={`grid grid-cols-1 ${layoutFocus === "both" ? "lg:grid-cols-12" : "grid-cols-1"} gap-8 pt-3`}>
+           
+           {/* COLUMN LEFT: Cubicle Monitors (Styled EXACTLY like the Photo) */}
+           {layoutFocus !== "queue" && (
+             <div className={`space-y-3 animate-fade-in ${layoutFocus === "both" ? "lg:col-span-7" : ""}`}>
+               <div className={`flex items-center justify-between border-b pb-2 mb-2 ${
+                 isTriadaChannel ? "border-slate-300" : "border-white/5"
+               }`}>
+                 <span className={`text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 ${
+                   isTriadaChannel ? "text-slate-800" : "text-sky-400"
+                 }`}>
+                   <UserCheck className={`w-5 h-5 ${isTriadaChannel ? "text-[#003087]" : "text-sky-455"}`} />
+                   MÓDULOS DE ATENCIÓN {selectedChannel !== "general" 
+                     ? selectedChannel === "OR"
+                       ? "(FILTRADOS: OFICIAL DE RECEPCIÓN OR)"
+                       : selectedChannel === "OHV"
+                         ? "(FILTRADOS: HECHOS VITALES OHV)"
+                         : `(FILTRADOS POR ${PHASES_CONFIG[selectedChannel as TicketPhase].shortName.toUpperCase()})` 
+                     : ""}
+                  </span>
+                 <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
                   isTriadaChannel ? "text-slate-500" : "text-sky-300/60"
                 }`}>{filteredCubicles.length} EN SERVICIO</span>
               </div>
@@ -677,98 +759,127 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                     }`}>TOTAL: {sortedWaiting.length} ESPERANDO</span>
                   </div>
 
-                  <div className={`grid ${layoutFocus === "queue" ? "grid-cols-2 md:grid-cols-4" : "grid-cols-2"} gap-4`}>
-                    {Object.entries(PHASES_CONFIG).map(([key, phase]) => {
-                      const phaseTickets = sortedWaiting.filter(t => t.currentPhase === key);
-                      return (
-                        <div key={key} className={`border p-4 flex flex-col justify-between ${layoutFocus === "queue" ? "h-[225px]" : "h-[155px]"} relative overflow-hidden rounded-2xl shadow-sm transition-all ${
-                          isTriadaChannel
-                            ? "bg-white border-slate-250 hover:border-slate-350"
-                            : "bg-[#051c44]/80 border-blue-900/50 hover:border-blue-700/60"
-                        }`}>
-                          {/* Top accent line */}
-                          <div className={`absolute top-0 left-0 right-0 h-[3.5px] ${phase.color.split(" ")[0]}`} />
-                          
-                          <div className="space-y-2 flex-1 flex flex-col justify-between overflow-hidden">
-                            <div className={`flex items-center justify-between border-b pb-2 ${
-                              isTriadaChannel ? "border-slate-150" : "border-white/5"
-                            }`}>
-                              <span className={`text-sm font-black tracking-widest uppercase leading-none ${
-                                isTriadaChannel ? "text-slate-800" : "text-white"
-                              }`}>
-                                {phase.name}
-                              </span>
-                              <span className={`text-[10px] font-mono font-black px-2 py-0.5 border rounded ${
-                                isTriadaChannel 
-                                  ? "bg-slate-100 text-[#003087] border-slate-200" 
-                                  : "text-sky-300 bg-sky-955/70 border-sky-800/40"
-                              }`}>
-                                {phaseTickets.length} cola
-                              </span>
-                            </div>
+                  {(() => {
+                    const subQueues = gatewaySelection === "registro_civil"
+                      ? [
+                          {
+                            key: "OR",
+                            name: "Oficial de Recepción OR",
+                            colorClass: "bg-blue-500",
+                            tickets: sortedWaiting.filter(t => t.procedure === "OR")
+                          },
+                          {
+                            key: "OHV",
+                            name: "Hechos Vitales OHV",
+                            colorClass: "bg-cyan-500",
+                            tickets: sortedWaiting.filter(t => t.procedure === "OHV")
+                          }
+                        ]
+                      : Object.entries(PHASES_CONFIG).map(([key, phase]) => ({
+                          key,
+                          name: phase.name,
+                          colorClass: phase.color.split(" ")[0],
+                          tickets: sortedWaiting.filter(t => t.currentPhase === key)
+                        }));
 
-                            {phaseTickets.length > 0 ? (
-                              <div className={`flex flex-wrap gap-1.5 ${layoutFocus === "queue" ? "max-h-[145px]" : "max-h-[85px]"} overflow-y-auto pt-1 content-start scrollbar-none`}>
-                                {phaseTickets.map(t => {
-                                  const secondsWaiting = Math.round((Date.now() - t.createdAt) / 1000);
-                                  const isOverdue = secondsWaiting > 60;
-                                  return (
-                                    <span
-                                      key={t.id}
-                                      className={`text-[12px] font-mono px-3 py-1.5 font-black border flex items-center gap-1 rounded transition-colors duration-300 ${
-                                        isOverdue 
-                                          ? "bg-rose-600 text-white border-rose-650 animate-pulse font-extrabold" 
-                                          : t.priority 
-                                            ? isTriadaChannel
-                                              ? "bg-amber-100/75 text-amber-900 border-amber-300 shadow-xs"
-                                              : "bg-amber-500/10 text-amber-250 border-amber-505/30 shadow-sm" 
-                                            : t.isAppointment
-                                              ? isTriadaChannel
-                                                ? "bg-sky-50 text-sky-900 border-sky-305 shadow-xs animate-pulse"
-                                                : "bg-emerald-500/15 text-emerald-200 border-emerald-500/30 shadow-sm animate-pulse"
-                                              : isTriadaChannel
-                                                ? "bg-slate-100 text-slate-805 border-slate-250 shadow-xs"
-                                                : "bg-[#0b244d] text-sky-200 border-sky-850/40"
-                                      }`}
-                                      title={`${t.name} - ${SERVICES_CONFIG[t.serviceType].name} (Espera: ${secondsWaiting}s)`}
-                                    >
-                                      {t.priority && !isOverdue && <span className="text-amber-500 font-bold">★</span>}
-                                      {t.isAppointment && !isOverdue && <span className="text-sky-455 font-bold">📅</span>}
-                                      {isOverdue && <span className="text-white">⚠️</span>}
-                                      {t.numberCode}</span>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <div className={`flex-1 flex items-center justify-center text-xs uppercase font-bold text-center tracking-widest py-4 select-none ${
-                                isTriadaChannel ? "text-slate-400" : "text-[#00d0ff]/40"
+                    return (
+                      <>
+                        <div className={`grid ${layoutFocus === "queue" ? "grid-cols-2 md:grid-cols-4" : "grid-cols-2"} gap-4`}>
+                          {subQueues.map(({ key, name, colorClass, tickets: phaseTickets }) => {
+                            return (
+                              <div key={key} className={`border p-4 flex flex-col justify-between ${layoutFocus === "queue" ? "h-[225px]" : "h-[155px]"} relative overflow-hidden rounded-2xl shadow-sm transition-all ${
+                                isTriadaChannel
+                                  ? "bg-white border-slate-250 hover:border-slate-350"
+                                  : "bg-[#051c44]/80 border-blue-900/50 hover:border-blue-700/60"
                               }`}>
-                                🚫 SIN ESPERAS
+                                {/* Top accent line */}
+                                <div className={`absolute top-0 left-0 right-0 h-[3.5px] ${colorClass}`} />
+                                
+                                <div className="space-y-2 flex-1 flex flex-col justify-between overflow-hidden">
+                                  <div className={`flex items-center justify-between border-b pb-2 ${
+                                    isTriadaChannel ? "border-slate-150" : "border-white/5"
+                                  }`}>
+                                    <span className={`text-sm font-black tracking-widest uppercase leading-none truncate ${
+                                      isTriadaChannel ? "text-slate-800" : "text-white"
+                                    }`}>
+                                      {name}
+                                    </span>
+                                    <span className={`text-[10px] font-mono font-black px-2 py-0.5 border rounded ${
+                                      isTriadaChannel 
+                                        ? "bg-slate-100 text-[#003087] border-slate-200" 
+                                        : "text-sky-300 bg-sky-955/70 border-sky-800/40"
+                                    }`}>
+                                      {phaseTickets.length} cola
+                                    </span>
+                                  </div>
+
+                                  {phaseTickets.length > 0 ? (
+                                    <div className={`flex flex-wrap gap-1.5 ${layoutFocus === "queue" ? "max-h-[145px]" : "max-h-[85px]"} overflow-y-auto pt-1 content-start scrollbar-none`}>
+                                      {phaseTickets.map(t => {
+                                        const secondsWaiting = Math.round((Date.now() - t.createdAt) / 1000);
+                                        const isOverdue = secondsWaiting > 60;
+                                        return (
+                                          <span
+                                            key={t.id}
+                                            className={`text-[12px] font-mono px-3 py-1.5 font-black border flex items-center gap-1 rounded transition-colors duration-300 ${
+                                              isOverdue 
+                                                ? "bg-rose-600 text-white border-rose-650 animate-pulse font-extrabold" 
+                                                : t.priority 
+                                                  ? isTriadaChannel
+                                                    ? "bg-amber-100/75 text-amber-900 border-amber-300 shadow-xs"
+                                                    : "bg-amber-500/10 text-amber-250 border-amber-505/30 shadow-sm" 
+                                                  : (t.isAppointment && gatewaySelection !== "registro_civil")
+                                                    ? isTriadaChannel
+                                                      ? "bg-sky-50 text-sky-900 border-sky-305 shadow-xs animate-pulse"
+                                                      : "bg-emerald-500/15 text-emerald-200 border-emerald-500/30 shadow-sm animate-pulse"
+                                                    : isTriadaChannel
+                                                      ? "bg-slate-100 text-slate-805 border-slate-250 shadow-xs"
+                                                      : "bg-[#0b244d] text-sky-200 border-sky-850/40"
+                                            }`}
+                                            title={`${t.name} - ${SERVICES_CONFIG[t.serviceType].name} (Espera: ${secondsWaiting}s)`}
+                                          >
+                                            {t.priority && !isOverdue && <span className="text-amber-500 font-bold">★</span>}
+                                            {t.isAppointment && gatewaySelection !== "registro_civil" && !isOverdue && <span className="text-sky-455 font-bold">📅</span>}
+                                            {isOverdue && <span className="text-white">⚠️</span>}
+                                            {t.numberCode}</span>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <div className={`flex-1 flex items-center justify-center text-xs uppercase font-bold text-center tracking-widest py-4 select-none ${
+                                      isTriadaChannel ? "text-slate-400" : "text-[#00d0ff]/40"
+                                    }`}>
+                                      🚫 SIN ESPERAS
+                                    </div>
+                                  )}
+                                </div>
                               </div>
-                            )}
-                          </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })}
-                  </div>
 
-                  {/* Explanatory banner confirming continuous same ticket */}
-                  <div className={`p-3.5 border border-dashed text-center space-y-1 mt-2 shadow-inner rounded-xl ${
-                    isTriadaChannel 
-                      ? "border-slate-300 bg-slate-100/50"
-                      : "border-sky-805/30 bg-sky-955/50"
-                  }`}>
-                    <p className={`text-xs uppercase font-black tracking-widest leading-none ${
-                      isTriadaChannel ? "text-[#003087]" : "text-[#00aaff]"
-                    }`}>
-                      ★ UN SOLO TÍQUET: PROCESO AUTOMÁTICO CONTINUO ★
-                    </p>
-                    <p className={`text-[10px] uppercase font-bold leading-relaxed mt-1 ${
-                      isTriadaChannel ? "text-slate-500" : "text-sky-200/60"
-                    }`}>
-                      Usted NO requiere un nuevo papel. Al terminar su turno en Caja el tiquet avanzará automáticamente a Tríada/Foto.
-                    </p>
-                  </div>
+                        {/* Explanatory banner confirming continuous same ticket */}
+                        {gatewaySelection !== "registro_civil" && (
+                          <div className={`p-3.5 border border-dashed text-center space-y-1 mt-2 shadow-inner rounded-xl ${
+                            isTriadaChannel 
+                              ? "border-slate-300 bg-slate-100/50"
+                              : "border-sky-805/30 bg-sky-955/50"
+                          }`}>
+                            <p className={`text-xs uppercase font-black tracking-widest leading-none ${
+                              isTriadaChannel ? "text-[#003087]" : "text-[#00aaff]"
+                            }`}>
+                              ★ UN SOLO TÍQUET: PROCESO AUTOMÁTICO CONTINUO ★
+                            </p>
+                            <p className={`text-[10px] uppercase font-bold leading-relaxed mt-1 ${
+                              isTriadaChannel ? "text-slate-500" : "text-sky-200/60"
+                            }`}>
+                              Usted NO requiere un nuevo papel. Al terminar su turno en Caja el tiquet avanzará automáticamente a Tríada/Foto.
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               ) : (
                 /* FOCUSED SCREEN FOR A SPECIFIC SEPARATE PHASE MONITOR (TV BOXES) */
@@ -780,7 +891,13 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       isTriadaChannel ? "text-slate-805" : "text-sky-400"
                     }`}>
                       <Users className={`w-5 h-5 ${isTriadaChannel ? "text-[#003087]" : "text-sky-450"}`} />
-                      COLA DE ESPERA EN EXCLUSIVA ({PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()})
+                      COLA DE ESPERA EN EXCLUSIVA ({
+                        selectedChannel === "OR"
+                          ? "OFICIAL DE RECEPCIÓN OR"
+                          : selectedChannel === "OHV"
+                            ? "OFICIAL DE HECHOS VITALES OHV"
+                            : PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()
+                      })
                     </span>
                     <span className={`text-xs font-mono font-extrabold ${
                       isTriadaChannel ? "text-slate-500" : "text-sky-305/70"
@@ -801,7 +918,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                 ? isTriadaChannel
                                   ? "bg-amber-50 border-amber-300 text-amber-950 shadow-sm"
                                   : "bg-amber-500/10 border-amber-500/40 text-amber-250 shadow-md"
-                                : ticket.isAppointment
+                                : (ticket.isAppointment && gatewaySelection !== "registro_civil")
                                   ? isTriadaChannel
                                     ? "bg-sky-50 border-sky-350 text-sky-950 shadow-sm animate-pulse"
                                     : "bg-emerald-500/10 border-emerald-500/40 text-emerald-200 shadow-md animate-pulse"
@@ -814,7 +931,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                               <span className={`text-[9px] font-mono font-black block leading-none ${
                                 isTriadaChannel ? "text-slate-400" : "text-[#00d0ff]/50"
                               }`}>
-                                ORDEN #{index+1}{ticket.isAppointment && " • 📅 CITA PREVIA"}
+                                ORDEN #{index+1}{(ticket.isAppointment && gatewaySelection !== "registro_civil") && " • 📅 CITA PREVIA"}
                               </span>
                               <h5 className={`font-black tracking-wider uppercase truncate ${
                                 isTriadaChannel ? "text-slate-805" : "text-white"

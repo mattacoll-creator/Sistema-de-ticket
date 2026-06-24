@@ -39,6 +39,7 @@ import {
   Trash
 } from "lucide-react";
 import { generatePDFReport } from "../utils/reportGenerator";
+import { REGISTRO_PROCEDURES } from "./WelcomeKiosk";
 import { playCallingChime, speakCall } from "../utils/audio";
 import { resetSupabaseClient, SUPABASE_SQL_SETUP_SCRIPT } from "../utils/supabaseClient";
 import { Copy, Cloud, Link, ExternalLink } from "lucide-react";
@@ -888,6 +889,76 @@ export default function ControlDashboard({
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-xl font-black text-rose-650">{resolutionRate}%</span>
               <span className="text-[8px] uppercase text-slate-405 font-mono font-bold">de {totalCreated}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* --- DEDICATED CIVIL REGISTRY METRICS SECTION --- */}
+        <div id="civil-registry-specialized-metrics" className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-4 shadow-sm">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+            <h4 className="text-[10px] font-black text-[#122e70] uppercase tracking-widest flex items-center gap-1.5 font-mono">
+              <TrendingUp className="w-4 h-4 text-emerald-600 animate-pulse" />
+              Métricas Especializadas de Registro Civil
+            </h4>
+            <span className="text-[8px] bg-emerald-50 border border-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-black font-mono">
+              REGISTRO CIVIL
+            </span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="bg-white border border-slate-150 p-2.5 rounded-lg">
+              <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider font-mono">En Espera (RC)</span>
+              <span className="text-lg font-black text-[#122e70] block mt-0.5">
+                {tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).length}
+              </span>
+            </div>
+            <div className="bg-white border border-slate-150 p-2.5 rounded-lg">
+              <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider font-mono">Atendidos (RC)</span>
+              <span className="text-lg font-black text-emerald-600 block mt-0.5">
+                {tickets.filter(t => t.status === TicketStatus.COMPLETED && t.serviceType === ServiceType.REGISTRO).length}
+              </span>
+            </div>
+            <div className="bg-white border border-slate-150 p-2.5 rounded-lg">
+              <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider font-mono">Activos (RC)</span>
+              <span className="text-lg font-black text-amber-600 block mt-0.5">
+                {tickets.filter(t => (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING) && t.serviceType === ServiceType.REGISTRO).length}
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
+            <span className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 font-mono">
+              Trámites de Registro Civil en Cola:
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {REGISTRO_PROCEDURES.map(proc => {
+                const waitingForProc = tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO && t.procedure === proc.id).length;
+                const completedForProc = tickets.filter(t => t.status === TicketStatus.COMPLETED && t.serviceType === ServiceType.REGISTRO && t.procedure === proc.id).length;
+                
+                if (waitingForProc === 0 && completedForProc === 0) return null;
+
+                return (
+                  <div key={proc.id} className="p-2 bg-white border border-slate-150 rounded-lg flex items-center justify-between text-xs">
+                    <div className="truncate max-w-[65%]">
+                      <span className="font-extrabold text-slate-800 block truncate uppercase text-[9px]">{proc.name}</span>
+                      <span className="text-[8px] text-slate-400 font-mono">ID: {proc.id}</span>
+                    </div>
+                    <div className="flex gap-1">
+                      <span className="px-1 py-0.5 bg-blue-50 text-[#122e70] font-mono font-bold text-[8.5px] rounded border border-blue-100" title="En Espera">
+                        {waitingForProc} E
+                      </span>
+                      <span className="px-1 py-0.5 bg-emerald-50 text-emerald-800 font-mono font-bold text-[8.5px] rounded border border-emerald-100" title="Atendidos">
+                        {completedForProc} A
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              {tickets.filter(t => t.serviceType === ServiceType.REGISTRO).length === 0 && (
+                <div className="col-span-2 py-3 text-center text-[10px] text-slate-400 font-medium">
+                  No hay tickets de Registro Civil emitidos en la sesión actual.
+                </div>
+              )}
             </div>
           </div>
         </div>

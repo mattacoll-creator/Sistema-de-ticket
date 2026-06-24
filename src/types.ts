@@ -113,6 +113,7 @@ export interface Ticket {
   assignedCubicleId?: string;
   priority: boolean; // Priority ticket (pregnant, elderly, disabled)
   isAppointment?: boolean; // Prior appointment ticket (Cita Previa)
+  procedure?: string; // Specific procedure for departments (e.g. Registro Civil "OR", "RMAT")
 }
 
 export enum CubicleStatus {

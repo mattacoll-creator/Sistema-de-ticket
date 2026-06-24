@@ -11,14 +11,29 @@ import { User, Accessibility, Printer, CheckCircle2, Ticket as TicketIcon, HelpC
 import { isOfficeOpenNow, getOfficeSchedule, OfficeSchedule } from "../utils/scheduleStorage";
 
 interface WelcomeKioskProps {
-  onCreateTicket: (name: string, serviceType: ServiceType, priority: boolean, isAppointment?: boolean) => Ticket;
+  onCreateTicket: (name: string, serviceType: ServiceType, priority: boolean, isAppointment?: boolean, procedure?: string) => Ticket;
   currentOfficeId?: string;
+  gatewaySelection?: "cedulacion" | "registro_civil";
 }
 
-export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1" }: WelcomeKioskProps) {
+export const REGISTRO_PROCEDURES = [
+  { id: "OR", name: "Oficial de Recepción", description: "Recepción de documentos y orientación inicial" },
+  { id: "OI", name: "Oficial de Investigación", description: "Investigaciones vitales y validación especial" },
+  { id: "SI", name: "Supervisión de Investigación", description: "Revisión técnica de expedientes complejos" },
+  { id: "RMAT", name: "Recepción de Matrimonio", description: "Trámites, actas y bodas civiles" },
+  { id: "RS", name: "Recepción de Sentencia", description: "Inscripción de divorcios, filiaciones y fallos" },
+  { id: "ED", name: "Entrega de documento", description: "Retiro de certificados y actas procesadas" },
+  { id: "SAU", name: "Servicio de Atención al Usuario", description: "Información general, consultas y reclamos" },
+  { id: "OHV", name: "Oficial de Hechos Vitales", description: "Inscripciones de nacimiento, matrimonio y defunción" },
+  { id: "STR", name: "Solicitud de Trámites", description: "Rectificaciones, adiciones y correcciones" },
+  { id: "OTR", name: "Otros Trámites", description: "Gestiones especiales no especificadas" }
+];
+
+export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: WelcomeKioskProps) {
   const [name, setName] = useState("");
   const [priority, setPriority] = useState(false);
   const [selectedService, setSelectedService] = useState<ServiceType | null>(null);
+  const [selectedProcedure, setSelectedProcedure] = useState<string | null>(null);
   const [printedTicket, setPrintedTicket] = useState<Ticket | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
   const [ignoreSchedule, setIgnoreSchedule] = useState(false);
@@ -78,13 +93,14 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
     // Simular retraso físico de la impresora térmica de tickets
     setTimeout(() => {
       const sanitizedName = name.trim() || "Ciudadano";
-      const ticket = onCreateTicket(sanitizedName, selectedService, priority, false);
+      const ticket = onCreateTicket(sanitizedName, selectedService, priority, false, selectedProcedure || undefined);
       setPrintedTicket(ticket);
       setIsPrinting(false);
       // Limpiar campos para la siguiente persona
       setName("");
       setPriority(false);
       setSelectedService(null);
+      setSelectedProcedure(null);
     }, 1250);
   };
 
@@ -132,10 +148,10 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
             </div>
             <div>
               <h3 className="text-sm font-black uppercase tracking-wider text-slate-900 leading-tight">
-                Emisión de Turnos
+                Emisión de Turnos {gatewaySelection === "registro_civil" ? "• Registro Civil" : "• Cedulación"}
               </h3>
               <p className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest mt-0.5">
-                Kiosco — {office.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
+                Kiosco {gatewaySelection === "registro_civil" ? "DNRC" : "DNC"} — {office.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
               </p>
             </div>
           </div>
@@ -239,41 +255,88 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
               {/* Trámites / Service Selector */}
             <div className="space-y-2">
               <label className="block text-xs font-extrabold uppercase tracking-wide text-slate-600">
-                Seleccione el Tramite Requerido <span className="text-rose-500">*</span>
+                Seleccione el Trámite Requerido <span className="text-rose-500">*</span>
               </label>
               
-              <div className="grid grid-cols-2 gap-3">
-                {Object.values(SERVICES_CONFIG)
-                  .filter((service) => !(currentOfficeId !== "OFF-1" && service.id === ServiceType.EXTRANJERIA))
-                  .map((service) => {
-                    const isSelected = selectedService === service.id;
+              {gatewaySelection === "registro_civil" ? (
+                /* REGISTRO CIVIL SUB-PROCEDURES */
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 w-full">
+                  {REGISTRO_PROCEDURES.map((proc) => {
+                    const isSelected = selectedProcedure === proc.id;
                     return (
                       <button
-                        id={`service-select-${service.id.toLowerCase()}`}
-                        key={service.id}
+                        id={`procedure-select-${proc.id.toLowerCase()}`}
+                        key={proc.id}
                         type="button"
-                        onClick={() => setSelectedService(service.id)}
-                        className={`relative flex flex-col p-3 rounded-xl text-left border transition-all cursor-pointer ${
+                        onClick={() => {
+                          setSelectedService(ServiceType.REGISTRO);
+                          setSelectedProcedure(proc.id);
+                        }}
+                        className={`relative flex flex-col p-3 rounded-xl text-left border transition-all cursor-pointer h-full min-h-[110px] justify-between ${
                           isSelected
-                            ? "bg-[#122e70] border-blue-900 text-white shadow-md shadow-blue-105"
-                            : "bg-slate-50 hover:bg-slate-100/80 border-slate-200 text-slate-800 hover:border-slate-300 shadow-sm"
+                            ? "bg-blue-600 border-blue-800 text-white shadow-md shadow-blue-100/50 scale-[1.02]"
+                            : "bg-white hover:bg-slate-50 border-slate-200 text-slate-800 hover:border-slate-300 shadow-sm"
                         }`}
                       >
-                        <div className="flex items-center justify-between w-full mb-2">
-                          <span className={`px-2 py-0.5 text-[8px] font-mono tracking-wider font-extrabold rounded ${
-                            isSelected ? "bg-white/20 text-white" : "bg-slate-200 text-slate-700"
+                        <div>
+                          <div className={`text-xl sm:text-2xl font-black tracking-tight leading-none mb-1.5 ${
+                            isSelected ? "text-white" : "text-[#122e70]"
                           }`}>
-                            {service.prefix}
-                          </span>
+                            {proc.id}
+                          </div>
+                          <h4 className={`text-[10px] font-extrabold uppercase tracking-wide leading-tight line-clamp-2 ${
+                            isSelected ? "text-blue-100" : "text-slate-700"
+                          }`}>
+                            {proc.name}
+                          </h4>
                         </div>
-                        <h4 className="text-xs font-black uppercase tracking-wide truncate w-full">{service.name}</h4>
-                        <p className={`text-[9px] font-mono mt-1 font-bold ${isSelected ? "text-blue-200" : "text-slate-450"}`}>
-                          ~{service.estimatedTimeMin} MINUTOS
+                        <p className={`text-[8.5px] leading-tight mt-1 line-clamp-1 ${
+                          isSelected ? "text-blue-200" : "text-slate-400 font-medium"
+                        }`}>
+                          {proc.description}
                         </p>
                       </button>
                     );
                   })}
-              </div>
+                </div>
+              ) : (
+                /* DEFAULT CHANNELS (CEDULACION / MULTI-SERVICE KIOSK) */
+                <div className="grid grid-cols-2 gap-3">
+                  {Object.values(SERVICES_CONFIG)
+                    .filter((service) => !(currentOfficeId !== "OFF-1" && service.id === ServiceType.EXTRANJERIA))
+                    .map((service) => {
+                      const isSelected = selectedService === service.id;
+                      return (
+                        <button
+                          id={`service-select-${service.id.toLowerCase()}`}
+                          key={service.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedService(service.id);
+                            setSelectedProcedure(null);
+                          }}
+                          className={`relative flex flex-col p-3 rounded-xl text-left border transition-all cursor-pointer ${
+                            isSelected
+                              ? "bg-[#122e70] border-blue-900 text-white shadow-md shadow-blue-105"
+                              : "bg-slate-50 hover:bg-slate-100/80 border-slate-200 text-slate-800 hover:border-slate-300 shadow-sm"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between w-full mb-2">
+                            <span className={`px-2 py-0.5 text-[8px] font-mono tracking-wider font-extrabold rounded ${
+                              isSelected ? "bg-white/20 text-white" : "bg-slate-200 text-slate-700"
+                            }`}>
+                              {service.prefix}
+                            </span>
+                          </div>
+                          <h4 className="text-xs font-black uppercase tracking-wide truncate w-full">{service.name}</h4>
+                          <p className={`text-[9px] font-mono mt-1 font-bold ${isSelected ? "text-blue-200" : "text-slate-450"}`}>
+                            ~{service.estimatedTimeMin} MINUTOS
+                          </p>
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
 
 
             </div>
@@ -361,9 +424,13 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
                   <span className="text-slate-400 uppercase tracking-widest text-[9px] font-bold">CIUDADANO:</span>
                   <span className="font-bold truncate text-right max-w-[120px] text-slate-900">{printedTicket.name}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400 uppercase tracking-widest text-[9px] font-bold">TRÁMITE:</span>
-                  <span className="font-bold text-right uppercase text-slate-900">{SERVICES_CONFIG[printedTicket.serviceType].name}</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-400 uppercase tracking-widest text-[9px] font-bold shrink-0">TRÁMITE:</span>
+                  <span className="font-bold text-right uppercase text-slate-900 truncate">
+                    {printedTicket.procedure 
+                      ? (REGISTRO_PROCEDURES.find(p => p.id === printedTicket.procedure)?.name || printedTicket.procedure)
+                      : SERVICES_CONFIG[printedTicket.serviceType].name}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400 uppercase tracking-widest text-[9px] font-bold">REGISTRO:</span>
@@ -510,7 +577,11 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
             </div>
             <div className="meta-row">
               <span className="meta-label">Trámite:</span>
-              <span className="meta-value font-bold uppercase">{SERVICES_CONFIG[printedTicket.serviceType].name}</span>
+              <span className="meta-value font-bold uppercase">
+                {printedTicket.procedure 
+                  ? (REGISTRO_PROCEDURES.find(p => p.id === printedTicket.procedure)?.name || printedTicket.procedure)
+                  : SERVICES_CONFIG[printedTicket.serviceType].name}
+              </span>
             </div>
             <div className="meta-row">
               <span className="meta-label">Registro:</span>

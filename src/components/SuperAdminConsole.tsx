@@ -26,6 +26,7 @@ import {
   UserPlus
 } from "lucide-react";
 import { jsPDF } from "jspdf";
+import { REGISTRO_PROCEDURES } from "./WelcomeKiosk";
 
 interface SuperAdminConsoleProps {
   officeTickets: Record<string, Ticket[]>;
@@ -271,6 +272,65 @@ export default function SuperAdminConsole({
       resolutionRate: globalResolutionRate
     };
   }, [officeMetrics]);
+
+  // National Civil Registry (Registro Civil) specialized metrics
+  const nationalCivilRegistryStats = useMemo(() => {
+    const limitMs = getFilterLimitMs(selectedTimeframe);
+    let total = 0;
+    let completed = 0;
+    let missed = 0;
+    let waiting = 0;
+    let totalWait = 0;
+    let completedCount = 0;
+
+    // Procedure stats
+    const procedureStats: Record<string, { waiting: number; completed: number; total: number }> = {};
+
+    Object.keys(officeTickets).forEach(officeId => {
+      const tickets = officeTickets[officeId] || [];
+      tickets.forEach(t => {
+        if (t.createdAt >= limitMs && t.serviceType === ServiceType.REGISTRO) {
+          total++;
+
+          if (t.status === TicketStatus.COMPLETED) {
+            completed++;
+            const wait = t.calledAt ? (t.calledAt - t.createdAt) / 1000 / 60 : 7;
+            totalWait += Math.max(0.5, wait);
+            completedCount++;
+          } else if (t.status === TicketStatus.MISSED) {
+            missed++;
+          } else if (t.status === TicketStatus.WAITING) {
+            waiting++;
+          }
+
+          if (t.procedure) {
+            if (!procedureStats[t.procedure]) {
+              procedureStats[t.procedure] = { waiting: 0, completed: 0, total: 0 };
+            }
+            procedureStats[t.procedure].total++;
+            if (t.status === TicketStatus.COMPLETED) {
+              procedureStats[t.procedure].completed++;
+            } else if (t.status === TicketStatus.WAITING) {
+              procedureStats[t.procedure].waiting++;
+            }
+          }
+        }
+      });
+    });
+
+    const avgWait = completedCount > 0 ? Math.round(totalWait / completedCount) : 8;
+    const resolutionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+    return {
+      total,
+      completed,
+      missed,
+      waiting,
+      avgWait,
+      resolutionRate,
+      procedureStats
+    };
+  }, [officeTickets, selectedTimeframe]);
 
   // Selected Office drilldown detailed inspection
   const selectedOfficeDetails = useMemo(() => {
@@ -701,6 +761,134 @@ export default function SuperAdminConsole({
         </div>
       </div>
 
+      {/* 2.5 DEDICATED NATIONAL CIVIL REGISTRY METRICS SECTION */}
+      <div id="national-civil-registry-analytics" className="bg-gradient-to-r from-blue-900 to-indigo-950 text-white rounded-2xl p-6 shadow-md space-y-6 relative overflow-hidden">
+        {/* Subtle background decoration */}
+        <div className="absolute right-0 top-0 bottom-0 w-1/3 opacity-5 bg-[radial-gradient(circle_at_right,_var(--tw-gradient-stops))] from-white to-transparent pointer-events-none" />
+        
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-white/10 pb-4 relative z-10">
+          <div className="space-y-1">
+            <span className="text-[7.5px] tracking-[0.2em] font-black text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded px-2 py-0.5 uppercase block w-fit">
+              AUDITORÍA NACIONAL DE TRÁMITES
+            </span>
+            <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-amber-400" />
+              Métricas Consolidadas de Registro Civil a Nivel Nacional ({selectedTimeframe.toUpperCase()})
+            </h3>
+            <p className="text-xs text-blue-100 font-medium">
+              Volumetría consolidada y análisis de tiempos de espera para trámites de Registro Civil en todas las oficinas regionales.
+            </p>
+          </div>
+          <span className="text-[9px] font-black tracking-widest uppercase px-3 py-1 bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 rounded-full">
+            ● EN VIVO
+          </span>
+        </div>
+
+        {/* Specialized metrics cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 relative z-10 text-slate-100">
+          <div className="bg-white/5 border border-white/10 p-4.5 rounded-xl space-y-1">
+            <span className="text-[8.5px] font-bold text-slate-350 uppercase tracking-widest block font-sans">Volumen RC Nacional</span>
+            <p className="text-2xl font-black text-white font-mono">{nationalCivilRegistryStats.total}</p>
+            <span className="text-[8px] text-slate-350 block leading-tight font-sans">Tickets totales emitidos</span>
+          </div>
+          
+          <div className="bg-white/5 border border-white/10 p-4.5 rounded-xl space-y-1">
+            <span className="text-[8.5px] font-bold text-slate-350 uppercase tracking-widest block font-sans">Trámites Atendidos RC</span>
+            <div className="flex items-baseline gap-2">
+              <p className="text-2xl font-black text-white font-mono">{nationalCivilRegistryStats.completed}</p>
+              <span className="text-[9px] font-extrabold text-emerald-400 bg-emerald-500/15 border border-emerald-400/30 px-1.5 py-0.5 rounded font-mono">
+                {nationalCivilRegistryStats.resolutionRate}%
+              </span>
+            </div>
+            <span className="text-[8px] text-slate-350 block leading-tight font-sans">Tasa de resolución nacional</span>
+          </div>
+
+          <div className="bg-white/5 border border-white/10 p-4.5 rounded-xl space-y-1">
+            <span className="text-[8.5px] font-bold text-slate-350 uppercase tracking-widest block font-sans">En Espera Activa RC</span>
+            <div className="flex items-baseline gap-2">
+              <p className="text-2xl font-black text-white font-mono">{nationalCivilRegistryStats.waiting}</p>
+              {nationalCivilRegistryStats.waiting > 0 && (
+                <span className="text-[8.5px] font-extrabold text-amber-400 bg-amber-500/15 border border-amber-400/30 px-1.5 py-0.5 rounded animate-pulse font-mono">
+                  En Cola
+                </span>
+              )}
+            </div>
+            <span className="text-[8px] text-slate-350 block leading-tight font-sans">Ciudadanos esperando atención</span>
+          </div>
+
+          <div className="bg-white/5 border border-white/10 p-4.5 rounded-xl space-y-1">
+            <span className="text-[8.5px] font-bold text-slate-350 uppercase tracking-widest block font-sans">Espera Promedio RC</span>
+            <p className="text-2xl font-black text-white font-mono">{nationalCivilRegistryStats.avgWait} <span className="text-xs">mins</span></p>
+            <span className="text-[8px] text-slate-350 block leading-tight font-sans">Promedio nacional de atención</span>
+          </div>
+        </div>
+
+        {/* National Procedure Breakdown */}
+        <div className="bg-white/5 border border-white/10 p-5 rounded-xl space-y-4 relative z-10">
+          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+            <span className="text-[9.5px] font-extrabold text-amber-350 uppercase tracking-wider block font-sans">
+              Volumetría de Trámites Específicos de Registro Civil a Nivel Nacional:
+            </span>
+            <span className="text-[8px] text-slate-300 font-medium">Clasificación consolidada de la República</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {REGISTRO_PROCEDURES.map(proc => {
+              const stat = nationalCivilRegistryStats.procedureStats[proc.id] || { waiting: 0, completed: 0, total: 0 };
+              const pct = nationalCivilRegistryStats.total > 0
+                ? Math.round((stat.total / nationalCivilRegistryStats.total) * 100)
+                : 0;
+
+              return (
+                <div key={proc.id} className="bg-white/5 border border-white/5 p-3 rounded-xl flex flex-col justify-between hover:bg-white/10 transition-colors">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <span className="font-extrabold text-white uppercase text-[10px] tracking-wide block leading-snug">
+                        {proc.name}
+                      </span>
+                      <span className="text-[8px] text-slate-350 block leading-tight font-sans">
+                        {proc.description}
+                      </span>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="text-[11px] font-black text-white font-mono">
+                        {stat.total} <span className="text-[8.5px] font-bold text-slate-350">({pct}%)</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Progress and mini badges */}
+                  <div className="mt-3.5 space-y-2">
+                    <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all duration-500"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between items-center text-[8px] font-bold text-slate-300 uppercase tracking-wider">
+                      <span className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block"></span>
+                        {stat.waiting} en Cola
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
+                        {stat.completed} Atendidos
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {nationalCivilRegistryStats.total === 0 && (
+            <div className="text-center py-6 text-xs text-slate-400 font-medium">
+              No hay tickets de Registro Civil emitidos a nivel nacional en este período. Pruebe seleccionando "Semana" o "Año" o presionando "Simular Datos en Toda la Red".
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* 3. PODIUM (TOP 3) AND ALL OFFICE RANKING LISTING */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
@@ -1109,8 +1297,8 @@ export default function SuperAdminConsole({
                   onChange={(e) => setNewRole(e.target.value as UserRole)}
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none font-bold text-slate-705 cursor-pointer"
                 >
-                  <option value={UserRole.AGENT_CAJA}>🏧 Agente de Caja (Cajas únicamente)</option>
-                  <option value={UserRole.AGENT_TRIADA}>📸 Agente de Tríada (Tríada / Foto únicamente)</option>
+                  <option value={UserRole.AGENT_CAJA}>🏧 Agente de Caja / Hechos Vitales (Registro Civil)</option>
+                  <option value={UserRole.AGENT_TRIADA}>📸 Agente de Tríada / Investigación (Registro Civil)</option>
                   <option value={UserRole.SUPERVISOR}>👑 Administrador / Supervisor Regional</option>
                   <option value={UserRole.SUPERADMIN}>🛡️ Super Administrador Central</option>
                 </select>
@@ -1178,10 +1366,10 @@ export default function SuperAdminConsole({
                   roleLabel = "👑 Supervisor Regional";
                 } else if (u.role === UserRole.AGENT_CAJA) {
                   roleBadgeColor = "bg-emerald-500/10 text-emerald-950 border-emerald-400/30 font-black";
-                  roleLabel = "🏧 Agente de Caja";
+                  roleLabel = "🏧 Agente de Caja / Hechos Vitales";
                 } else if (u.role === UserRole.AGENT_TRIADA) {
                   roleBadgeColor = "bg-cyan-500/10 text-cyan-950 border-cyan-400/30 font-black";
-                  roleLabel = "📸 Agente de Tríada";
+                  roleLabel = "📸 Agente de Tríada / Investigación";
                 }
 
                 return (

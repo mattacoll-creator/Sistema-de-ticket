@@ -4,7 +4,9 @@
  */
 
 import React, { useState } from "react";
+import { REGISTRO_PROCEDURES } from "./WelcomeKiosk";
 import { Ticket, Cubicle, TicketStatus, CubicleStatus, SERVICES_CONFIG, ServiceType, TicketPhase, PHASES_CONFIG, SystemUser, UserRole, OFFICES_CONFIG } from "../types";
+import { canCubicleServeProcedure } from "../hooks/useTicketSystem";
 import { 
   UserCheck, 
   HelpCircle, 
@@ -24,8 +26,54 @@ import {
   Lock,
   Unlock,
   MapPin,
-  Users
+  Users,
+  TrendingUp,
+  BarChart2,
+  Clock,
+  Grid,
+  ShieldAlert
 } from "lucide-react";
+
+export function getUserDisplayDetails(u: SystemUser, isRc: boolean) {
+  if (isRc) {
+    let fullName = u.fullName;
+    let roleName = "Operador RC";
+    
+    if (u.role === UserRole.SUPERADMIN) {
+      roleName = "Superadministrador";
+    } else if (u.role === UserRole.SUPERVISOR) {
+      roleName = "Supervisor Registro Civil";
+    } else if (u.username === "mcruz") {
+      fullName = "Mateo Cruz (Oficial de Recepción Sede Ancón)";
+      roleName = "Oficial de Recepción";
+    } else if (u.username === "frios") {
+      fullName = "Felipe Ríos (Oficial de Hechos Vitales Bocas del Toro)";
+      roleName = "Oficial de Hechos Vitales";
+    } else if (u.username === "jgutierrez") {
+      fullName = "Julia Gutiérrez (Oficial de Investigación Sede Ancón)";
+      roleName = "Oficial de Investigación";
+    } else if (u.username === "spadilla") {
+      fullName = "Silvia Padilla (Recepción de Matrimonios Bocas del Toro)";
+      roleName = "Recepción de Matrimonios";
+    } else {
+      if (u.role === UserRole.AGENT_CAJA) {
+        fullName = fullName.replace("Cajero", "Registrador Auxiliar").replace("Caja", "Oficial de Hechos Vitales");
+        roleName = "Oficial de Hechos Vitales";
+      } else if (u.role === UserRole.AGENT_TRIADA) {
+        fullName = fullName.replace("Tríada", "Oficial de Investigación");
+        roleName = "Oficial de Investigación";
+      }
+    }
+    return { fullName, roleName };
+  } else {
+    let roleName = "Operador";
+    if (u.role === UserRole.SUPERADMIN) roleName = "Superadministrador";
+    else if (u.role === UserRole.SUPERVISOR) roleName = "Supervisor";
+    else if (u.role === UserRole.AGENT_CAJA) roleName = "Caja";
+    else if (u.role === UserRole.AGENT_TRIADA) roleName = "Tríada";
+    return { fullName: u.fullName, roleName };
+  }
+}
 
 interface AgentConsoleProps {
   tickets: Ticket[];
@@ -41,6 +89,7 @@ interface AgentConsoleProps {
   users: SystemUser[];
   currentActiveUserId: string;
   setCurrentActiveUserId: React.Dispatch<React.SetStateAction<string>>;
+  gatewaySelection?: "select" | "cedulacion" | "registro_civil";
 }
 
 export default function AgentConsole({
@@ -56,15 +105,69 @@ export default function AgentConsole({
   currentOfficeId = "OFF-1",
   users = [],
   currentActiveUserId,
-  setCurrentActiveUserId
+  setCurrentActiveUserId,
+  gatewaySelection = "select"
 }: AgentConsoleProps) {
   // Act as which cubicle? Choose CUB-1 by default
-  const [activeCubicleId, setActiveCubicleId] = useState<string>("CUB-1");
+  const [activeCubicleId, setActiveCubicleId] = useState<string>(() => {
+    return localStorage.getItem("agent_active_cubicle_id") || "CUB-1";
+  });
+  
+  const [hasSelectedCubicle, setHasSelectedCubicle] = useState<boolean>(() => {
+    return localStorage.getItem("agent_has_selected_cubicle") === "true";
+  });
+
+  const [viewMode, setViewMode] = useState<"agent" | "supervisor">("agent");
   const [activeRoleFilter, setActiveRoleFilter] = useState<TicketPhase>(TicketPhase.CAJA);
   const [showConfig, setShowConfig] = useState<boolean>(false);
 
+  // --- COMPORTAMIENTO DE ACCESO PARA SUPERVISIÓN REGISTRO CIVIL ---
+  const [isRcSupervisorAuthenticated, setIsRcSupervisorAuthenticated] = useState<boolean>(false);
+  const [rcSupervisorUsername, setRcSupervisorUsername] = useState<string>("");
+  const [rcSupervisorPassword, setRcSupervisorPassword] = useState<string>("");
+  const [rcSupervisorError, setRcSupervisorError] = useState<string>("");
+
+  const handleRcSupervisorLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanUser = rcSupervisorUsername.trim().toLowerCase();
+    const cleanPass = rcSupervisorPassword.trim();
+
+    // Buscar supervisor o superadmin
+    const foundUser = users.find(u => u.username.toLowerCase() === cleanUser);
+    
+    if (!foundUser) {
+      setRcSupervisorError("Usuario no encontrado.");
+      return;
+    }
+
+    if (foundUser.role !== UserRole.SUPERVISOR && foundUser.role !== UserRole.SUPERADMIN) {
+      setRcSupervisorError("El usuario especificado no tiene rango de Supervisión o Administración.");
+      return;
+    }
+
+    const isPasswordValid = foundUser.password 
+      ? (cleanPass === foundUser.password)
+      : (cleanPass === foundUser.username || cleanPass === "123456" || cleanPass === "admin");
+
+    if (isPasswordValid) {
+      setIsRcSupervisorAuthenticated(true);
+      setRcSupervisorError("");
+      setRcSupervisorUsername("");
+      setRcSupervisorPassword("");
+    } else {
+      setRcSupervisorError("Contraseña incorrecta.");
+    }
+  };
+
+  React.useEffect(() => {
+    localStorage.setItem("agent_active_cubicle_id", activeCubicleId);
+  }, [activeCubicleId]);
+
+  React.useEffect(() => {
+    localStorage.setItem("agent_has_selected_cubicle", String(hasSelectedCubicle));
+  }, [hasSelectedCubicle]);
+
   // --- COMPORTAMIENTO DE INICIO DE SESIÓN INTEGRAL (GATEWAY) ---
-  const [selectedGatewayRole, setSelectedGatewayRole] = useState<"CAJA" | "TRIADA" | null>(null);
   const [sessionUser, setSessionUser] = useState<SystemUser | null>(() => {
     const saved = localStorage.getItem("agent_console_session");
     if (saved) {
@@ -112,19 +215,6 @@ export default function AgentConsole({
       return;
     }
 
-    // Validación según rol del Gateway seleccionado
-    if (selectedGatewayRole === "CAJA") {
-      if (foundUser.role !== UserRole.AGENT_CAJA && foundUser.role !== UserRole.SUPERVISOR && foundUser.role !== UserRole.SUPERADMIN) {
-        setFormLoginError("Este usuario no tiene un rol compatible con la Consola de Caja.");
-        return;
-      }
-    } else if (selectedGatewayRole === "TRIADA") {
-      if (foundUser.role !== UserRole.AGENT_TRIADA && foundUser.role !== UserRole.SUPERVISOR && foundUser.role !== UserRole.SUPERADMIN) {
-        setFormLoginError("Este usuario no tiene un rol compatible con la Consola de Tríada.");
-        return;
-      }
-    }
-
     // Contraseña: si está especificada en el usuario, validar contra ella. De lo contrario, usar valores predeterminados.
     const cleanPassword = passwordInput.trim();
     const isPasswordValid = foundUser.password 
@@ -142,19 +232,28 @@ export default function AgentConsole({
 
     // Todo correcto -> Iniciar sesión
     setSessionUser(foundUser);
+    setHasSelectedCubicle(false);
     setFormLoginError("");
     setUsernameInput("");
     setPasswordInput("");
   };
 
   // --- COMPORTAMIENTO DE ACCESO, ROLES SECURITY Y REGIONALES ---
-  const loggedInUser = sessionUser || {
+  const rawLoggedInUser = sessionUser || {
     id: "default",
     username: "mcruz",
     fullName: "Mateo Cruz (Cajero Sede Ancón)",
     role: UserRole.AGENT_CAJA,
     officeId: "OFF-1"
   };
+
+  const loggedInUser = React.useMemo(() => {
+    const details = getUserDisplayDetails(rawLoggedInUser, gatewaySelection === "registro_civil");
+    return {
+      ...rawLoggedInUser,
+      fullName: details.fullName
+    };
+  }, [rawLoggedInUser, gatewaySelection]);
 
   const isCajaOnly = loggedInUser.role === UserRole.AGENT_CAJA;
   const isTriadaOnly = loggedInUser.role === UserRole.AGENT_TRIADA;
@@ -187,23 +286,34 @@ export default function AgentConsole({
   });
 
   // Ensure current cubicle is valid based on selection
-  let currentCubicle = filteredRoleCubicles.find(c => c.id === activeCubicleId);
-  if (!currentCubicle && filteredRoleCubicles.length > 0) {
-    currentCubicle = filteredRoleCubicles[0];
+  let currentCubicle = cubicles.find(c => c.id === activeCubicleId);
+  if (gatewaySelection !== "registro_civil") {
+    const isMatched = filteredRoleCubicles.some(c => c.id === activeCubicleId);
+    if (!isMatched && filteredRoleCubicles.length > 0) {
+      currentCubicle = filteredRoleCubicles[0];
+    }
   }
   if (!currentCubicle) {
-    currentCubicle = cubicles.find(c => c.id === activeCubicleId) || cubicles[0];
+    currentCubicle = cubicles[0];
   }
 
   const activeTicket = tickets.find(t => t.id === currentCubicle.currentTicketId);
 
-  // Filter candidates waiting that can be processed by this agent (supports current phase)
+  // Filter candidates waiting that can be processed by this agent (supports current phase or RC specialty)
   const candidateWaitingTickets = tickets.filter(t => {
     if (t.status !== TicketStatus.WAITING) return false;
+    
+    if (gatewaySelection === "registro_civil") {
+      // For Registro Civil, we only handle REGISTRO tickets compatible with the cubicle
+      if (t.serviceType !== ServiceType.REGISTRO) return false;
+      return canCubicleServeProcedure(currentCubicle.id, t.procedure);
+    }
     
     // Check if booth supports the current phase of the ticket
     return currentCubicle.supportedPhases?.includes(t.currentPhase);
   });
+
+  const needsCubicleSelection = gatewaySelection === "registro_civil" && !hasSelectedCubicle;
 
   // Sort queue showing priorities first
   const sortedCandidates = [...candidateWaitingTickets].sort((a, b) => {
@@ -255,142 +365,265 @@ export default function AgentConsole({
             <div className="h-[2px] bg-gradient-to-r from-transparent via-slate-200 to-transparent w-40 mx-auto"></div>
           </div>
 
-          {!selectedGatewayRole ? (
-            /* PASO 1: SELECCIÓN DE AREA (2 BOTONES) */
-            <div className="space-y-6">
-              <p className="text-xs text-slate-500 font-semibold text-center uppercase tracking-wider">
-                Seleccione su área de atención reglamentaria para ingresar:
+          {/* FORMULARIO DE USUARIO Y CONTRASEÑA DIRECTO */}
+          <div className="bg-slate-50 border border-slate-200 p-6 rounded-2xl space-y-6">
+            <div className="flex items-center justify-between border-b border-slate-250 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#122e70]"></span>
+                <span className="text-xs font-black uppercase text-[#122e70]">
+                  Identificación del Operador
+                </span>
+              </div>
+            </div>
+
+            <form onSubmit={handleLoginSubmit} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                  Usuario del Sistema:
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej: mcruz, jgutierrez"
+                  value={usernameInput}
+                  onChange={(e) => setUsernameInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-400 font-bold"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                  Contraseña de Acceso:
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Ingrese su contraseña"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-400 font-bold"
+                />
+              </div>
+
+              {loginError && (
+                <p className="text-[10px] text-red-650 bg-red-50 border border-red-200 rounded-lg p-2.5 font-bold uppercase tracking-wide">
+                  ⚠️ {loginError}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-[#122e70] hover:bg-blue-800 text-white text-[10px] font-black uppercase tracking-wider rounded-xl cursor-pointer shadow-sm transition-all text-center flex items-center justify-center gap-2 border-transparent"
+              >
+                <Unlock className="w-4 h-4" />
+                <span>Validar & Entrar</span>
+              </button>
+            </form>
+
+            <div className="text-[9.5px] leading-relaxed text-slate-400 border-t border-slate-200/60 pt-3 flex flex-col gap-1">
+              <span>💡 <strong>Cuentas Demo Sugeridas:</strong></span>
+              {gatewaySelection === "registro_civil" ? (
+                <>
+                  <span>- <strong>@mcruz</strong> (Mateo Cruz - Oficial de Recepción Sede Ancón)</span>
+                  <span>- <strong>@frios</strong> (Felipe Ríos - Oficial de Hechos Vitales Bocas del Toro)</span>
+                  <span>- <strong>@jgutierrez</strong> (Julia Gutiérrez - Oficial de Investigación Sede Ancón)</span>
+                  <span>- <strong>@spadilla</strong> (Silvia Padilla - Recepción de Matrimonios Bocas del Toro)</span>
+                </>
+              ) : (
+                <>
+                  <span>- <strong>@mcruz</strong> (Mateo Cruz - Caja Sede Ancón)</span>
+                  <span>- <strong>@frios</strong> (Felipe Ríos - Caja Bocas del Toro)</span>
+                  <span>- <strong>@jgutierrez</strong> (Julia Gutiérrez - Tríada Sede Ancón)</span>
+                  <span>- <strong>@spadilla</strong> (Silvia Padilla - Tríada Bocas del Toro)</span>
+                </>
+              )}
+              <span>- O use cuentas creadas en <strong>Superadministrador → Gestión de Operadores</strong></span>
+              <span className="font-bold text-[#122e70]">🔑 Contraseña: El mismo nombre de usuario o "123456"</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
+  if (needsCubicleSelection) {
+    return (
+      <div id="agent-cubicle-selection-gateway" className="bg-white border border-slate-250 rounded-2xl p-8 flex flex-col justify-center items-center min-h-[750px] shadow-sm font-sans">
+        <div className="w-full max-w-4xl space-y-8">
+          {/* Header */}
+          <div className="text-center space-y-3">
+            <div className="mx-auto w-16 h-16 bg-blue-900 text-white rounded-2xl flex items-center justify-center shadow-md border border-blue-900/10">
+              <MapPin className="w-8 h-8" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-2xl font-black uppercase tracking-widest text-slate-900 leading-none">
+                Selección de Módulo
+              </h3>
+              <p className="text-[10px] text-slate-450 font-extrabold uppercase tracking-widest leading-none mt-1">
+                Registro Civil - Sede de Atención
               </p>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* BOTÓN CAJA */}
-                <button
-                  type="button"
-                  onClick={() => setSelectedGatewayRole("CAJA")}
-                  className="p-6 bg-white hover:bg-emerald-50/30 border border-slate-200 hover:border-emerald-300 rounded-2xl cursor-pointer text-left transition-all duration-300 group shadow-xs hover:shadow-md flex flex-col justify-between min-h-[160px]"
-                >
-                  <div className="p-3 bg-emerald-100 text-emerald-800 rounded-xl w-fit group-hover:scale-105 transition-transform">
-                    <Users className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <span className="text-sm font-black text-slate-900 block uppercase tracking-wide">
-                      Agente de Caja
-                    </span>
-                    <span className="text-[10px] text-slate-450 font-bold block uppercase tracking-widest mt-1">
-                      Módulos de Cobro y Caja
-                    </span>
-                  </div>
-                </button>
+            </div>
+            <div className="h-[2px] bg-gradient-to-r from-transparent via-slate-200 to-transparent w-40 mx-auto"></div>
+          </div>
 
-                {/* BOTÓN TRÍADA */}
-                <button
-                  type="button"
-                  onClick={() => setSelectedGatewayRole("TRIADA")}
-                  className="p-6 bg-white hover:bg-cyan-50/30 border border-slate-200 hover:border-cyan-300 rounded-2xl cursor-pointer text-left transition-all duration-300 group shadow-xs hover:shadow-md flex flex-col justify-between min-h-[160px]"
-                >
-                  <div className="p-3 bg-cyan-100 text-cyan-800 rounded-xl w-fit group-hover:scale-105 transition-transform">
-                    <Activity className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <span className="text-sm font-black text-slate-900 block uppercase tracking-wide">
-                      Agente de Tríada
-                    </span>
-                    <span className="text-[10px] text-slate-450 font-bold block uppercase tracking-widest mt-1">
-                      Fotografía, Firma e Impresión
-                    </span>
-                  </div>
-                </button>
-              </div>
+          <div className="p-4 border border-blue-100 bg-blue-50/50 text-blue-950 rounded-xl text-xs font-semibold text-center max-w-2xl mx-auto">
+            Hola, <strong>{loggedInUser.fullName}</strong>. Para comenzar a atender, por favor seleccione el cubículo o módulo que ocupará hoy en la oficina de Registro Civil. Los turnos serán asignados según su especialidad.
+          </div>
 
-              <div className="p-3.5 border border-sky-100 bg-sky-50 text-sky-950 rounded-xl text-[10px] leading-relaxed font-semibold text-center">
-                🛡️ <strong>Seguridad de Aislamiento de Colas:</strong> Al ingresar, el sistema aislará automáticamente los flujos correspondientes al área seleccionada.
+          {/* Grouped Cubicle Grid */}
+          <div className="space-y-6">
+            {/* 1. OR Section */}
+            <div className="space-y-2.5">
+              <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 font-mono flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></span>
+                Área de Recepción Civil (Oficial de Recepción - OR) • Cubículos 2 al 8
+              </span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {cubicles.filter(c => {
+                  const num = parseInt(c.id.replace("CUB-", ""), 10);
+                  return num >= 2 && num <= 8;
+                }).map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setActiveCubicleId(c.id);
+                      setHasSelectedCubicle(true);
+                    }}
+                    className="p-4 bg-white hover:bg-blue-50/30 border border-slate-200 hover:border-blue-400 rounded-xl text-left transition-all duration-200 shadow-xs hover:shadow-md cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-900 uppercase group-hover:text-blue-900">{c.name}</span>
+                      <span className={`w-2 h-2 rounded-full ${
+                        c.status === CubicleStatus.ONLINE_AVAILABLE ? "bg-emerald-500" : "bg-slate-300"
+                      }`} />
+                    </div>
+                    <p className="text-[10px] text-slate-450 font-bold uppercase mt-1 truncate">Procedimiento: OR</p>
+                    <p className="text-[9px] text-slate-400 font-medium truncate mt-0.5">Agente: {c.agentName}</p>
+                  </button>
+                ))}
               </div>
             </div>
-          ) : (
-            /* PASO 2: FORMULARIO DE USUARIO Y CONTRASEÑA */
-            <div className="bg-slate-50 border border-slate-200 p-6 rounded-2xl space-y-6">
-              <div className="flex items-center justify-between border-b border-slate-250 pb-3">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${selectedGatewayRole === "CAJA" ? "bg-emerald-500" : "bg-cyan-500"}`}></span>
-                  <span className="text-xs font-black uppercase text-slate-800">
-                    Ingresar como: {selectedGatewayRole === "CAJA" ? "Agente de Caja" : "Agente de Tríada"}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedGatewayRole(null);
-                    setFormLoginError("");
-                  }}
-                  className="text-[10px] font-black uppercase text-slate-450 hover:text-slate-800 cursor-pointer bg-transparent border-transparent"
-                >
-                  Volver ←
-                </button>
-              </div>
 
-              <form onSubmit={handleLoginSubmit} className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    Usuario del Sistema:
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ej: mcruz"
-                    value={usernameInput}
-                    onChange={(e) => setUsernameInput(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-400 font-bold"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    Contraseña de Acceso:
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="Ingrese su contraseña"
-                    value={passwordInput}
-                    onChange={(e) => setPasswordInput(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-400 font-bold"
-                  />
-                </div>
-
-                {loginError && (
-                  <p className="text-[10px] text-red-650 bg-red-50 border border-red-200 rounded-lg p-2.5 font-bold uppercase tracking-wide">
-                    ⚠️ {loginError}
-                  </p>
-                )}
-
-                <button
-                  type="submit"
-                  className="w-full py-2.5 bg-[#122e70] hover:bg-blue-800 text-white text-[10px] font-black uppercase tracking-wider rounded-xl cursor-pointer shadow-sm transition-all text-center flex items-center justify-center gap-2 border-transparent"
-                >
-                  <Unlock className="w-4 h-4" />
-                  <span>Validar & Entrar</span>
-                </button>
-              </form>
-
-              <div className="text-[9.5px] leading-relaxed text-slate-400 border-t border-slate-200/60 pt-3 flex flex-col gap-1">
-                <span>💡 <strong>Cuentas Demo Sugeridas:</strong></span>
-                {selectedGatewayRole === "CAJA" ? (
-                  <>
-                    <span>- <strong>@mcruz</strong> (Mateo Cruz - Caja Sede Ancón)</span>
-                    <span>- <strong>@frios</strong> (Felipe Ríos - Caja Bocas del Toro)</span>
-                  </>
-                ) : (
-                  <>
-                    <span>- <strong>@jgutierrez</strong> (Julia Gutiérrez - Tríada Sede Ancón)</span>
-                    <span>- <strong>@spadilla</strong> (Silvia Padilla - Tríada Bocas del Toro)</span>
-                  </>
-                )}
-                <span>- O use cuentas creadas en <strong>Superadministrador → Gestión de Operadores</strong></span>
-                <span className="font-bold text-[#122e70]">🔑 Contraseña: El mismo nombre de usuario o "123456"</span>
+            {/* 2. OHV Section */}
+            <div className="space-y-2.5">
+              <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 font-mono flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 animate-pulse"></span>
+                Área de Hechos Vitales (Inscripciones, Nacimientos, Defunciones - OHV) • Cubículos 16 al 20
+              </span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {cubicles.filter(c => {
+                  const num = parseInt(c.id.replace("CUB-", ""), 10);
+                  return num >= 16 && num <= 20;
+                }).map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setActiveCubicleId(c.id);
+                      setHasSelectedCubicle(true);
+                    }}
+                    className="p-4 bg-white hover:bg-cyan-50/30 border border-slate-200 hover:border-cyan-400 rounded-xl text-left transition-all duration-200 shadow-xs hover:shadow-md cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-900 uppercase group-hover:text-cyan-950">{c.name}</span>
+                      <span className={`w-2 h-2 rounded-full ${
+                        c.status === CubicleStatus.ONLINE_AVAILABLE ? "bg-emerald-500" : "bg-slate-300"
+                      }`} />
+                    </div>
+                    <p className="text-[10px] text-slate-450 font-bold uppercase mt-1 truncate">Procedimiento: OHV</p>
+                    <p className="text-[9px] text-slate-400 font-medium truncate mt-0.5">Agente: {c.agentName}</p>
+                  </button>
+                ))}
               </div>
             </div>
-          )}
 
+            {/* 3. Specialized Section */}
+            <div className="space-y-2.5">
+              <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 font-mono flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-pulse"></span>
+                Módulos Especializados (Inscripciones, Matrimonios, Defunciones, Solicitudes, Trámites Rápidos)
+              </span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {cubicles.filter(c => {
+                  const num = parseInt(c.id.replace("CUB-", ""), 10);
+                  return (num >= 9 && num <= 15) || num === 23;
+                }).map(c => {
+                  let procType = "Especializado";
+                  const num = parseInt(c.id.replace("CUB-", ""), 10);
+                  if (num === 9) procType = "SI / OI (Especiales)";
+                  else if (num === 10) procType = "ED (Defunciones)";
+                  else if (num === 11) procType = "RS (Inscripción)";
+                  else if (num >= 12 && num <= 14) procType = "RMAT (Matrimonios)";
+                  else if (num === 15) procType = "SAU (Atención)";
+                  else if (num === 23) procType = "STR (Trámites Rápidos)";
+
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        setActiveCubicleId(c.id);
+                        setHasSelectedCubicle(true);
+                      }}
+                      className="p-4 bg-white hover:bg-purple-50/30 border border-slate-200 hover:border-purple-400 rounded-xl text-left transition-all duration-200 shadow-xs hover:shadow-md cursor-pointer group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-slate-900 uppercase group-hover:text-purple-900">{c.name}</span>
+                        <span className={`w-2 h-2 rounded-full ${
+                          c.status === CubicleStatus.ONLINE_AVAILABLE ? "bg-emerald-500" : "bg-slate-300"
+                        }`} />
+                      </div>
+                      <p className="text-[10px] text-purple-755 font-bold uppercase mt-1 truncate">{procType}</p>
+                      <p className="text-[9px] text-slate-400 font-medium truncate mt-0.5">Agente: {c.agentName}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 4. Other Cubicles Section */}
+            <div className="space-y-2.5">
+              <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 font-mono flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-slate-500 animate-pulse"></span>
+                Otros Módulos Generales y Soporte
+              </span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {cubicles.filter(c => {
+                  const num = parseInt(c.id.replace("CUB-", ""), 10);
+                  return num === 1 || num === 21 || num === 22;
+                }).map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setActiveCubicleId(c.id);
+                      setHasSelectedCubicle(true);
+                    }}
+                    className="p-4 bg-white hover:bg-slate-50/50 border border-slate-200 hover:border-slate-400 rounded-xl text-left transition-all duration-200 shadow-xs hover:shadow-md cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-900 uppercase group-hover:text-slate-800">{c.name}</span>
+                      <span className={`w-2 h-2 rounded-full ${
+                        c.status === CubicleStatus.ONLINE_AVAILABLE ? "bg-emerald-500" : "bg-slate-300"
+                      }`} />
+                    </div>
+                    <p className="text-[10px] text-slate-450 font-bold uppercase mt-1 truncate">Trámite General</p>
+                    <p className="text-[9px] text-slate-400 font-medium truncate mt-0.5">Agente: {c.agentName}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-4 border-t border-slate-200">
+            <button
+              onClick={() => {
+                setSessionUser(null);
+                setCurrentActiveUserId("");
+              }}
+              className="py-2.5 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer transition-all"
+            >
+              ← Volver al login
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -434,7 +667,366 @@ export default function AgentConsole({
           </div>
         </div>
 
-        {/* OPERATOR CREDENTIAL CONTROL BAR */}
+        {/* TAB SWITCHER FOR REGISTRO CIVIL */}
+        {gatewaySelection === "registro_civil" && (
+          <div className="flex border-b border-slate-200">
+            <button
+              type="button"
+              onClick={() => setViewMode("agent")}
+              className={`flex-1 py-3 text-xs font-black uppercase tracking-wider border-b-2 transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                viewMode === "agent"
+                  ? "border-[#122e70] text-[#122e70]"
+                  : "border-transparent text-slate-400 hover:text-slate-600"
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              Consola del Operador
+            </button>
+            <button
+              type="button"
+              id="tab-rc-supervisor"
+              onClick={() => setViewMode("supervisor")}
+              className={`flex-1 py-3 text-xs font-black uppercase tracking-wider border-b-2 transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                viewMode === "supervisor"
+                  ? "border-[#122e70] text-[#122e70]"
+                  : "border-transparent text-slate-400 hover:text-slate-600"
+              }`}
+            >
+              <TrendingUp className="w-4 h-4 text-emerald-600" />
+              Supervisión Registro Civil
+            </button>
+          </div>
+        )}
+
+        {viewMode === "supervisor" && gatewaySelection === "registro_civil" ? (
+          !isRcSupervisorAuthenticated ? (
+            /* LOGIN CARD FOR SUPERVISOR */
+            <div className="max-w-md mx-auto my-8 bg-slate-50 border border-slate-200 p-6 rounded-2xl space-y-6 shadow-sm">
+              <div className="text-center space-y-1">
+                <div className="w-12 h-12 bg-[#122e70]/5 text-[#122e70] rounded-full flex items-center justify-center mx-auto mb-2 border border-slate-200">
+                  <Lock className="w-5 h-5 text-[#122e70]" />
+                </div>
+                <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest font-sans">Acceso de Supervisión</h3>
+                <p className="text-[10px] text-slate-500 font-medium font-sans">
+                  Ingrese sus credenciales autorizadas de Supervisor o Administrador para ver las métricas de Registro Civil.
+                </p>
+              </div>
+
+              <form onSubmit={handleRcSupervisorLogin} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Usuario Supervisor:
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ej: jgutierrez, spadilla"
+                    value={rcSupervisorUsername}
+                    onChange={(e) => {
+                      setRcSupervisorUsername(e.target.value);
+                      setRcSupervisorError("");
+                    }}
+                    className="w-full px-3.5 py-2.5 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-400 font-bold"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    Contraseña:
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Ingrese su contraseña"
+                    value={rcSupervisorPassword}
+                    onChange={(e) => {
+                      setRcSupervisorPassword(e.target.value);
+                      setRcSupervisorError("");
+                    }}
+                    className="w-full px-3.5 py-2.5 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-400 font-bold"
+                  />
+                </div>
+
+                {rcSupervisorError && (
+                  <p className="text-[10px] text-red-650 bg-red-50 border border-red-200 rounded-lg p-2.5 font-bold uppercase tracking-wide">
+                    ⚠️ {rcSupervisorError}
+                  </p>
+                )}
+
+                <button
+                  type="submit"
+                  className="w-full py-2.5 bg-[#122e70] hover:bg-blue-800 text-white text-[10px] font-black uppercase tracking-wider rounded-xl cursor-pointer shadow-sm transition-all text-center flex items-center justify-center gap-2 border-transparent"
+                >
+                  <Unlock className="w-4 h-4 text-amber-400" />
+                  <span>Autenticar Supervisor</span>
+                </button>
+              </form>
+
+              <div className="text-[9.5px] leading-relaxed text-slate-400 border-t border-slate-200/60 pt-3 flex flex-col gap-1">
+                <span>💡 <strong>Cuentas Autorizadas de Supervisión:</strong></span>
+                <span>- <strong>@jgutierrez</strong> (Julia Gutiérrez - Oficial de Investigación / Supervisora)</span>
+                <span>- <strong>@spadilla</strong> (Silvia Padilla - Recepción de Matrimonio / Supervisora)</span>
+                <span>- <strong>@superadmin</strong> (Superadministrador del Sistema)</span>
+                <span className="font-bold text-[#122e70]">🔑 Contraseña: El mismo nombre de usuario o "123456"</span>
+              </div>
+            </div>
+          ) : (
+            /* RC SUPERVISOR DASHBOARD VIEW */
+            <div className="space-y-6">
+              {/* RC Supervisor Header with logout button */}
+              <div className="flex items-center justify-between bg-slate-50 border border-slate-200 p-3.5 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="text-xs font-black uppercase text-slate-800 tracking-wider">
+                    Sesión de Supervisión Activa: Registro Civil
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRcSupervisorAuthenticated(false);
+                    setViewMode("agent");
+                  }}
+                  className="text-[10px] font-black uppercase px-2.5 py-1.5 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 rounded-lg cursor-pointer transition-colors"
+                >
+                  🔒 Cerrar Supervisión
+                </button>
+              </div>
+
+              {/* KPI OVERVIEW GRID */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 font-sans">
+              <div className="p-5 bg-blue-50 border border-blue-150 rounded-2xl shadow-xs space-y-2 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-3 opacity-10">
+                  <Clock className="w-12 h-12 text-[#122e70]" />
+                </div>
+                <span className="text-[10px] text-slate-450 uppercase font-black tracking-widest block font-mono">TURNOS EN ESPERA (RC)</span>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-black text-[#122e70] font-mono">
+                    {tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).length}
+                  </span>
+                  <span className={`text-[9px] px-2 py-0.5 rounded-md font-bold uppercase tracking-wider ${
+                    tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).length > 5 ? "bg-rose-100 text-rose-700 animate-pulse" : "bg-emerald-100 text-emerald-800"
+                  }`}>
+                    {tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).length > 5 ? "Crítico" : "Óptimo"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-5 bg-emerald-50 border border-emerald-150 rounded-2xl shadow-xs space-y-2 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-3 opacity-10">
+                  <CheckCircle2 className="w-12 h-12 text-emerald-800" />
+                </div>
+                <span className="text-[10px] text-slate-450 uppercase font-black tracking-widest block font-mono">ATENDIDOS HOY (RC)</span>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-black text-emerald-900 font-mono">
+                    {tickets.filter(t => t.status === TicketStatus.COMPLETED && t.serviceType === ServiceType.REGISTRO).length}
+                  </span>
+                  <span className="text-[9px] px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md font-bold uppercase tracking-wider">
+                    Completados
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-5 bg-purple-50 border border-purple-150 rounded-2xl shadow-xs space-y-2 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-3 opacity-10">
+                  <Users className="w-12 h-12 text-purple-900" />
+                </div>
+                <span className="text-[10px] text-slate-450 uppercase font-black tracking-widest block font-mono">MÓDULOS EN ATENCIÓN</span>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-black text-purple-950 font-mono">
+                    {cubicles.filter(c => c.status === CubicleStatus.ATTENDING).length}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-bold">
+                    de {cubicles.filter(c => c.status !== CubicleStatus.OFFLINE).length} activos
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-5 bg-amber-50 border border-amber-150 rounded-2xl shadow-xs space-y-2 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-3 opacity-10">
+                  <Activity className="w-12 h-12 text-amber-900" />
+                </div>
+                <span className="text-[10px] text-slate-450 uppercase font-black tracking-widest block font-mono">PROMEDIO DE ESPERA</span>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-black text-amber-950 font-mono">
+                    {tickets.filter(t => t.status === TicketStatus.COMPLETED && t.serviceType === ServiceType.REGISTRO).length > 0 ? "4.8" : "0.0"}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-bold">minutos</span>
+                </div>
+              </div>
+            </div>
+
+            {/* BENTO GRID LAYOUT */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 font-sans">
+              {/* Queues Breakdown */}
+              <div className="lg:col-span-5 bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-4 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs uppercase font-black tracking-widest text-slate-700 font-mono">Monitoreo de Filas por Trámite</span>
+                  <span className="text-[9px] bg-[#122e70] text-white px-2 py-0.5 rounded-md font-mono">VIVO</span>
+                </div>
+
+                <div className="space-y-3">
+                  {REGISTRO_PROCEDURES.map(proc => {
+                    const waitingCount = tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO && t.procedure === proc.id).length;
+                    const attendingCount = tickets.filter((t) => (t.status === TicketStatus.ATTENDING || t.status === TicketStatus.CALLING) && t.serviceType === ServiceType.REGISTRO && t.procedure === proc.id).length;
+                    const completedCount = tickets.filter(t => t.status === TicketStatus.COMPLETED && t.serviceType === ServiceType.REGISTRO && t.procedure === proc.id).length;
+                    
+                    const maxVal = Math.max(1, Math.max(...REGISTRO_PROCEDURES.map(p => tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO && t.procedure === p.id).length)));
+                    const percentWidth = (waitingCount / maxVal) * 100;
+
+                    return (
+                      <div key={proc.id} className="bg-white border border-slate-150 p-3 rounded-xl space-y-2">
+                        <div className="flex justify-between items-start">
+                          <div className="max-w-[70%]">
+                            <span className="font-extrabold text-xs text-slate-900 block truncate uppercase tracking-wide">
+                              {proc.name}
+                            </span>
+                            <span className="text-[9px] text-slate-400 font-mono">ID: {proc.id}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 font-mono">
+                            <span className="px-1.5 py-0.5 bg-blue-50 text-[#122e70] text-[9px] font-black border border-blue-100 rounded" title="En Espera">
+                              {waitingCount} E
+                            </span>
+                            <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 text-[9px] font-black border border-emerald-100 rounded" title="Completados">
+                              {completedCount} C
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full transition-all duration-500 rounded-full ${
+                              waitingCount > 3 ? "bg-rose-500" : waitingCount > 0 ? "bg-amber-500" : "bg-[#122e70]"
+                            }`} 
+                            style={{ width: `${percentWidth}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Cubicles Matrix */}
+              <div className="lg:col-span-7 bg-slate-50 border border-slate-200 p-5 rounded-2xl space-y-4 shadow-sm">
+                <span className="text-xs uppercase font-black tracking-widest text-slate-700 font-mono block">Matriz de Estado de Cubículos</span>
+                
+                <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                  {cubicles.map(cub => {
+                    const num = parseInt(cub.id.replace("CUB-", ""), 10);
+                    const currentServingTicket = tickets.find(t => t.id === cub.currentTicketId);
+                    
+                    let procType = "Gral";
+                    if (num >= 2 && num <= 8) procType = "OR";
+                    else if (num === 9) procType = "SI/OI";
+                    else if (num === 10) procType = "ED";
+                    else if (num === 11) procType = "RS";
+                    else if (num >= 12 && num <= 14) procType = "RMAT";
+                    else if (num === 15) procType = "SAU";
+                    else if (num >= 16 && num <= 20) procType = "OHV";
+                    else if (num === 23) procType = "STR";
+
+                    return (
+                      <div key={cub.id} className="bg-white border border-slate-150 p-4 rounded-xl flex items-center justify-between transition-all duration-200 hover:shadow-xs">
+                        <div className="flex items-center gap-3 truncate">
+                          <div className="flex flex-col items-center">
+                            <span className="font-bold text-xs text-slate-800 font-mono uppercase bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
+                              {cub.name.replace("Cubículo ", "C-")}
+                            </span>
+                            <span className="text-[8px] font-mono text-indigo-850 font-black tracking-widest uppercase mt-1 bg-indigo-50 border border-indigo-100 px-1 rounded">
+                              {procType}
+                            </span>
+                          </div>
+                          <div className="truncate">
+                            <span className="text-xs font-black text-slate-900 block truncate uppercase">{cub.agentName || "Vacante"}</span>
+                            <span className="text-[9px] text-slate-400 font-medium">Atendidos hoy: <strong className="font-bold text-slate-700">{cub.totalAttendedCount}</strong></span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0 font-mono">
+                          {currentServingTicket ? (
+                            <div className="flex items-center gap-1 bg-blue-50 text-blue-900 border border-blue-200 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase">
+                              <span className="animate-ping w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0 mr-0.5" />
+                              {currentServingTicket.numberCode}
+                            </div>
+                          ) : (
+                            <span className="text-[9px] text-slate-400 font-bold italic">Libre</span>
+                          )}
+
+                          <span className={`px-2.5 py-1 text-[9px] font-black uppercase rounded-lg border tracking-wider text-center w-24 ${
+                            cub.status === CubicleStatus.ONLINE_AVAILABLE 
+                              ? "bg-emerald-50 text-emerald-800 border-emerald-250" 
+                              : cub.status === CubicleStatus.ATTENDING
+                                ? "bg-blue-50 text-blue-800 border-blue-250 animate-pulse"
+                                : cub.status === CubicleStatus.BREAK
+                                  ? "bg-amber-50 text-amber-800 border-amber-250"
+                                  : "bg-slate-100 text-slate-400 border-slate-250"
+                          }`}>
+                            {cub.status === CubicleStatus.ONLINE_AVAILABLE 
+                              ? "DISPONIBLE" 
+                              : cub.status === CubicleStatus.ATTENDING
+                                ? "ATENDIENDO"
+                                : cub.status === CubicleStatus.BREAK
+                                  ? "RECESO"
+                                  : "INACTIVO"}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* SUPERVISOR ALERTS PANEL */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 font-sans space-y-3 shadow-sm">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-5 h-5 text-amber-500" />
+                <span className="text-xs uppercase font-black tracking-widest text-slate-700 font-mono">Alertas Operativas del Supervisor</span>
+              </div>
+              
+              <div className="space-y-2">
+                {tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).some(t => Math.round((Date.now() - t.createdAt) / 1000) > 120) ? (
+                  tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).filter(t => Math.round((Date.now() - t.createdAt) / 1000) > 120).map(t => {
+                    const delay = Math.round((Date.now() - t.createdAt) / 1000);
+                    return (
+                      <div key={t.id} className="bg-rose-50 border border-rose-200 p-3 rounded-xl text-xs text-rose-950 flex items-center justify-between">
+                        <span>⚠️ <strong>Alerta de Retraso:</strong> El tiquet <strong>{t.numberCode}</strong> de {REGISTRO_PROCEDURES.find(p => p.id === t.procedure)?.name || t.procedure} lleva <strong>{delay}s</strong> en cola.</span>
+                        <span className="text-[10px] font-black text-rose-800 uppercase tracking-widest animate-pulse">Atender Prioridad</span>
+                      </div>
+                    );
+                  })
+                ) : null}
+
+                {cubicles.filter(c => c.status !== CubicleStatus.OFFLINE).length === 0 ? (
+                  <div className="bg-red-50 border border-red-200 p-3 rounded-xl text-xs text-red-950">
+                    🔴 <strong>Alerta de Capacidad:</strong> No hay ningún módulo de Registro Civil en línea. Los ciudadanos experimentarán demoras.
+                  </div>
+                ) : cubicles.filter(c => c.status === CubicleStatus.BREAK).length > cubicles.filter(c => c.status !== CubicleStatus.OFFLINE).length / 2 ? (
+                  <div className="bg-amber-50 border border-amber-250 p-3 rounded-xl text-xs text-amber-950">
+                    ⚠️ <strong>Alerta de Receso:</strong> Más del 50% de los módulos de Registro Civil están en receso. Considere llamar agentes adicionales.
+                  </div>
+                ) : null}
+
+                {tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO && t.procedure === "OHV").length >= 4 ? (
+                  <div className="bg-sky-50 border border-sky-200 p-3 rounded-xl text-xs text-sky-950">
+                    📈 <strong>Alta Demanda:</strong> Se detecta un incremento de trámites de Hechos Vitales (OHV). Módulos 16 a 20 recomendados para redirección.
+                  </div>
+                ) : null}
+
+                {!(tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).some(t => Math.round((Date.now() - t.createdAt) / 1000) > 120)) && cubicles.filter(c => c.status !== CubicleStatus.OFFLINE).length > 0 && !(cubicles.filter(c => c.status === CubicleStatus.BREAK).length > cubicles.filter(c => c.status !== CubicleStatus.OFFLINE).length / 2) && tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO && t.procedure === "OHV").length < 4 && (
+                  <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-xs text-emerald-950 flex items-center justify-between">
+                    <span>✓ <strong>Operación Estable:</strong> Todos los flujos de atención se encuentran dentro de los parámetros de servicio normales.</span>
+                    <span className="text-[10px] font-black text-emerald-800 uppercase font-mono tracking-widest">SLA CUMPLIDO</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          )
+        ) : (
+          <>
+            {/* OPERATOR CREDENTIAL CONTROL BAR */}
         <div id="operator-credential-control" className="bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-3.5">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 font-sans">
             <div className="flex items-center gap-2">
@@ -472,15 +1064,12 @@ export default function AgentConsole({
                       const oShort = uOffice 
                         ? uOffice.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")
                         : "Sede Central";
-                      let roleStr = "Operador";
-                      if (u.role === UserRole.SUPERADMIN) roleStr = "Superadministrador";
-                      else if (u.role === UserRole.SUPERVISOR) roleStr = "Supervisor";
-                      else if (u.role === UserRole.AGENT_CAJA) roleStr = "Caja";
-                      else if (u.role === UserRole.AGENT_TRIADA) roleStr = "Tríada";
+                      
+                      const details = getUserDisplayDetails(u, gatewaySelection === "registro_civil");
                       
                       return (
                         <option key={u.id} value={u.id}>
-                          {u.fullName} ({roleStr} - {oShort})
+                          {details.fullName} ({details.roleName} - {oShort})
                         </option>
                       );
                     })}
@@ -526,96 +1115,126 @@ export default function AgentConsole({
           </p>
         </div>
 
-        {/* PROMINENT ROLE INDICATOR & SELECTION BUTTONS AT THE TOP */}
-        <div className="space-y-3 bg-blue-50/30 p-5 border border-blue-100 rounded-2xl shadow-sm">
-          <div className="flex items-center justify-between">
-            <label className="block text-[11px] uppercase tracking-widest font-black text-[#122e70] font-mono">
-              ★ ROL SELECCIONADO DE ATENCIÓN (FILTRO GLOBAL DE MÓDULOS) ★
-            </label>
-            <span className="text-[10px] bg-[#122e70] text-white px-2 py-0.5 rounded-md font-black">ACTIVO</span>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4 font-sans">
+        {gatewaySelection === "registro_civil" ? (
+          /* REGISTRO CIVIL: SELECTED CUBICLE CARD WITH RE-SELECTOR BUTTON */
+          <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 font-sans shadow-inner">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-blue-900 text-white rounded-xl shadow-sm">
+                <MapPin className="w-6 h-6" />
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-450 uppercase font-black tracking-widest block font-mono">Módulo de Registro Civil Activo</span>
+                <span className="text-base font-black text-[#122e70] uppercase">{currentCubicle.name}</span>
+                <span className="text-[9.5px] text-emerald-850 font-black bg-emerald-50 border border-emerald-150 px-2 py-0.5 rounded-md ml-2 inline-block align-middle">
+                  Agente: {currentCubicle.agentName}
+                </span>
+              </div>
+            </div>
             <button
-              id="role-filter-caja"
               type="button"
-              disabled={isTriadaOnly}
               onClick={() => {
-                if (isTriadaOnly) return;
-                setActiveRoleFilter(TicketPhase.CAJA);
-                const firstCaja = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja"));
-                if (firstCaja) setActiveCubicleId(firstCaja.id);
+                setHasSelectedCubicle(false);
               }}
-              className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center border relative ${
-                activeRoleFilter === TicketPhase.CAJA
-                  ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
-                  : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
-              } ${isTriadaOnly ? "opacity-45 cursor-not-allowed bg-slate-100 text-slate-405" : "cursor-pointer"}`}
+              className="py-2.5 px-4 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-250 hover:border-slate-350 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm shrink-0"
             >
-              <span className="block">🏧 VER SÓLO CAJAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja")).length})</span>
-              {isTriadaOnly && <span className="block text-[8px] text-red-550 mt-1 font-sans font-extrabold uppercase tracking-wider">🔒 BLOQUEADO</span>}
-            </button>
-
-            <button
-              id="role-filter-triada"
-              type="button"
-              disabled={isCajaOnly}
-              onClick={() => {
-                if (isCajaOnly) return;
-                setActiveRoleFilter(TicketPhase.TRIADA);
-                const firstTriada = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada"));
-                if (firstTriada) setActiveCubicleId(firstTriada.id);
-              }}
-              className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center border relative ${
-                activeRoleFilter === TicketPhase.TRIADA
-                  ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
-                  : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
-              } ${isCajaOnly ? "opacity-45 cursor-not-allowed bg-slate-100 text-slate-405" : "cursor-pointer"}`}
-            >
-              <span className="block">📸 VER SÓLO TRÍADAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada")).length})</span>
-              {isCajaOnly && <span className="block text-[8px] text-red-550 mt-1 font-sans font-extrabold uppercase tracking-wider">🔒 BLOQUEADO</span>}
+              Cambiar de Módulo 🔄
             </button>
           </div>
-        </div>
-
-        {/* CUBICLE SELECTOR FOR FILTERED ROLE */}
-        <div className="space-y-2">
-          <label className="block text-xs uppercase tracking-widest font-black text-slate-500 font-mono">
-            Módulos del Operador Disponibles:
-          </label>
-          
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 shadow-inner">
-            {filteredRoleCubicles.map((c) => {
-              const isActive = c.id === activeCubicleId;
-              return (
+        ) : (
+          /* CEDULACION: PROMINENT ROLE INDICATOR & SELECTION BUTTONS + ALL CUBICLES SELECTOR */
+          <>
+            {/* PROMINENT ROLE INDICATOR & SELECTION BUTTONS AT THE TOP */}
+            <div className="space-y-3 bg-blue-50/30 p-5 border border-blue-100 rounded-2xl shadow-sm">
+              <div className="flex items-center justify-between">
+                <label className="block text-[11px] uppercase tracking-widest font-black text-[#122e70] font-mono">
+                  ★ ROL SELECCIONADO DE ATENCIÓN (FILTRO GLOBAL DE MÓDULOS) ★
+                </label>
+                <span className="text-[10px] bg-[#122e70] text-white px-2 py-0.5 rounded-md font-black">ACTIVO</span>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 font-sans">
                 <button
-                  id={`btn-select-agent-${c.id.toLowerCase()}`}
-                  key={c.id}
-                  onClick={() => setActiveCubicleId(c.id)}
-                  className={`text-left p-4 rounded-xl border transition-all cursor-pointer ${
-                    isActive
-                      ? "bg-slate-900 text-white border-slate-900 font-black shadow-md scale-[1.02]"
-                      : "hover:bg-slate-200 text-slate-700 border-slate-200 bg-white"
-                  }`}
+                  id="role-filter-caja"
+                  type="button"
+                  disabled={isTriadaOnly}
+                  onClick={() => {
+                    if (isTriadaOnly) return;
+                    setActiveRoleFilter(TicketPhase.CAJA);
+                    const firstCaja = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja"));
+                    if (firstCaja) setActiveCubicleId(firstCaja.id);
+                  }}
+                  className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center border relative ${
+                    activeRoleFilter === TicketPhase.CAJA
+                      ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
+                      : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
+                  } ${isTriadaOnly ? "opacity-45 cursor-not-allowed bg-slate-100 text-slate-405" : "cursor-pointer"}`}
                 >
-                  <div className="flex items-center justify-between gap-1.5 truncate uppercase tracking-wider text-[11px] font-black">
-                    <span className="truncate">{c.name.toUpperCase()}</span>
-                    <span className={`w-3 h-3 rounded-full outline outline-2 outline-white shrink-0 ${
-                      c.status === CubicleStatus.ONLINE_AVAILABLE 
-                        ? "bg-emerald-500 animate-pulse" 
-                        : c.status === CubicleStatus.ATTENDING
-                          ? "bg-blue-600"
-                          : c.status === CubicleStatus.BREAK
-                            ? "bg-amber-500"
-                            : "bg-rose-500"
-                    }`} />
-                  </div>
-                  <p className="text-[10px] text-slate-550 font-bold truncate mt-1.5 uppercase tracking-wide">AGENTE: {c.agentName.toUpperCase()}</p>
+                  <span className="block">🏧 VER SÓLO CAJAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja")).length})</span>
+                  {isTriadaOnly && <span className="block text-[8px] text-red-550 mt-1 font-sans font-extrabold uppercase tracking-wider">🔒 BLOQUEADO</span>}
                 </button>
-              );
-            })}
-          </div>
-        </div>
+
+                <button
+                  id="role-filter-triada"
+                  type="button"
+                  disabled={isCajaOnly}
+                  onClick={() => {
+                    if (isCajaOnly) return;
+                    setActiveRoleFilter(TicketPhase.TRIADA);
+                    const firstTriada = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada"));
+                    if (firstTriada) setActiveCubicleId(firstTriada.id);
+                  }}
+                  className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center border relative ${
+                    activeRoleFilter === TicketPhase.TRIADA
+                      ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
+                      : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
+                  } ${isCajaOnly ? "opacity-45 cursor-not-allowed bg-slate-100 text-slate-405" : "cursor-pointer"}`}
+                >
+                  <span className="block">📸 VER SÓLO TRÍADAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada")).length})</span>
+                  {isCajaOnly && <span className="block text-[8px] text-red-550 mt-1 font-sans font-extrabold uppercase tracking-wider">🔒 BLOQUEADO</span>}
+                </button>
+              </div>
+            </div>
+
+            {/* CUBICLE SELECTOR FOR FILTERED ROLE */}
+            <div className="space-y-2">
+              <label className="block text-xs uppercase tracking-widest font-black text-slate-500 font-mono">
+                Módulos del Operador Disponibles:
+              </label>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 shadow-inner">
+                {filteredRoleCubicles.map((c) => {
+                  const isActive = c.id === activeCubicleId;
+                  return (
+                    <button
+                      id={`btn-select-agent-${c.id.toLowerCase()}`}
+                      key={c.id}
+                      onClick={() => setActiveCubicleId(c.id)}
+                      className={`text-left p-4 rounded-xl border transition-all cursor-pointer ${
+                        isActive
+                          ? "bg-slate-900 text-white border-slate-900 font-black shadow-md scale-[1.02]"
+                          : "hover:bg-slate-200 text-slate-700 border-slate-200 bg-white"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5 truncate uppercase tracking-wider text-[11px] font-black">
+                        <span className="truncate">{c.name.toUpperCase()}</span>
+                        <span className={`w-3 h-3 rounded-full outline outline-2 outline-white shrink-0 ${
+                          c.status === CubicleStatus.ONLINE_AVAILABLE 
+                            ? "bg-emerald-500 animate-pulse" 
+                            : c.status === CubicleStatus.ATTENDING
+                              ? "bg-blue-600"
+                              : c.status === CubicleStatus.BREAK
+                                ? "bg-amber-500"
+                                : "bg-rose-500"
+                        }`} />
+                      </div>
+                      <p className="text-[10px] text-slate-550 font-bold truncate mt-1.5 uppercase tracking-wide">AGENTE: {c.agentName.toUpperCase()}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* AGENT STATE CARD & CONFIGURATOR */}
         <div className="space-y-4 pt-2">
@@ -764,13 +1383,18 @@ export default function AgentConsole({
                   </h4>
                   <p className="text-xs text-slate-500 uppercase tracking-widest font-bold">
                     SERVICIO: <span className="font-extrabold text-blue-900">{SERVICES_CONFIG[activeTicket.serviceType].name.toUpperCase()}</span>
+                    {activeTicket.procedure && (
+                      <span className="ml-2 px-2 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-black uppercase tracking-wider rounded border border-blue-200 inline-block align-middle">
+                        {REGISTRO_PROCEDURES.find(p => p.id === activeTicket.procedure)?.name || activeTicket.procedure}
+                      </span>
+                    )}
                   </p>
                   {activeTicket.priority && (
                     <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500 text-white font-black text-[10px] uppercase mt-2 tracking-widest shadow-sm rounded-lg animate-pulse">
                       ★ PRIORITARIO
                     </span>
                   )}
-                  {activeTicket.isAppointment && (
+                  {activeTicket.isAppointment && activeTicket.serviceType !== ServiceType.REGISTRO && (
                     <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-sky-600 text-white font-black text-[10px] uppercase mt-2 tracking-widest shadow-sm rounded-lg animate-pulse">
                       📅 CITA PREVIA
                     </span>
@@ -942,7 +1566,7 @@ export default function AgentConsole({
                           ★ PREF
                         </span>
                       )}
-                      {item.isAppointment && (
+                      {item.isAppointment && item.serviceType !== ServiceType.REGISTRO && (
                         <span className="px-2 py-0.5 bg-sky-600 text-white text-[9px] font-black uppercase rounded-lg tracking-widest font-sans">
                           📅 CITA
                         </span>
@@ -966,7 +1590,9 @@ export default function AgentConsole({
             </div>
           )}
         </div>
-      </div>
+      </>
+    )}
+  </div>
 
       {/* METRICS UNDERLAY */}
       <div className="border-t border-slate-100 pt-4 flex items-center justify-between text-xs mt-4">
