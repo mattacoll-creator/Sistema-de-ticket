@@ -779,13 +779,6 @@ export default function App() {
                 isAutoAssignActive={isAutoAssignActive}
                 onToggleAutoAssign={setIsAutoAssignActive}
                 onPurgeOldTickets={purgeOldTickets}
-                officeTickets={officeTickets}
-                setOfficeTickets={setOfficeTickets}
-                officeCubicles={officeCubicles}
-                setOfficeCubicles={setOfficeCubicles}
-                supabaseSyncStatus={supabaseSyncStatus}
-                pullOfficeFromSupabase={pullOfficeFromSupabase}
-                pushOfficeToSupabase={pushOfficeToSupabase}
                 currentOfficeId={currentOfficeId}
               />
             ) : (
@@ -825,6 +818,10 @@ export default function App() {
                 setOfficeCubicles={setOfficeCubicles}
                 users={users}
                 setUsers={setUsers}
+                supabaseSyncStatus={supabaseSyncStatus}
+                pullOfficeFromSupabase={pullOfficeFromSupabase}
+                pushOfficeToSupabase={pushOfficeToSupabase}
+                currentOfficeId={currentOfficeId}
               />
             ) : (
               <div className="bg-white border-2 border-dashed border-slate-200 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-6 max-w-lg mx-auto shadow-sm my-8">

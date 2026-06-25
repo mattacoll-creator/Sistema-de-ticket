@@ -36,12 +36,14 @@ import {
   Calendar,
   AlertTriangle,
   Plus,
-  Trash
+  Trash,
+  MapPin,
+  Building2
 } from "lucide-react";
 import { generatePDFReport } from "../utils/reportGenerator";
 import { REGISTRO_PROCEDURES } from "./WelcomeKiosk";
 import { playCallingChime, speakCall } from "../utils/audio";
-import { resetSupabaseClient, SUPABASE_SQL_SETUP_SCRIPT } from "../utils/supabaseClient";
+
 import { Copy, Cloud, Link, ExternalLink } from "lucide-react";
 import { getOfficeSchedule, saveOfficeSchedule, OfficeSchedule } from "../utils/scheduleStorage";
 
@@ -57,13 +59,6 @@ interface ControlDashboardProps {
   isAutoAssignActive?: boolean;
   onToggleAutoAssign?: (active: boolean) => void;
   onPurgeOldTickets?: () => void;
-  officeTickets?: Record<string, Ticket[]>;
-  setOfficeTickets?: React.Dispatch<React.SetStateAction<Record<string, Ticket[]>>>;
-  officeCubicles?: Record<string, Cubicle[]>;
-  setOfficeCubicles?: React.Dispatch<React.SetStateAction<Record<string, Cubicle[]>>>;
-  supabaseSyncStatus?: "idle" | "offline" | "syncing" | "success" | "error";
-  pullOfficeFromSupabase?: (officeId: string) => Promise<boolean>;
-  pushOfficeToSupabase?: (officeId: string) => Promise<boolean>;
   currentOfficeId?: string;
 }
 
@@ -79,13 +74,6 @@ export default function ControlDashboard({
   isAutoAssignActive = true,
   onToggleAutoAssign,
   onPurgeOldTickets,
-  officeTickets = {},
-  setOfficeTickets,
-  officeCubicles = {},
-  setOfficeCubicles,
-  supabaseSyncStatus = "idle",
-  pullOfficeFromSupabase,
-  pushOfficeToSupabase,
   currentOfficeId = "OFF-1"
 }: ControlDashboardProps) {
 
@@ -167,308 +155,6 @@ export default function ControlDashboard({
       setTimeout(() => setPurgeSuccess(false), 3000);
     }
   };
-
-  // --- ESTADOS LOCALES PARA LA INTEGRACIÓN DE SUPABASE CLOUD ---
-  const [supabaseUrl, setSupabaseUrl] = React.useState<string>(() => {
-    return localStorage.getItem("ticket_system_supabase_url") || "";
-  });
-  const [supabaseAnonKey, setSupabaseAnonKey] = React.useState<string>(() => {
-    return localStorage.getItem("ticket_system_supabase_anon_key") || "";
-  });
-  const [configSuccess, setConfigSuccess] = React.useState<boolean>(false);
-  const [sqlCopied, setSqlCopied] = React.useState<boolean>(false);
-  const [showSqlSchema, setShowSqlSchema] = React.useState<boolean>(false);
-  const [isSyncingManual, setIsSyncingManual] = React.useState<boolean>(false);
-  const [manualSyncMsg, setManualSyncMsg] = React.useState<string>("");
-
-  const handleSaveSupabaseConfig = () => {
-    try {
-      if (supabaseUrl.trim()) {
-        localStorage.setItem("ticket_system_supabase_url", supabaseUrl.trim());
-      } else {
-        localStorage.removeItem("ticket_system_supabase_url");
-      }
-
-      if (supabaseAnonKey.trim()) {
-        localStorage.setItem("ticket_system_supabase_anon_key", supabaseAnonKey.trim());
-      } else {
-        localStorage.removeItem("ticket_system_supabase_anon_key");
-      }
-
-      resetSupabaseClient();
-      setConfigSuccess(true);
-      setTimeout(() => setConfigSuccess(false), 3000);
-
-      // Trigger standard storage reload event to refresh client dynamically
-      window.dispatchEvent(new Event("storage"));
-      
-      // Auto-reload to re-initialize supabase on the active hook instance
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
-
-    } catch (e) {
-      console.error("Failed to save credentials", e);
-    }
-  };
-
-  const handleCopySql = () => {
-    navigator.clipboard.writeText(SUPABASE_SQL_SETUP_SCRIPT);
-    setSqlCopied(true);
-    setTimeout(() => setSqlCopied(false), 3000);
-  };
-
-  const handleManualPull = async () => {
-    if (!pullOfficeFromSupabase) return;
-    setIsSyncingManual(true);
-    setManualSyncMsg("Solicitando estado remoto a Supabase...");
-    const success = await pullOfficeFromSupabase(currentOfficeId || "OFF-1");
-    setIsSyncingManual(false);
-    if (success) {
-      setManualSyncMsg("¡Estado remoto cargado y sincronizado exitosamente!");
-    } else {
-      setManualSyncMsg("Error al obtener estado remoto. Revise credenciales u tablas.");
-    }
-    setTimeout(() => setManualSyncMsg(""), 4000);
-  };
-
-  const handleManualPush = async () => {
-    if (!pushOfficeToSupabase) return;
-    setIsSyncingManual(true);
-    setManualSyncMsg("Subiendo estado actual a Supabase...");
-    const success = await pushOfficeToSupabase(currentOfficeId || "OFF-1");
-    setIsSyncingManual(false);
-    if (success) {
-      setManualSyncMsg("¡Estado local subido exitosamente a Supabase!");
-    } else {
-      setManualSyncMsg("Error al empujar datos. Compruebe credenciales.");
-    }
-    setTimeout(() => setManualSyncMsg(""), 4000);
-  };
-
-  // --- ESTADOS LOCALES PARA LA CONSOLA DE BASE DE DATOS LOCAL ---
-  const [dbStatusMsg, setDbStatusMsg] = React.useState<string>("");
-  const [dbStatusColor, setDbStatusColor] = React.useState<string>("text-slate-500");
-  const [dbChecking, setDbChecking] = React.useState<boolean>(false);
-  const [importError, setImportError] = React.useState<string>("");
-  const [dbVersion, setDbVersion] = React.useState<string>("1.0.4 rIDB");
-  
-  // Ref for hidden file input of backup
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
-
-  // Compute stats across all offices
-  const totalDbTickets = React.useMemo(() => {
-    return Object.values(officeTickets).reduce((acc, currentList) => acc + (currentList?.length || 0), 0);
-  }, [officeTickets]);
-
-  const totalDbCubicles = React.useMemo(() => {
-    return Object.values(officeCubicles).reduce((acc, currentList) => acc + (currentList?.length || 0), 0);
-  }, [officeCubicles]);
-
-  const calculateDbSizeKB = () => {
-    try {
-      let totalLength = 0;
-      const keysToMeasure = [
-        "ticket_system_tickets_v1",
-        "ticket_system_cubicles_v1",
-        "ticket_system_stats_v1",
-        "ticket_system_auto_assign_v1",
-        "ticket_system_current_office_v1",
-        "ticket_system_office_tickets_v1",
-        "ticket_system_office_cubicles_v1",
-        "ticket_system_office_auto_assign_v1",
-        "ticket_tts_rate",
-        "ticket_tts_pitch",
-        "ticket_tts_voice_pref",
-        "eco_mode_active",
-        "limitar_historial_tv"
-      ];
-      keysToMeasure.forEach(key => {
-        totalLength += (localStorage.getItem(key) || "").length;
-      });
-      return `${((totalLength * 2) / 1024).toFixed(3)} KB`;
-    } catch (e) {
-      return "0.00 KB";
-    }
-  };
-
-  const handleExportDatabase = () => {
-    try {
-      const dbDump = {
-        metadata: {
-          exporter: "Tribunal Electoral de Panamá - Central Database Engine",
-          exportedAt: Date.now(),
-          version: dbVersion,
-          officeCount: 16
-        },
-        payload: {
-          officeTickets,
-          officeCubicles,
-          officeAutoAssign: JSON.parse(localStorage.getItem("ticket_system_office_auto_assign_v1") || "{}"),
-          currentOfficeId: localStorage.getItem("ticket_system_current_office_v1") || "OFF-1",
-          systemConfig: {
-            ttsRate,
-            ttsPitch,
-            ttsVoicePref,
-            ecoMode,
-            limitHistory
-          }
-        }
-      };
-
-      const dumpStr = JSON.stringify(dbDump, null, 2);
-      const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(dumpStr);
-      
-      const downloadAnchor = document.createElement("a");
-      downloadAnchor.setAttribute("href", dataUri);
-      downloadAnchor.setAttribute("download", `tribunal_electoral_db_backup_${Date.now()}.json`);
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      document.body.removeChild(downloadAnchor);
-
-      setDbStatusMsg("💾 Base de datos exportada con éxito.");
-      setDbStatusColor("text-emerald-650 font-semibold");
-    } catch (e) {
-      setDbStatusMsg("❌ Excepción al empaquetar la base de datos.");
-      setDbStatusColor("text-rose-650");
-    }
-  };
-
-  const handleImportDatabase = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setImportError("");
-    setDbChecking(true);
-    setDbStatusMsg("Leyendo archivo de respaldo...");
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const fileContent = event.target?.result as string;
-        const parsed = JSON.parse(fileContent);
-
-        if (!parsed.payload || !parsed.payload.officeTickets || !parsed.payload.officeCubicles) {
-          throw new Error("El archivo no tiene el formato de base de datos relacional compatible.");
-        }
-
-        const loadedTickets = parsed.payload.officeTickets;
-        const loadedCubicles = parsed.payload.officeCubicles;
-
-        if (setOfficeTickets) {
-          setOfficeTickets(loadedTickets);
-        }
-        if (setOfficeCubicles) {
-          setOfficeCubicles(loadedCubicles);
-        }
-
-        localStorage.setItem("ticket_system_office_tickets_v1", JSON.stringify(loadedTickets));
-        localStorage.setItem("ticket_system_office_cubicles_v1", JSON.stringify(loadedCubicles));
-        
-        if (parsed.payload.officeAutoAssign) {
-          localStorage.setItem("ticket_system_office_auto_assign_v1", JSON.stringify(parsed.payload.officeAutoAssign));
-        }
-        if (parsed.payload.currentOfficeId) {
-          localStorage.setItem("ticket_system_current_office_v1", parsed.payload.currentOfficeId);
-        }
-        if (parsed.payload.systemConfig) {
-          const cfg = parsed.payload.systemConfig;
-          localStorage.setItem("ticket_tts_rate", cfg.ttsRate?.toString() || "0.95");
-          localStorage.setItem("ticket_tts_pitch", cfg.ttsPitch?.toString() || "1.05");
-          localStorage.setItem("ticket_tts_voice_pref", cfg.ttsVoicePref || "female");
-          localStorage.setItem("eco_mode_active", cfg.ecoMode ? "true" : "false");
-          localStorage.setItem("limitar_historial_tv", cfg.limitHistory ? "true" : "false");
-        }
-
-        window.dispatchEvent(new Event("storage"));
-
-        setDbStatusMsg("✔️ Base de datos importada y sincronizada.");
-        setDbStatusColor("text-emerald-655 font-semibold");
-        
-        setTimeout(() => {
-          setDbChecking(false);
-          alert("¡La Base de Datos se importó y restauró exitosamente en el navegador!");
-          window.location.reload();
-        }, 1200);
-
-      } catch (err: any) {
-        setDbChecking(false);
-        setImportError(err.message || "Esquema JSON corrupto.");
-        setDbStatusMsg("❌ Error de formato en la base de datos.");
-        setDbStatusColor("text-rose-650");
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleVacuumDatabase = () => {
-    setDbChecking(true);
-    setDbStatusMsg("Compactando bases de datos y reconstruyendo índices relacionales...");
-    
-    setTimeout(() => {
-      try {
-        localStorage.setItem("ticket_system_office_tickets_v1", JSON.stringify(officeTickets));
-        localStorage.setItem("ticket_system_office_cubicles_v1", JSON.stringify(officeCubicles));
-        
-        const rate = localStorage.getItem("ticket_tts_rate") || "0.95";
-        const pitch = localStorage.getItem("ticket_tts_pitch") || "1.05";
-        localStorage.setItem("ticket_tts_rate", rate);
-        localStorage.setItem("ticket_tts_pitch", pitch);
-
-        setDbStatusMsg("🧹 Vacuum finalizado. Base de datos e índices compactados.");
-        setDbStatusColor("text-emerald-655 font-semibold");
-      } catch (e) {
-        setDbStatusMsg("❌ Falla en la compactación de tablas.");
-        setDbStatusColor("text-rose-650");
-      } finally {
-        setDbChecking(false);
-      }
-    }, 1000);
-  };
-
-  const handleSchemaIntegrityCheck = () => {
-    setDbChecking(true);
-    setDbStatusMsg("Chequeando integridad física del schema...");
-    
-    setTimeout(() => {
-      try {
-        let errorCount = 0;
-        
-        Object.keys(officeTickets).forEach(officeId => {
-          const tList = officeTickets[officeId] || [];
-          tList.forEach(t => {
-            if (!t.id || !t.numberCode || typeof t.priority !== "boolean") {
-              errorCount++;
-            }
-          });
-        });
-
-        Object.keys(officeCubicles).forEach(officeId => {
-          const cList = officeCubicles[officeId] || [];
-          cList.forEach(c => {
-            if (!c.id || !c.name || typeof c.totalAttendedCount !== "number") {
-              errorCount++;
-            }
-          });
-        });
-
-        if (errorCount === 0) {
-          setDbStatusMsg(`🛡️ Chequeo del esquema finalizado: 100% íntegro (0 errores físicos).`);
-          setDbStatusColor("text-emerald-655 font-semibold");
-        } else {
-          setDbStatusMsg(`⚠️ Encontradas ${errorCount} inconsistencias leves que fueron auto-reparadas.`);
-          setDbStatusColor("text-amber-650");
-        }
-      } catch (e) {
-        setDbStatusMsg("❌ Falla crítica de lectura física.");
-        setDbStatusColor("text-rose-650");
-      } finally {
-        setDbChecking(false);
-      }
-    }, 900);
-  };
-  
-  // Calculate analytics metrics
   const totalCreated = tickets.length;
   const totalCompleted = tickets.filter(t => t.status === TicketStatus.COMPLETED).length;
   const totalWaiting = tickets.filter(t => t.status === TicketStatus.WAITING).length;
@@ -480,6 +166,51 @@ export default function ControlDashboard({
   // Average queuing time estimate
   const activeAgentsCount = cubicles.filter(c => c.status !== "OFFLINE").length || 1;
   const estWaitTimeMin = Math.max(0, Math.round((totalWaiting * 8) / activeAgentsCount));
+
+  // --- CALCULATIONS FOR INSPECTOR DE SEDE REGIONAL (REGISTRO CIVIL) ---
+  const officeInfo = React.useMemo(() => {
+    return OFFICES_CONFIG.find(o => o.id === currentOfficeId) || OFFICES_CONFIG[0];
+  }, [currentOfficeId]);
+
+  const filteredRegistroTickets = React.useMemo(() => {
+    return tickets.filter(t => t.serviceType === ServiceType.REGISTRO);
+  }, [tickets]);
+
+  const completedRegistroTickets = React.useMemo(() => {
+    return filteredRegistroTickets.filter(t => t.status === TicketStatus.COMPLETED);
+  }, [filteredRegistroTickets]);
+
+  const rcProcedureCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    REGISTRO_PROCEDURES.forEach(p => {
+      counts[p.id] = 0;
+    });
+    filteredRegistroTickets.forEach(t => {
+      if (t.procedure && counts[t.procedure] !== undefined) {
+        counts[t.procedure]++;
+      }
+    });
+    return counts;
+  }, [filteredRegistroTickets]);
+
+  const { rcAvgWaitTime, rcAvgServiceTime } = React.useMemo(() => {
+    let totalWaitMins = 0;
+    let totalServiceMins = 0;
+    let ratedTicketsCount = 0;
+    
+    completedRegistroTickets.forEach(t => {
+      const wait = t.calledAt ? (t.calledAt - t.createdAt) / 1000 / 60 : 7;
+      const serv = (t.completedAt && t.calledAt) ? (t.completedAt - t.calledAt) / 1000 / 60 : 10;
+      
+      totalWaitMins += Math.max(0.5, wait);
+      totalServiceMins += Math.max(0.5, serv);
+      ratedTicketsCount++;
+    });
+    
+    const avgWait = ratedTicketsCount > 0 ? Math.round(totalWaitMins / ratedTicketsCount) : 8;
+    const avgService = ratedTicketsCount > 0 ? Math.round(totalServiceMins / ratedTicketsCount) : 11;
+    return { rcAvgWaitTime: avgWait, rcAvgServiceTime: avgService };
+  }, [completedRegistroTickets]);
 
   return (
     <div id="control-dashboard-panel" className="bg-white border border-slate-250 rounded-2xl p-6 flex flex-col justify-between h-full min-h-[580px] shadow-sm">
@@ -893,285 +624,117 @@ export default function ControlDashboard({
           </div>
         </div>
 
-        {/* --- DEDICATED CIVIL REGISTRY METRICS SECTION --- */}
-        <div id="civil-registry-specialized-metrics" className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-4 shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-            <h4 className="text-[10px] font-black text-[#122e70] uppercase tracking-widest flex items-center gap-1.5 font-mono">
-              <TrendingUp className="w-4 h-4 text-emerald-600 animate-pulse" />
-              Métricas Especializadas de Registro Civil
+        {/* --- INSPECTOR DE SEDE REGIONAL (REGISTRO CIVIL) --- */}
+        <div id="civil-registry-specialized-metrics" className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col space-y-4">
+          
+          <div className="border-b border-slate-100 pb-3.5 space-y-1 text-left">
+            <h3 className="text-xs font-black uppercase tracking-widest text-[#122e70] flex items-center gap-1.5">
+              <Building2 className="w-4 h-4 text-amber-500 shrink-0" />
+              Inspector de Sede Regional (Registro Civil)
+            </h3>
+            <p className="text-[9.5px] font-medium text-slate-400 leading-normal font-sans">
+              Inspeccione la volumetría por trámite específico en la sede seleccionada.
+            </p>
+          </div>
+
+          {/* Sede Select card details */}
+          <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-2 text-left">
+            <span className="text-[7.5px] tracking-[0.2em] font-black text-blue-650 bg-blue-50 border border-blue-100 rounded px-1.5 py-0.5 uppercase block w-fit">
+              ID SECTOR: {officeInfo.id}
+            </span>
+            <h4 className="text-[11px] font-black uppercase text-slate-800 leading-tight">
+              {officeInfo.name}
             </h4>
-            <span className="text-[8px] bg-emerald-50 border border-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-black font-mono">
-              REGISTRO CIVIL
+            <span className="text-[9px] text-slate-450 uppercase font-black flex items-center gap-1">
+              <MapPin className="w-3 h-3 text-blue-600 shrink-0" />
+              {officeInfo.address}
             </span>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="bg-white border border-slate-150 p-2.5 rounded-lg">
-              <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider font-mono">En Espera (RC)</span>
-              <span className="text-lg font-black text-[#122e70] block mt-0.5">
-                {tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).length}
-              </span>
-            </div>
-            <div className="bg-white border border-slate-150 p-2.5 rounded-lg">
-              <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider font-mono">Atendidos (RC)</span>
-              <span className="text-lg font-black text-emerald-600 block mt-0.5">
-                {tickets.filter(t => t.status === TicketStatus.COMPLETED && t.serviceType === ServiceType.REGISTRO).length}
-              </span>
-            </div>
-            <div className="bg-white border border-slate-150 p-2.5 rounded-lg">
-              <span className="block text-[8px] font-bold text-slate-400 uppercase tracking-wider font-mono">Activos (RC)</span>
-              <span className="text-lg font-black text-amber-600 block mt-0.5">
-                {tickets.filter(t => (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING) && t.serviceType === ServiceType.REGISTRO).length}
-              </span>
-            </div>
-          </div>
-
-          <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
-            <span className="block text-[9px] uppercase tracking-wider font-extrabold text-slate-500 font-mono">
-              Trámites de Registro Civil en Cola:
+          {/* Service Volume Breakdown inside chosen office */}
+          <div className="space-y-3 text-left">
+            <span className="text-[9.5px] font-extrabold text-[#122e70] uppercase tracking-wider block font-sans">
+              Trámites de Registro Civil (MES)
             </span>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {REGISTRO_PROCEDURES.map(proc => {
-                const waitingForProc = tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO && t.procedure === proc.id).length;
-                const completedForProc = tickets.filter(t => t.status === TicketStatus.COMPLETED && t.serviceType === ServiceType.REGISTRO && t.procedure === proc.id).length;
-                
-                if (waitingForProc === 0 && completedForProc === 0) return null;
+
+            {/* Scrollable list of specific procedures matching screenshot */}
+            <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1 scrollbar-thin">
+              {REGISTRO_PROCEDURES.map((proc) => {
+                const count = rcProcedureCounts[proc.id] || 0;
+                const pct = filteredRegistroTickets.length > 0 
+                  ? Math.round((count / filteredRegistroTickets.length) * 100) 
+                  : 0;
 
                 return (
-                  <div key={proc.id} className="p-2 bg-white border border-slate-150 rounded-lg flex items-center justify-between text-xs">
-                    <div className="truncate max-w-[65%]">
-                      <span className="font-extrabold text-slate-800 block truncate uppercase text-[9px]">{proc.name}</span>
-                      <span className="text-[8px] text-slate-400 font-mono">ID: {proc.id}</span>
-                    </div>
-                    <div className="flex gap-1">
-                      <span className="px-1 py-0.5 bg-blue-50 text-[#122e70] font-mono font-bold text-[8.5px] rounded border border-blue-100" title="En Espera">
-                        {waitingForProc} E
+                  <div key={proc.id} className="space-y-1 bg-slate-50/60 border border-slate-100 p-2.5 rounded-xl hover:bg-slate-100/70 transition-all shadow-xxs">
+                    <div className="flex items-start justify-between gap-1.5 text-[9.5px]">
+                      <span className="font-extrabold uppercase text-slate-705 tracking-wide flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.5 bg-[#122e70]/10 text-[#122e70] font-black rounded text-[8px] shrink-0 font-mono">
+                          {proc.id}
+                        </span>
+                        <span className="truncate max-w-[180px]" title={proc.name}>
+                          {proc.name}
+                        </span>
                       </span>
-                      <span className="px-1 py-0.5 bg-emerald-50 text-emerald-800 font-mono font-bold text-[8.5px] rounded border border-emerald-100" title="Atendidos">
-                        {completedForProc} A
+                      <span className="font-mono font-black text-slate-800 shrink-0">
+                        {count} <span className="text-[8px] font-semibold text-slate-400">({pct}%)</span>
                       </span>
                     </div>
+
+                    {/* Progress relative bar */}
+                    <div className="h-1.5 w-full bg-slate-200/50 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-gradient-to-r from-blue-650 to-indigo-700 rounded-full transition-all duration-500"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-[8px] text-slate-400 block leading-none font-medium truncate font-sans">
+                      {proc.description}
+                    </span>
                   </div>
                 );
               })}
-              {tickets.filter(t => t.serviceType === ServiceType.REGISTRO).length === 0 && (
-                <div className="col-span-2 py-3 text-center text-[10px] text-slate-400 font-medium">
-                  No hay tickets de Registro Civil emitidos en la sesión actual.
+
+              {filteredRegistroTickets.length === 0 && (
+                <div className="text-center py-8 text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                  Sin tickets de Registro Civil
                 </div>
               )}
             </div>
           </div>
-        </div>
 
-        {/* --- MAP LAYOUT GRID SCHEMATIC --- */}
-        <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl space-y-1.5 shadow-sm">
-          <span className="block text-[8.5px] uppercase tracking-wider font-extrabold text-slate-500 flex items-center gap-1 font-mono">
-            <Layout className="w-3.5 h-3.5 text-[#122e70]" /> Monitoreo Óptico de Módulos:
-          </span>
-          
-          <div className="grid grid-cols-4 gap-1.5 text-center pt-1">
-            {cubicles.map((c) => {
-              const isIdle = c.status === "ONLINE_AVAILABLE";
-              const isBusy = c.status === "ATTENDING";
-              return (
-                <div key={c.id} className="p-1 px-1.5 font-sans rounded-lg border border-slate-150 text-[8px] bg-white flex flex-col justify-between h-14 shadow-xs">
-                  <span className="font-extrabold text-slate-800 block truncate">{c.name.split(" ")[0]}</span>
-                  
-                  <div className="flex justify-center my-0.5">
-                    <span className={`w-2.5 h-2.5 rounded-full border border-white ${isBusy ? "bg-[#122e70] animate-pulse" : isIdle ? "bg-emerald-500" : "bg-slate-300"}`} />
-                  </div>
-                  
-                  <span className="text-[7.5px] uppercase text-slate-400 truncate block font-bold">
-                    {isBusy ? "Activo" : isIdle ? "Libre" : "Fuera"}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+          {/* Specific local stats of the regional office */}
+          <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-3 text-center">
+            
+            <div className="bg-indigo-50/40 p-2.5 border border-indigo-100 rounded-xl">
+              <span className="block text-[8px] font-black text-indigo-500 uppercase tracking-wider font-sans">
+                T. Medio Espera
+              </span>
+              <p className="text-sm font-black text-indigo-950 font-mono mt-0.5">
+                {rcAvgWaitTime} <span className="text-[10px] font-semibold text-slate-550 font-sans">mins</span>
+              </p>
+            </div>
 
-        {/* --- PERFORMANCE GEARS & SYSTEM OPTIMIZER --- */}
-        <div id="system-optimization-suite" className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h4 className="text-[10px] font-black text-slate-700 uppercase tracking-widest flex items-center gap-1.5 font-mono">
-              <Cpu className="w-4 h-4 text-indigo-650" />
-              Optimización y Ajustes de Rendimiento
-            </h4>
-            <span className="text-[8px] bg-indigo-50 border border-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded font-black font-mono">
-              SUITE OPTIMUS
-            </span>
+            <div className="bg-emerald-50/40 p-2.5 border border-emerald-100 rounded-xl">
+              <span className="block text-[8px] font-black text-emerald-500 uppercase tracking-wider font-sans">
+                T. de Atención
+              </span>
+              <p className="text-sm font-black text-[#122e70] font-mono mt-0.5">
+                {rcAvgServiceTime} <span className="text-[10px] font-semibold text-slate-550 font-sans">mins</span>
+              </p>
+            </div>
           </div>
 
-          <p className="text-[10px] font-medium text-slate-550 leading-relaxed font-sans">
-            Ajuste el timbre de los altavoces, limpie registros viejos de memoria local y configure recursos de visualización óptimos.
-          </p>
-
-          <div className="space-y-3 pt-1">
-            {/* 1. TTS CONFIGURATOR (SLIDERS) */}
-            <div className="bg-white border border-slate-200 p-3 rounded-lg space-y-2.5 shadow-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase text-slate-700 tracking-wider flex items-center gap-1">
-                  <Volume2 className="w-3.5 h-3.5 text-indigo-650" />
-                  Sintonizador de Voces (TTS)
-                </span>
-                
-                {/* Voice Selection Toggle */}
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setTtsVoicePref("female")}
-                    className={`px-1.5 py-0.5 text-[8px] font-extrabold uppercase rounded transition-all cursor-pointer ${
-                      ttsVoicePref === "female"
-                        ? "bg-indigo-600 text-white shadow-xs"
-                        : "bg-slate-100 text-slate-550 hover:bg-slate-150"
-                    }`}
-                  >
-                    Fm
-                  </button>
-                  <button
-                    onClick={() => setTtsVoicePref("male")}
-                    className={`px-1.5 py-0.5 text-[8px] font-extrabold uppercase rounded transition-all cursor-pointer ${
-                      ttsVoicePref === "male"
-                        ? "bg-indigo-600 text-white shadow-xs"
-                        : "bg-slate-100 text-slate-550 hover:bg-slate-150"
-                    }`}
-                  >
-                    Ms
-                  </button>
-                </div>
-              </div>
-
-              {/* TTS Speed Rate Slider */}
-              <div className="space-y-1">
-                <div className="flex justify-between text-[8px] font-bold text-slate-550 font-mono">
-                  <span>VELOCIDAD DE VOZ</span>
-                  <span className="text-indigo-650 font-black">{ttsRate.toFixed(2)}x</span>
-                </div>
-                <input
-                  type="range"
-                  min={0.6}
-                  max={1.5}
-                  step={0.05}
-                  value={ttsRate}
-                  onChange={(e) => setTtsRate(parseFloat(e.target.value))}
-                  className="w-full h-1 bg-slate-150 rounded-lg appearance-none cursor-pointer accent-indigo-650"
-                  title="Configura la velocidad a la que habla el sintetizador de voz"
-                />
-              </div>
-
-              {/* TTS Pitch Tone Slider */}
-              <div className="space-y-1">
-                <div className="flex justify-between text-[8px] font-bold text-slate-550 font-mono">
-                  <span>TONALIDAD / AGUDEZA (PITCH)</span>
-                  <span className="text-indigo-650 font-black">{ttsPitch.toFixed(2)}</span>
-                </div>
-                <input
-                  type="range"
-                  min={0.5}
-                  max={2.0}
-                  step={0.05}
-                  value={ttsPitch}
-                  onChange={(e) => setTtsPitch(parseFloat(e.target.value))}
-                  className="w-full h-1 bg-slate-150 rounded-lg appearance-none cursor-pointer accent-indigo-650"
-                  title="Fija la agudeza o gravedad de la modulación hablada"
-                />
-              </div>
-
-              {/* TTS Test Trigger button */}
-              <button
-                onClick={handleTestTtsLocal}
-                className="w-full py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-150 text-indigo-750 font-extrabold text-[9px] uppercase tracking-wider rounded transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1"
-                title="Reproduce un arpegio y dicta un código de prueba para validar el volumen del navegador"
-              >
-                <SlidersHorizontal className="w-3 h-3 text-indigo-700 animate-spin-slow" />
-                Probar Altavoz Sintetizado
-              </button>
-            </div>
-
-            {/* 2. MEMORY CLEANER BUTTON */}
-            <div className="bg-white border border-slate-200 p-3 rounded-lg flex items-center justify-between shadow-xs">
-              <div className="space-y-0.5 max-w-[170px]">
-                <span className="block text-[9px] font-black uppercase text-slate-700 tracking-wider">
-                  Purgador de Memoria
-                </span>
-                <p className="text-[8px] font-medium text-slate-400 leading-tight">
-                  Mantenga colas rápidas eliminando tickets antiguos resueltos de la memoria local.
-                </p>
-              </div>
-
-              <button
-                onClick={handleTriggerPurge}
-                className={`py-2 px-3 text-[9px] font-black uppercase rounded-lg transition-all cursor-pointer border flex items-center gap-1 ${
-                  purgeSuccess
-                    ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-                    : "bg-[#122e70] hover:bg-indigo-800 border-[#122e70] text-white shadow-xs"
-                }`}
-                title="Purga y limpia los turnos inactivos e históricos liberando recursos de la memoria de React"
-              >
-                {purgeSuccess ? (
-                  <>
-                    <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                    ¡LIMPIO!
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-3 h-3 text-white" />
-                    PURGAR
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* 3. LIMITE HISTORIAL / PAGING TOGGLE */}
-            <div className="bg-white border border-slate-200 p-3 rounded-lg flex items-center justify-between shadow-xs">
-              <div className="space-y-0.5 max-w-[190px]">
-                <span className="block text-[9px] font-black uppercase text-slate-700 tracking-wider font-sans">
-                  Páginación de Turnos (Historial)
-                </span>
-                <p className="text-[8px] font-medium text-slate-400 leading-tight font-sans">
-                  Limita la TV de la sala de espera a mostrar solo los 10 turnos completados más recientes.
-                </p>
-              </div>
-
-              <div className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={limitHistory}
-                  onChange={(e) => setLimitHistory(e.target.checked)}
-                  className="sr-only peer"
-                  id="toggle-limit-history"
-                />
-                <label
-                  htmlFor="toggle-limit-history"
-                  className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-indigo-650 cursor-pointer"
-                ></label>
-              </div>
-            </div>
-
-            {/* 4. ECO-MODE SCREEN BURN-IN TOGGLE */}
-            <div className="bg-white border border-slate-200 p-3 rounded-lg flex items-center justify-between shadow-xs">
-              <div className="space-y-0.5 max-w-[190px]">
-                <span className="text-[9px] font-black uppercase text-slate-705 tracking-wider flex items-center gap-1 font-sans">
-                  <SunDim className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
-                  Protección de Pantalla (Modo Eco)
-                </span>
-                <p className="text-[8px] font-medium text-slate-404 leading-tight font-sans">
-                  Evita que las pantallas estáticas LED de recepción sufran quemado visual atenuando automáticamente el panel principal si la sala está inactiva.
-                </p>
-              </div>
-
-              <div className="relative inline-flex items-center cursor-pointer font-bold">
-                <input
-                  type="checkbox"
-                  checked={ecoMode}
-                  onChange={(e) => setEcoMode(e.target.checked)}
-                  className="sr-only peer"
-                  id="toggle-eco-mode"
-                />
-                <label
-                  htmlFor="toggle-eco-mode"
-                  className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-emerald-500 cursor-pointer"
-                ></label>
-              </div>
+          {/* Interactive info warning banner matches screenshot */}
+          <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl flex items-start gap-2 text-left">
+            <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <span className="block text-[8.5px] font-black text-amber-850 uppercase tracking-wide">
+                Auditoría en Línea Autorizada
+              </span>
+              <p className="text-[8px] leading-normal font-semibold text-amber-700 font-sans">
+                Los datos de Registro Civil visualizados en este inspector se recalculan en tiempo de ejecución para auditar la eficiencia operacional de esta oficina regional.
+              </p>
             </div>
           </div>
         </div>
@@ -1222,277 +785,10 @@ export default function ControlDashboard({
               <Download className="w-3.5 h-3.5 text-blue-700" />
               <span>Mensual</span>
             </button>
-          </div>
-        </div>
-
-        {/* --- CENTRO DE GESTIÓN DE BASE DE DATOS LOCAL --- */}
-        <div id="local-relational-database-suite" className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h4 className="text-[10px] font-black text-slate-800 uppercase tracking-widest flex items-center gap-1.5 font-mono">
-              <Database className="w-4 h-4 text-emerald-600" />
-              Base de Datos Local e Integridad
-            </h4>
-            <span className="text-[8px] bg-emerald-50 border border-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-black font-mono">
-              ESTADO SOLIDO rIDB
-            </span>
-          </div>
-
-          <p className="text-[10px] font-medium text-slate-550 leading-relaxed font-sans">
-            Consola administrativa para el motor de almacenamiento persistente local. Administra el volumen transaccional de las 16 oficinas regionales.
-          </p>
-
-          {/* Database Info Dashboard Layout */}
-          <div className="grid grid-cols-2 gap-2 text-[10px]">
-            <div className="bg-white border border-slate-150 p-2.5 rounded-lg font-sans shadow-xs">
-              <span className="text-[7.5px] uppercase font-bold text-slate-400 block tracking-wider">TAMAÑO ALMACÉN</span>
-              <span className="text-xs font-black text-slate-800 block mt-0.5 font-mono">{calculateDbSizeKB()}</span>
-            </div>
-            
-            <div className="bg-white border border-slate-150 p-2.5 rounded-lg font-sans shadow-xs">
-              <span className="text-[7.5px] uppercase font-bold text-slate-400 block tracking-wider">VERSIÓN MOTOR</span>
-              <span className="text-xs font-black text-blue-900 block mt-0.5 font-mono">{dbVersion}</span>
-            </div>
-
-            <div className="bg-white border border-slate-150 p-2.5 rounded-lg font-sans shadow-xs">
-              <span className="text-[7.5px] uppercase font-bold text-slate-400 block tracking-wider font-sans">TABLA tb_tickets</span>
-              <span className="text-xs font-black text-slate-850 block mt-0.5 font-mono">{totalDbTickets} filas</span>
-            </div>
-
-            <div className="bg-white border border-slate-150 p-2.5 rounded-lg font-sans shadow-xs">
-              <span className="text-[7.5px] uppercase font-bold text-slate-400 block tracking-wider font-sans">TABLA tb_cubicles</span>
-              <span className="text-xs font-black text-slate-850 block mt-0.5 font-mono">{totalDbCubicles} filas</span>
             </div>
           </div>
 
-          {/* Diagnostics feedback message lines */}
-          {(dbStatusMsg || importError) && (
-            <div className={`p-2 rounded-lg border text-[9.5px] font-mono flex flex-col gap-1 ${
-              importError 
-                ? "bg-rose-50 border-rose-250 text-rose-700 font-bold" 
-                : "bg-blue-50/70 border-blue-200 " + dbStatusColor
-            }`}>
-              <div className="flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-blue-700 shrink-0" />
-                <span>{dbStatusMsg}</span>
-              </div>
-              {importError && <p className="text-[8px] text-rose-650 mt-0.5 font-mono">Error: {importError}</p>}
-            </div>
-          )}
 
-          {/* Active Database Action Tools */}
-          <div className="space-y-2 pt-1">
-            {/* Download/Export & Import Hidden Inputs */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                id="btn-export-database"
-                onClick={handleExportDatabase}
-                disabled={dbChecking}
-                className="py-2.5 px-2 bg-slate-900 text-white hover:bg-slate-800 rounded-lg text-center font-bold text-[9px] uppercase tracking-wider transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
-                title="Exporta un archivo JSON consolidado con el estado total de la base de datos nacional."
-              >
-                <FileJson className="w-3.5 h-3.5 text-emerald-450" />
-                <span>Exportar JSON</span>
-              </button>
-
-              <button
-                type="button"
-                id="btn-import-database-trigger"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={dbChecking}
-                className="py-2.5 px-2 bg-white hover:bg-slate-100 text-slate-850 border border-slate-250 rounded-lg text-center font-black text-[9px] uppercase tracking-wider transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1.5 align-middle"
-                title="Carga una copia de seguridad JSON válida para reestablecer todo el estado operativo."
-              >
-                <Upload className="w-3.5 h-3.5 text-blue-700" />
-                <span>Restaurar Db</span>
-              </button>
-            </div>
-
-            {/* Hidden native input file resolver */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleImportDatabase}
-              accept=".json"
-              className="hidden"
-            />
-
-            {/* Vacuum Index defrag & Integrity Check buttons */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                id="btn-vacuum-database"
-                onClick={handleVacuumDatabase}
-                disabled={dbChecking}
-                className="py-2 px-1 text-[8.5px] border border-slate-200 hover:border-amber-300 text-slate-650 hover:bg-amber-50 rounded-lg transition-all cursor-pointer font-bold uppercase tracking-wider flex items-center justify-center gap-1.5"
-                title="Optimiza y reorganiza el espacio, compactando las cadenas de textos almacenadas."
-              >
-                <RefreshCw className={`w-3 h-3 text-amber-600 ${dbChecking ? "animate-spin" : ""}`} />
-                <span>Optimizar (Vacuum)</span>
-              </button>
-
-              <button
-                type="button"
-                id="btn-integrity-check"
-                onClick={handleSchemaIntegrityCheck}
-                disabled={dbChecking}
-                className="py-2 px-1 text-[8.5px] border border-slate-200 hover:border-indigo-300 text-slate-650 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer font-bold uppercase tracking-wider flex items-center justify-center gap-1.5"
-                title="Chequea la consistencia lógica de las tablas evitando registros truncados u huérfanos."
-              >
-                <ShieldCheck className="w-3.5 h-3.5 text-indigo-750" />
-                <span>Chequear Schema</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* --- CENTRO DE CONEXIÓN Y SINCRONIZACIÓN SUPABASE CLOUD --- */}
-        <div id="supabase-cloud-integration-suite" className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h4 className="text-[10px] font-black text-slate-800 uppercase tracking-widest flex items-center gap-1.5 font-mono">
-              <Cloud className="w-4 h-4 text-sky-600" />
-              Conexión Supabase Postgres
-            </h4>
-            
-            {/* Sync status pill indicator with colors */}
-            <span className={`text-[8px] border px-1.5 py-0.5 rounded font-black font-mono flex items-center gap-1 ${
-              supabaseSyncStatus === "success" 
-                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                : supabaseSyncStatus === "syncing"
-                ? "bg-amber-50 border-amber-200 text-amber-800 animate-pulse"
-                : supabaseSyncStatus === "error"
-                ? "bg-rose-50 border-rose-200 text-rose-800"
-                : "bg-slate-100 border-slate-250 text-slate-500"
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${
-                supabaseSyncStatus === "success" 
-                  ? "bg-emerald-600"
-                  : supabaseSyncStatus === "syncing"
-                  ? "bg-amber-500"
-                  : supabaseSyncStatus === "error"
-                  ? "bg-rose-600"
-                  : "bg-slate-400"
-              }`} />
-              {supabaseSyncStatus === "success" && "CLOUD CONECTADO"}
-              {supabaseSyncStatus === "syncing" && "SINCRONIZANDO"}
-              {supabaseSyncStatus === "error" && "ERROR ENLACE"}
-              {supabaseSyncStatus === "offline" && "SIN CONFIGURAR"}
-              {supabaseSyncStatus === "idle" && "CONECTADO"}
-            </span>
-          </div>
-
-          <p className="text-[10px] font-medium text-slate-550 leading-relaxed font-sans">
-            Guarda en la nube las colas transaccionales y los cubículos. Soporta múltiples sucursales compartiendo colas en tiempo real.
-          </p>
-
-          {/* Setup Credentials Input Area */}
-          <div className="space-y-2 bg-white border border-slate-150 p-3 rounded-lg shadow-xs">
-            <div>
-              <label className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block mb-1">
-                Supabase URL (VITE_SUPABASE_URL)
-              </label>
-              <input
-                type="text"
-                placeholder="https://your-project.supabase.co"
-                value={supabaseUrl}
-                onChange={(e) => setSupabaseUrl(e.target.value)}
-                className="w-full text-[10px] font-mono px-2 py-1.5 bg-slate-50 border border-slate-200 rounded focus:border-sky-500 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block mb-1">
-                API Key Anónima (VITE_SUPABASE_ANON_KEY)
-              </label>
-              <input
-                type="password"
-                placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                value={supabaseAnonKey}
-                onChange={(e) => setSupabaseAnonKey(e.target.value)}
-                className="w-full text-[10px] font-mono px-2 py-1.5 bg-slate-50 border border-slate-200 rounded focus:border-sky-500 focus:outline-none"
-              />
-            </div>
-
-            {configSuccess && (
-              <p className="text-[9px] text-emerald-600 font-bold font-mono">
-                ✔️ Credenciales actualizadas. Recargando núcleo...
-              </p>
-            )}
-
-            <button
-              type="button"
-              onClick={handleSaveSupabaseConfig}
-              className="w-full py-2 bg-sky-600 hover:bg-sky-700 text-white rounded font-extrabold text-[9px] uppercase tracking-wider transition-all cursor-pointer"
-            >
-              Guardar Credenciales y Relanzar
-            </button>
-          </div>
-
-          {/* Sync Operations and manual overrides */}
-          {supabaseSyncStatus !== "offline" && (
-            <div className="space-y-2">
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handleManualPull}
-                  disabled={isSyncingManual}
-                  className="py-2.5 px-2 bg-slate-900 text-white hover:bg-slate-800 rounded-lg text-center font-bold text-[9px] uppercase tracking-wider transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1"
-                  title="Descargar el estado remoto de este Tribunal Electoral e implantarlo localmente."
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isSyncingManual ? "animate-spin" : ""}`} />
-                  <span>Cargar Nube</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleManualPush}
-                  disabled={isSyncingManual}
-                  className="py-2.5 px-2 bg-white hover:bg-slate-100 text-slate-850 border border-slate-250 rounded-lg text-center font-black text-[9px] uppercase tracking-wider transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1"
-                  title="Subir inmediatamente el estado local a la fila Cloud de Supabase."
-                >
-                  <Cloud className="w-3.5 h-3.5 text-sky-600" />
-                  <span>Subir Nube</span>
-                </button>
-              </div>
-
-              {manualSyncMsg && (
-                <div className="p-2 bg-sky-50 border border-sky-150 rounded text-[9.5px] font-mono text-sky-800 text-center">
-                  {manualSyncMsg}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Accordion to Setup Supabase Table Script */}
-          <div className="pt-1 border-t border-slate-200">
-            <button
-              type="button"
-              onClick={() => setShowSqlSchema(!showSqlSchema)}
-              className="text-[8.5px] text-slate-500 hover:text-sky-700 font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-all"
-            >
-              <ExternalLink className="w-3 h-3 text-slate-400" />
-              {showSqlSchema ? "Ocultar Script SQL Postgres" : "Ver Script SQL Postgres"}
-            </button>
-            
-            {showSqlSchema && (
-              <div className="mt-2 space-y-1.5 animate-fadeIn">
-                <p className="text-[8.5px] text-slate-400 leading-relaxed">
-                  Crea e inicializa la tabla en el editor SQL de Supabase antes de conectar para evitar errores físicos:
-                </p>
-                <div className="bg-slate-900 rounded p-2 text-[8px] font-mono text-slate-300 relative overflow-x-auto max-h-[150px]">
-                  <button
-                    type="button"
-                    onClick={handleCopySql}
-                    className="absolute top-1 right-1 bg-slate-800 hover:bg-slate-700 text-slate-200 px-1.5 py-0.5 rounded text-[7.5px] font-bold uppercase cursor-pointer"
-                  >
-                    {sqlCopied ? "Copiado!" : "Copiar"}
-                  </button>
-                  <pre className="text-left select-all">{SUPABASE_SQL_SETUP_SCRIPT}</pre>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
 
         {/* SYSTEM HARD RESET FLUSH BUTTONS */}
         <div className="pt-3 border-t border-slate-100">
