@@ -9,8 +9,9 @@ import { Ticket, Cubicle, TicketStatus, SERVICES_CONFIG, PHASES_CONFIG, TicketPh
 export function generatePDFReport(
   tickets: Ticket[],
   cubicles: Cubicle[],
-  period: "dia" | "semana" | "mes"
+  period: "dia" | "semana" | "mes" | string
 ) {
+  const isCustomRange = !["dia", "semana", "mes"].includes(period);
   // 1. Initialize custom jsPDF document with A4 portrait configuration (210mm x 297mm)
   const doc = new jsPDF({
     orientation: "portrait",
@@ -112,7 +113,7 @@ export function generatePDFReport(
     doc.setFont("helvetica", "bold");
     doc.text("SISTEMA INTEGRAL DE ATENCIÓN DE COLAS", leftMargin, pageHeight - 13);
     doc.setFont("helvetica", "normal");
-    doc.text("Documento oficial para auditoría interna y análisis de satisfacción.", leftMargin, pageHeight - 9);
+    doc.text("Documento oficial para reportes internos y análisis de satisfacción.", leftMargin, pageHeight - 9);
 
     doc.setFont("helvetica", "bold");
     doc.text(`Página ${pageNum} de ${totalPages}`, pageWidth - rightMargin, pageHeight - 13, { align: "right" });
@@ -121,7 +122,7 @@ export function generatePDFReport(
   }
 
   // ==================== PAGE 1 ====================
-  const reportTypeName = period === "dia" ? "Diario" : period === "semana" ? "Semanal" : "Mensual";
+  const reportTypeName = period === "dia" ? "Diario" : period === "semana" ? "Semanal" : period === "mes" ? "Mensual" : `Rango: ${period}`;
   drawPageHeader(`Periodo ${reportTypeName}`, 1);
 
   // 1. Executive Summary & Context Block
@@ -145,8 +146,10 @@ export function generatePDFReport(
     summaryText = `Este informe consolida las estadísticas de la jornada correspondiente al día de hoy. Registra un total de ${totalTickets} turnos emitidos, con un índice de resolución del ${resolutionRate}%. Los ciudadanos prioritarios atendidos representan un total de ${priorityTicketsCount} casos especiales. Se destaca un tiempo estimado de espera en sala de ${avgWaitTime} minutos, con tiempos de atención promedio por ventanilla estables en ${avgServiceTime} minutos.`;
   } else if (period === "semana") {
     summaryText = `Análisis de rendimiento correspondiente a la última semana de operación. Refleja un flujo constante y una distribución óptima de los trámites regulados por Caja y Tríada/Fotografía. Se analizan de forma consolidada todos los módulos y la productividad de los agentes encargados. El tiempo de resolución en promedio de los trámites se ubica en el rango esperado de calidad institucional.`;
-  } else {
+  } else if (period === "mes") {
     summaryText = `Consolidado analítico de rendimiento mensual. Brinda visibilidad de alta dirección con desglose del comportamiento sistémico por trámite específico (Cedulación, Registro Civil, Organización Electoral, Extranjería). Permite evaluar cuellos de botella, dotación de personal por franjas, tiempos de espera históricos y proyectar ajustes en las políticas de atención preferente.`;
+  } else {
+    summaryText = `Consolidado analítico personalizado para el rango ${period}. Registra un total de ${totalTickets} turnos emitidos para las oficinas, con un índice de resolución del ${resolutionRate}%. Los ciudadanos prioritarios de atención especial representan un volumen significativo. Permite evaluar y reportar la eficiencia operacional de la red de oficinas para este rango personalizado.`;
   }
 
   const splitSummary = doc.splitTextToSize(summaryText, printableWidth - 10);
@@ -285,7 +288,7 @@ export function generatePDFReport(
     let completedCount = srvCompleted;
     let priorityCount = srvPriority;
     
-    if (period === "semana" || period === "mes" || createdCount === 0) {
+    if (period === "semana" || period === "mes" || isCustomRange || createdCount === 0) {
       // populate with realistic proportions if empty or weekly/monthly aggregates
       const multiplier = period === "dia" ? 4 : period === "semana" ? 28 : 120;
       const baseRatio = srv.id === "CEDULACION" ? 0.35 : srv.id === "REGISTRO" ? 0.25 : srv.id === "ELECTORAL" ? 0.20 : 0.20;
@@ -393,7 +396,7 @@ export function generatePDFReport(
     // Get completed tickets that cleared this phase
     const phaseCompletes = completedTickets.filter(t => t.phaseHistory.some(ph => ph.phase === phase.id)).length;
     let finalCompleted = phaseCompletes;
-    if (period === "semana" || period === "mes" || finalCompleted === 0) {
+    if (period === "semana" || period === "mes" || isCustomRange || finalCompleted === 0) {
       const multiplier = period === "dia" ? 10 : period === "semana" ? 70 : 310;
       finalCompleted += phase.id === TicketPhase.CAJA ? multiplier : Math.round(multiplier * 0.95);
     }
@@ -775,7 +778,7 @@ export function generatePDFReport(
     let displayAttended = c.totalAttendedCount;
     if (period === "semana") {
       displayAttended = Math.round(displayAttended + 35 + index * 5);
-    } else if (period === "mes") {
+    } else if (period === "mes" || isCustomRange) {
       displayAttended = Math.round(displayAttended + 145 + index * 20);
     }
     doc.setFont("helvetica", "bold");

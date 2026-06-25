@@ -104,6 +104,16 @@ export default function ControlDashboard({
   const [customHolidayDate, setCustomHolidayDate] = React.useState<string>("");
   const [scheduleSuccessMsg, setScheduleSuccessMsg] = React.useState<string>("");
 
+  // --- ESTADOS LOCALES PARA RANGO DE FECHAS DE REPORTES (DESDE / HASTA) ---
+  const [reportDateFrom, setReportDateFrom] = React.useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30); // 30 days ago by default
+    return d.toISOString().split("T")[0];
+  });
+  const [reportDateTo, setReportDateTo] = React.useState<string>(() => {
+    return new Date().toISOString().split("T")[0];
+  });
+
   React.useEffect(() => {
     setSchedule(getOfficeSchedule(currentOfficeId));
   }, [currentOfficeId]);
@@ -213,8 +223,8 @@ export default function ControlDashboard({
   }, [completedRegistroTickets]);
 
   return (
-    <div id="control-dashboard-panel" className="bg-white border border-slate-250 rounded-2xl p-6 flex flex-col justify-between h-full min-h-[580px] shadow-sm">
-      <div className="space-y-4">
+    <div id="control-dashboard-panel" className="max-w-6xl mx-auto w-full bg-white border border-slate-250 rounded-2xl p-6 flex flex-col justify-between h-full min-h-[580px] shadow-sm">
+      <div className="space-y-6">
         {/* Panel Header */}
         <div className="flex items-center justify-between border-b border-slate-100 pb-4">
           <div className="flex items-center gap-3">
@@ -223,15 +233,21 @@ export default function ControlDashboard({
             </div>
             <div>
               <h3 className="text-sm font-black uppercase tracking-wider text-slate-900 leading-tight">
-                Panel de Control
+                Panel de Control de Administración
               </h3>
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-0.5">Configuración Global</p>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-0.5">Gestión de Tráfico, Sede y Métricas</p>
             </div>
           </div>
           <span className="px-2 py-1 text-[8.5px] uppercase font-mono bg-slate-105 text-slate-700 rounded border border-slate-200 font-bold">
-            SISTEMA
+            SISTEMA ACTIVO
           </span>
         </div>
+
+        {/* Dynamic Bento Columns Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          
+          {/* COLUMNA IZQUIERDA: Configuración y Operación */}
+          <div className="space-y-5">
 
         {/* --- SIMULATED USER GENERATOR ENGINE --- */}
         <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3.5 shadow-sm">
@@ -577,6 +593,11 @@ export default function ControlDashboard({
           </div>
         </div>
 
+          </div> {/* Cierre de COLUMNA IZQUIERDA */}
+
+          {/* COLUMNA DERECHA: Métricas, Inspector de Registro Civil y Reportes */}
+          <div className="space-y-6">
+
         {/* --- STATS KPIs BENTO GRAPH --- */}
         <div className="grid grid-cols-2 gap-2">
           <div className="bg-white border border-slate-200 p-3 rounded-xl flex flex-col justify-between shadow-sm">
@@ -730,10 +751,10 @@ export default function ControlDashboard({
             <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
               <span className="block text-[8.5px] font-black text-amber-850 uppercase tracking-wide">
-                Auditoría en Línea Autorizada
+                Reportes en Línea Autorizados
               </span>
               <p className="text-[8px] leading-normal font-semibold text-amber-700 font-sans">
-                Los datos de Registro Civil visualizados en este inspector se recalculan en tiempo de ejecución para auditar la eficiencia operacional de esta oficina regional.
+                Los datos de Registro Civil visualizados en este inspector se recalculan en tiempo de ejecución para generar reportes sobre la eficiencia operacional de esta oficina regional.
               </p>
             </div>
           </div>
@@ -744,7 +765,7 @@ export default function ControlDashboard({
           <div className="flex items-center justify-between">
             <h4 className="text-[10px] font-black text-[#122e70] uppercase tracking-widest flex items-center gap-1.5 font-mono">
               <FileText className="w-4 h-4 text-[#122e70]" />
-              Auditoría e Informes de Gestión
+              Reportes e Informes de Gestión
             </h4>
             <span className="text-[8px] bg-blue-100 text-[#122e70] px-1.5 py-0.5 rounded font-black font-mono">
               PDF EXPORT
@@ -755,38 +776,57 @@ export default function ControlDashboard({
             Genere y descargue reportes oficiales en formato PDF con métricas del flujo continuo de ciudadanos, tiempos en sala de espera y eficiencias de los agentes.
           </p>
 
-          <div className="grid grid-cols-3 gap-2 pt-1">
-            <button
-              id="btn-report-dia"
-              onClick={() => generatePDFReport(tickets, cubicles, "dia")}
-              className="py-2.5 px-2 bg-white hover:bg-blue-50 border border-slate-250 hover:border-blue-300 text-slate-850 hover:text-[#122e70] rounded-lg font-black text-[9px] uppercase tracking-widest transition-all cursor-pointer shadow-sm flex flex-col items-center justify-center gap-1.5"
-              title="Generar informe detallado de la jornada de hoy"
-            >
-              <Download className="w-3.5 h-3.5 text-blue-700" />
-              <span>Día Actual</span>
-            </button>
-
-            <button
-              id="btn-report-semana"
-              onClick={() => generatePDFReport(tickets, cubicles, "semana")}
-              className="py-2.5 px-2 bg-white hover:bg-blue-50 border border-slate-250 hover:border-blue-300 text-slate-850 hover:text-[#122e70] rounded-lg font-black text-[9px] uppercase tracking-widest transition-all cursor-pointer shadow-sm flex flex-col items-center justify-center gap-1.5"
-              title="Generar consolidado de los últimos 7 días de operación"
-            >
-              <Download className="w-3.5 h-3.5 text-blue-700" />
-              <span>Semanal</span>
-            </button>
-
-            <button
-              id="btn-report-mes"
-              onClick={() => generatePDFReport(tickets, cubicles, "mes")}
-              className="py-2.5 px-2 bg-white hover:bg-blue-50 border border-slate-250 hover:border-blue-300 text-slate-850 hover:text-[#122e70] rounded-lg font-black text-[9px] uppercase tracking-widest transition-all cursor-pointer shadow-sm flex flex-col items-center justify-center gap-1.5"
-              title="Generar análisis completo del presente mes"
-            >
-              <Download className="w-3.5 h-3.5 text-blue-700" />
-              <span>Mensual</span>
-            </button>
+          {/* Date range inputs */}
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="flex flex-col gap-1 text-left">
+              <label htmlFor="report-from-date" className="text-[8.5px] font-black text-slate-500 uppercase tracking-wider font-sans">
+                Desde:
+              </label>
+              <input
+                id="report-from-date"
+                type="date"
+                value={reportDateFrom}
+                onChange={(e) => setReportDateFrom(e.target.value)}
+                className="w-full bg-white border border-slate-250 p-1.5 text-[11px] rounded-lg font-mono text-slate-800 focus:border-[#122e70] outline-none"
+              />
+            </div>
+            <div className="flex flex-col gap-1 text-left">
+              <label htmlFor="report-to-date" className="text-[8.5px] font-black text-slate-500 uppercase tracking-wider font-sans">
+                Hasta:
+              </label>
+              <input
+                id="report-to-date"
+                type="date"
+                value={reportDateTo}
+                onChange={(e) => setReportDateTo(e.target.value)}
+                className="w-full bg-white border border-slate-250 p-1.5 text-[11px] rounded-lg font-mono text-slate-800 focus:border-[#122e70] outline-none"
+              />
             </div>
           </div>
+
+          {/* Action button */}
+          <button
+            id="btn-report-custom-range"
+            onClick={() => {
+              // Convert dates from YYYY-MM-DD to DD/MM/YYYY for presentation
+              const formatDate = (ds: string) => {
+                if (!ds) return "";
+                const parts = ds.split("-");
+                return `${parts[2]}/${parts[1]}/${parts[0]}`;
+              };
+              const periodStr = `Del ${formatDate(reportDateFrom)} al ${formatDate(reportDateTo)}`;
+              generatePDFReport(tickets, cubicles, periodStr);
+            }}
+            className="w-full py-2 px-3 bg-[#122e70] hover:bg-indigo-900 text-white rounded-lg font-black text-[9px] uppercase tracking-widest transition-all cursor-pointer shadow-sm flex items-center justify-center gap-1.5 mt-2"
+            title="Generar informe consolidado del rango de fechas seleccionado"
+          >
+            <Download className="w-3.5 h-3.5 text-white" />
+            <span>Generar Reporte de Gestión</span>
+          </button>
+        </div>
+
+          </div> {/* Cierre de COLUMNA DERECHA */}
+        </div> {/* Cierre de Grid Bento Columns */}
 
 
 

@@ -24,6 +24,54 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV">("general");
   const [layoutFocus, setLayoutFocus] = useState<"both" | "cubicles" | "queue" >("both");
+  const [isImmersiveFullscreen, setIsImmersiveFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFs = !!document.fullscreenElement;
+      if (!isFs) {
+        setIsImmersiveFullscreen(false);
+      }
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleImmersiveFullscreen = () => {
+    const element = document.getElementById("main-public-screen");
+    if (!element) return;
+
+    if (!isImmersiveFullscreen) {
+      setIsImmersiveFullscreen(true);
+      if (element.requestFullscreen) {
+        element.requestFullscreen().catch((err) => {
+          console.log("Error launching browser fullscreen, running in-window immersive mode instead:", err);
+        });
+      }
+    } else {
+      setIsImmersiveFullscreen(false);
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch((err) => {
+          console.log("Error exiting browser fullscreen:", err);
+        });
+      }
+    }
+  };
+
+  const launchFullscreenForChannel = (channel: "OR" | "OHV") => {
+    setSelectedChannel(channel);
+    setIsImmersiveFullscreen(true);
+    setTimeout(() => {
+      const element = document.getElementById("main-public-screen");
+      if (element && element.requestFullscreen) {
+        element.requestFullscreen().catch((err) => {
+          console.log("Error launching browser fullscreen, running in-window immersive mode instead:", err);
+        });
+      }
+    }, 50);
+  };
 
   const [ecoModeActive, setEcoModeActive] = useState<boolean>(() => {
     return localStorage.getItem("eco_mode_active") === "true";
@@ -209,6 +257,26 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 </button>
               </div>
 
+              {/* Botones de Pantalla Completa solicitados al lado de Probar Voz */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => launchFullscreenForChannel("OR")}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
+                  title="📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)"
+                >
+                  <Tv className="w-3.5 h-3.5 text-white" />
+                  <span>📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)</span>
+                </button>
+                <button
+                  onClick={() => launchFullscreenForChannel("OHV")}
+                  className="px-3 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
+                  title="📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)"
+                >
+                  <Tv className="w-3.5 h-3.5 text-slate-950" />
+                  <span>📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)</span>
+                </button>
+              </div>
+
               {/* Digital Clock Badge in Light Mode */}
               <div className="text-right pr-1 select-none text-slate-900">
                 <p className="text-3.5xl font-sans font-semibold tracking-normal leading-none">
@@ -275,6 +343,26 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                   title={soundEnabled ? "Silenciar" : "Activar sonido"}
                 >
                   {soundEnabled ? <Volume2 className="w-3.5 h-3.5 animate-pulse text-[#00aaff]" /> : <VolumeX className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+
+              {/* Botones de Pantalla Completa solicitados al lado de Probar Voz */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => launchFullscreenForChannel("OR")}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
+                  title="📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)"
+                >
+                  <Tv className="w-3.5 h-3.5 text-white" />
+                  <span>📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)</span>
+                </button>
+                <button
+                  onClick={() => launchFullscreenForChannel("OHV")}
+                  className="px-3 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
+                  title="📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)"
+                >
+                  <Tv className="w-3.5 h-3.5 text-slate-950" />
+                  <span>📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)</span>
                 </button>
               </div>
 
@@ -899,9 +987,22 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                             : PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()
                       })
                     </span>
-                    <span className={`text-xs font-mono font-extrabold ${
-                      isTriadaChannel ? "text-slate-500" : "text-sky-305/70"
-                    }`}>TOTAL: {filteredWaiting.length} TURNOS EN FILA</span>
+                    <div className="flex items-center gap-3 shrink-0">
+                      {(selectedChannel === "OR" || selectedChannel === "OHV") && (
+                        <button
+                          id="btn-trigger-fullscreen"
+                          onClick={toggleImmersiveFullscreen}
+                          className="px-3 py-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-lg font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-blue-500/30 animate-pulse active:scale-95"
+                          title="Iniciar Pantalla Completa de Turnos"
+                        >
+                          <Tv className="w-3.5 h-3.5 text-white" />
+                          <span>🖥️ Pantalla Completa</span>
+                        </button>
+                      )}
+                      <span className={`text-xs font-mono font-extrabold ${
+                        isTriadaChannel ? "text-slate-500" : "text-sky-305/70"
+                      }`}>TOTAL: {filteredWaiting.length} TURNOS EN FILA</span>
+                    </div>
                   </div>
 
                   {filteredWaiting.length > 0 ? (
@@ -1014,6 +1115,302 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         </div>
 
       </div>
+
+      {/* IMMERSIVE FULL SCREEN OVERLAY FOR PUBLIC TV (OR / OHV DETAILED VIEW) */}
+      {isImmersiveFullscreen && (
+        <div className="absolute inset-0 z-50 bg-[#03122c] flex flex-col justify-between p-8 select-none overflow-hidden" style={{
+          backgroundImage: "radial-gradient(circle at 50% 30%, #0d295f 0%, #03122c 70%, #020918 105%)"
+        }}>
+          <AnimatePresence mode="wait">
+            {displayedActiveCall ? (
+              /* FLASHING IMMERSIVE CALL OUT */
+              <motion.div
+                key={displayedActiveCall.ticket.id}
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="bg-[#0b244c]/95 border-4 border-rose-500 rounded-3xl p-10 flex flex-col xl:flex-row items-center justify-between gap-8 h-full shadow-2xl relative overflow-hidden ring-8 ring-rose-500/10"
+              >
+                {/* Flashing sides */}
+                <div className="absolute top-0 bottom-0 left-0 w-4 bg-rose-600 animate-pulse" />
+                <div className="absolute top-0 bottom-0 right-0 w-4 bg-amber-400 animate-pulse" />
+
+                <div className="space-y-4 text-center xl:text-left flex-grow">
+                  <span className="px-5 py-2 text-sm font-mono tracking-widest font-black uppercase bg-rose-600 text-white rounded-md animate-bounce shadow-md inline-block">
+                    🛎️ TURNO LLAMADO
+                  </span>
+                  {displayedActiveCall.ticket.priority && (
+                    <span className="ml-3 px-3 py-2 text-sm font-black bg-amber-500 text-white rounded-md uppercase inline-flex items-center gap-1 shadow-md animate-pulse">
+                      <ShieldAlert className="w-4 h-4" /> PRIORITARIO
+                    </span>
+                  )}
+                  
+                  <h1 className="text-9xl md:text-[13rem] lg:text-[15rem] font-black tracking-widest text-white leading-none drop-shadow-[0_10px_30px_rgba(255,255,255,0.3)] animate-pulse font-mono">
+                    {displayedActiveCall.ticket.numberCode}
+                  </h1>
+                  
+                  <p className="text-3xl md:text-5xl font-black text-blue-200 uppercase tracking-widest italic truncate max-w-[800px]">
+                    {displayedActiveCall.ticket.name}
+                  </p>
+                </div>
+
+                {/* Destination */}
+                <div className="flex flex-col items-center justify-center bg-white border-[10px] border-rose-600 px-12 py-10 rounded-3xl text-center min-w-[400px] lg:min-w-[550px] shadow-2xl text-slate-900">
+                  <span className="text-sm tracking-widest text-[#122e70] uppercase font-mono font-black">POR FAVOR DIRÍJASE AL</span>
+                  <p className="text-6xl md:text-8xl font-black text-[#122e70] mt-3 uppercase font-mono tracking-wide animate-pulse">
+                    {displayedActiveCall.cubicle.name.toUpperCase()}
+                  </p>
+                  <div className="h-1.5 w-32 bg-rose-600 my-4 rounded-full animate-pulse" />
+                  <p className="text-xs text-slate-500 font-mono uppercase tracking-widest font-black">
+                    📢 ATENDIDO POR AGENTE: <span className="text-slate-800">{displayedActiveCall.cubicle.agentName.toUpperCase()}</span>
+                  </p>
+                </div>
+              </motion.div>
+            ) : (
+              /* FULL LAYOUT matching exactly user request (only the filtered modules + filtered waiting) */
+              <motion.div
+                key="grid-turns"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="h-full flex flex-col justify-between"
+              >
+                {/* Header Banner - exactly matching the screenshot style */}
+                <div className="border border-white/5 rounded-2xl p-6 bg-[#041a3e]/85 flex flex-col lg:flex-row items-center justify-between gap-6 text-left relative overflow-hidden transition-all duration-300">
+                  <div className="space-y-1.5 relative z-10 flex-grow">
+                    <span className="px-3 py-1 text-[11px] font-mono tracking-widest bg-sky-955/70 text-[#00aaff] border border-sky-800/40 rounded-md font-black uppercase inline-block">
+                      {selectedChannel === "OR" ? "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OR" : "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OHV"}
+                    </span>
+                    <h2 className="text-3xl font-black uppercase tracking-widest leading-tight text-white mt-1">
+                      Turnos Pendientes de Atención
+                    </h2>
+                    <p className="text-xs text-sky-200/70 max-w-3xl leading-relaxed font-semibold">
+                      {selectedChannel === "OR" 
+                        ? "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Recepción (OR) - Cubículos 2 al 8."
+                        : "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Hechos Vitales (OHV) - Cubículos 16 al 20."}
+                    </p>
+                  </div>
+                  
+                  <div className="flex items-center gap-4 shrink-0 z-10">
+                    {/* Clock */}
+                    <div className="text-right mr-2">
+                      <p className="text-2xl font-sans font-black text-white/95 leading-none">
+                        {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </p>
+                      <p className="text-[9px] text-sky-405 font-mono tracking-widest uppercase font-black mt-1">
+                        {currentTime.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }).toUpperCase()}
+                      </p>
+                    </div>
+
+                    {/* Speaker Controls */}
+                    <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-xl font-mono text-[10px] shadow-sm">
+                      <button
+                        id="btn-fs-test-voice"
+                        onClick={onTestSpeaker}
+                        className="text-[#00aaff] hover:text-sky-305 font-extrabold uppercase cursor-pointer transition-colors"
+                      >
+                        VOZ
+                      </button>
+                      <div className="h-3 w-[1px] bg-white/15" />
+                      <button
+                        id="btn-fs-toggle-sound"
+                        onClick={() => setSoundEnabled(!soundEnabled)}
+                        className={`p-0.5 hover:bg-white/5 rounded transition-colors cursor-pointer ${soundEnabled ? 'text-[#00aaff]' : 'text-slate-400'}`}
+                      >
+                        {soundEnabled ? <Volume2 className="w-3.5 h-3.5 animate-pulse text-[#00aaff]" /> : <VolumeX className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+
+                    {/* Total Waiting Card */}
+                    <div className="px-5 py-3 border border-sky-850/50 bg-[#061e47] text-white rounded-xl flex items-center gap-3 shadow-sm select-none">
+                      <Users className="w-6 h-6 animate-pulse text-[#00aaff]" />
+                      <div className="text-left font-mono">
+                        <span className="block text-2xl font-black leading-none">{filteredWaiting.length}</span>
+                        <span className="text-[8px] font-mono tracking-widest font-black block mt-1 text-sky-305">EN ESPERA</span>
+                      </div>
+                    </div>
+
+                    {/* Exit Button */}
+                    <button
+                      onClick={toggleImmersiveFullscreen}
+                      className="px-4 py-3 bg-rose-600 hover:bg-rose-700 text-white font-mono text-xs font-black uppercase rounded-xl transition-all shadow-lg hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1"
+                      title="Salir de pantalla completa"
+                    >
+                      <span>✕ Salir</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Body: Dual Grid matching exactly layout from screenshot */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-6 flex-grow overflow-hidden">
+                  {/* COLUMN LEFT: Filtered Cubicles List */}
+                  <div className="lg:col-span-7 flex flex-col min-h-0 text-left">
+                    <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-3">
+                      <span className="text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 text-sky-400">
+                        <UserCheck className="w-5 h-5 text-[#00aaff]" />
+                        MÓDULOS DE ATENCIÓN {selectedChannel === "OR" ? "(FILTRADOS: OFICIAL DE RECEPCIÓN OR)" : "(FILTRADOS: HECHOS VITALES OHV)"}
+                      </span>
+                      <span className="text-xs font-mono tracking-wider font-bold uppercase text-sky-300/60">
+                        {filteredCubicles.length} EN SERVICIO
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 overflow-y-auto pr-1 flex-grow max-h-[50vh] scrollbar-thin scrollbar-thumb-blue-900/50">
+                      {filteredCubicles.map((cubicle) => {
+                        const currentTicket = tickets.find(t => t.id === cubicle.currentTicketId);
+                        const isFree = cubicle.status === "ONLINE_AVAILABLE";
+                        const isBreak = cubicle.status === "BREAK";
+                        const isAttending = cubicle.status === "ATTENDING";
+                        const cajaNumber = cubicle.name.replace(/\D/g, '') || cubicle.name;
+
+                        let mainText = "DISPONIBLE";
+                        let textStyle = "text-[#00d0ff]/70 font-semibold";
+
+                        if (isAttending && currentTicket) {
+                          mainText = currentTicket.name && currentTicket.name.trim() !== ""
+                            ? currentTicket.name
+                            : currentTicket.numberCode;
+                          textStyle = "text-white font-black";
+                        } else if (isBreak) {
+                          mainText = "EN RECESO";
+                          textStyle = "text-amber-400 font-bold";
+                        } else if (cubicle.status === "OFFLINE") {
+                          mainText = "MÓDULO INACTIVO";
+                          textStyle = "text-slate-450 font-semibold opacity-40";
+                        }
+
+                        return (
+                          <div
+                            key={cubicle.id}
+                            className={`relative p-5 rounded-[22px] bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9] flex flex-col justify-center min-h-[92px] shadow-[0_5px_15px_rgba(0,0,0,0.25)] ${
+                              isAttending ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]" : ""
+                            }`}
+                          >
+                            {isAttending && (
+                              <div className="absolute inset-0 bg-blue-400/5 animate-pulse rounded-[22px]" />
+                            )}
+                            <div className="flex items-center w-full truncate">
+                              <span className="text-[#00d0ff] text-base mr-2 font-sans select-none">▶</span>
+                              <span className={`uppercase font-sans tracking-wide text-sm md:text-base leading-tight truncate ${textStyle}`}>
+                                {mainText}
+                              </span>
+                            </div>
+
+                            <div className="mt-2.5 flex items-center">
+                              <div className="inline-flex items-center gap-1.5 px-5 py-0.5 bg-[#0081f9] rounded-full text-white font-black text-xs md:text-sm tracking-wider shadow-[inset_0_2px_4px_rgba(0,0,0,0.15)] ml-5">
+                                <span className="text-[#aae3ff] text-[10px] leading-none select-none font-sans">▶</span>
+                                <span>{cajaNumber}</span>
+                              </div>
+                              {isFree && (
+                                <span className="ml-2.5 text-[8.5px] uppercase font-mono tracking-widest text-[#00d0ff]/65 font-bold animate-pulse">
+                                  ★ LIBRE
+                                </span>
+                              )}
+                              {isBreak && (
+                                <span className="ml-2.5 text-[8.5px] uppercase font-mono tracking-widest text-amber-400/65 font-bold">
+                                  ★ REC
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* COLUMN RIGHT: Filtered Waiting List */}
+                  <div className="lg:col-span-5 flex flex-col min-h-0 text-left">
+                    <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-3">
+                      <span className="text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 text-sky-400">
+                        <Users className="w-5 h-5 text-[#00aaff]" />
+                        COLA DE ESPERA EN EXCLUSIVA ({selectedChannel === "OR" ? "OFICIAL DE RECEPCIÓN OR" : "OFICIAL DE HECHOS VITALES OHV"})
+                      </span>
+                      <span className="text-xs font-mono font-extrabold text-sky-305/70">
+                        TOTAL: {filteredWaiting.length} TURNOS EN FILA
+                      </span>
+                    </div>
+
+                    <div className="flex-grow overflow-y-auto max-h-[50vh] pr-1">
+                      {filteredWaiting.length > 0 ? (
+                        <div className="grid grid-cols-2 gap-3.5">
+                          {filteredWaiting.map((ticket, index) => {
+                            const styleConfig = SERVICES_CONFIG[ticket.serviceType];
+                            return (
+                              <div
+                                key={ticket.id}
+                                className={`p-4 rounded-2xl flex items-center justify-between border transition-all ${
+                                  ticket.priority
+                                    ? "bg-amber-500/10 border-amber-500/40 text-amber-250 shadow-md"
+                                    : (ticket.isAppointment && gatewaySelection !== "registro_civil")
+                                      ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-200 shadow-md animate-pulse"
+                                      : "bg-[#051c44]/80 border-blue-900/50 text-white hover:border-blue-700/60 shadow-md"
+                                }`}
+                              >
+                                <div className="space-y-1 truncate max-w-[150px] text-left">
+                                  <span className="text-[9px] font-mono font-black block leading-none text-[#00d0ff]/50">
+                                    ORDEN #{index+1}{(ticket.isAppointment && gatewaySelection !== "registro_civil") && " • 📅 CITA PREVIA"}
+                                  </span>
+                                  <h5 className="font-black tracking-wider uppercase truncate text-xs text-white">
+                                    {ticket.name}
+                                  </h5>
+                                </div>
+                                
+                                <div className="flex flex-col items-end gap-1 font-mono">
+                                  <span className="font-black leading-none text-[#00aaff] text-lg">
+                                    {ticket.numberCode}
+                                  </span>
+                                  <span className={`text-[9px] px-2 py-0.5 font-black uppercase text-center rounded ${styleConfig.color}`}>
+                                    {styleConfig.prefix}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="h-[250px] border border-dashed border-white/10 rounded-xl bg-slate-950/20 flex flex-col items-center justify-center p-6 text-center backdrop-blur shadow-sm">
+                          <p className="text-sm uppercase tracking-widest font-black text-sky-455">No hay Turnos en Fila</p>
+                          <p className="text-xs text-slate-400 mt-2 uppercase tracking-wide max-w-sm leading-relaxed font-bold">
+                            Los turnos pasarán automáticamente a esta pantalla tan pronto se completen de Caja
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bottom Recent Attention History */}
+                <div className="pt-4 border-t border-white/10 flex items-center justify-between text-xs text-sky-400/50 font-bold font-mono">
+                  <div className="flex items-center gap-3 w-full">
+                    <span className="text-[10px] font-black min-w-max uppercase font-mono tracking-widest text-sky-305/45 font-bold">
+                      📢 ÚLTIMAS ATENCIONES REALIZADAS:
+                    </span>
+                    {recentHistory.length > 0 ? (
+                      <div className="flex items-center gap-3 overflow-x-auto py-1.5 scrollbar-none w-full">
+                        {recentHistory.map((h) => (
+                          <span
+                            key={h.id}
+                            className={`px-3 py-1 text-xs font-mono rounded-lg font-bold flex items-center gap-1.5 shrink-0 border ${
+                              h.status === TicketStatus.COMPLETED 
+                                ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30 shadow-sm"
+                                : "bg-slate-900/50 text-slate-400 border-white/5"
+                            }`}
+                          >
+                            <span>{h.numberCode}</span>
+                            <span className="text-[10px] font-sans truncate max-w-[80px] uppercase font-bold text-slate-400">{h.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-[10px] font-sans tracking-widest font-black uppercase text-slate-500">SIN HISTORIAL RECIENTE</span>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
     </div>
   );
 }

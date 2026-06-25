@@ -1155,7 +1155,7 @@ export default function SuperAdminConsole({
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-white/10 pb-4 relative z-10">
           <div className="space-y-1">
             <span className="text-[7.5px] tracking-[0.2em] font-black text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded px-2 py-0.5 uppercase block w-fit">
-              AUDITORÍA NACIONAL DE TRÁMITES
+              REPORTES NACIONALES DE TRÁMITES
             </span>
             <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2">
               <Building2 className="w-5 h-5 text-amber-400" />
@@ -1592,10 +1592,10 @@ export default function SuperAdminConsole({
             <ShieldCheck className="w-4.5 h-4.5 text-amber-600 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
               <span className="block text-[8.5px] font-black text-amber-850 uppercase tracking-wide">
-                Auditoría en Línea Autorizada
+                Reportes en Línea Autorizados
               </span>
               <p className="text-[8px] leading-normal font-medium text-amber-700 font-sans">
-                Los datos de Registro Civil visualizados en este inspector se recalculan en tiempo de ejecución para auditar la eficiencia operacional de esta oficina regional.
+                Los datos de Registro Civil visualizados en este inspector se recalculan en tiempo de ejecución para generar reportes sobre la eficiencia operacional de esta oficina regional.
               </p>
             </div>
           </div>
