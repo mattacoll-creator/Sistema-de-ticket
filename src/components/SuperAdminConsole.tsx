@@ -332,6 +332,78 @@ export default function SuperAdminConsole({
     };
   }, [officeTickets, selectedTimeframe]);
 
+  // Calculate and filter Registro Civil tickets per office based on timeframe
+  const officeRegistroMetrics = useMemo(() => {
+    const limitMs = getFilterLimitMs(selectedTimeframe);
+    
+    return OFFICES_CONFIG.map(office => {
+      const allOfficeTickets = officeTickets[office.id] || [];
+      
+      // Filter by timeframe and keep ONLY Registro Civil
+      const filteredTickets = allOfficeTickets.filter(t => t.createdAt >= limitMs && t.serviceType === ServiceType.REGISTRO);
+      const completed = filteredTickets.filter(t => t.status === TicketStatus.COMPLETED);
+      const missed = filteredTickets.filter(t => t.status === TicketStatus.MISSED);
+      const waiting = filteredTickets.filter(t => t.status === TicketStatus.WAITING);
+      
+      // Compute specific procedure counts (e.g., OR, OHV, RMAT, etc.)
+      const procedureCounts: Record<string, number> = {};
+      REGISTRO_PROCEDURES.forEach(p => {
+        procedureCounts[p.id] = 0;
+      });
+      
+      filteredTickets.forEach(t => {
+        if (t.procedure) {
+          if (procedureCounts[t.procedure] === undefined) {
+            procedureCounts[t.procedure] = 0;
+          }
+          procedureCounts[t.procedure]++;
+        }
+      });
+      
+      // Compute Average Wait & Service Times for Registro Civil in this office
+      let totalWaitMins = 0;
+      let totalServiceMins = 0;
+      let ratedTicketsCount = 0;
+      
+      completed.forEach(t => {
+        const wait = t.calledAt ? (t.calledAt - t.createdAt) / 1000 / 60 : 7;
+        const serv = (t.completedAt && t.calledAt) ? (t.completedAt - t.calledAt) / 1000 / 60 : 10;
+        
+        totalWaitMins += Math.max(0.5, wait);
+        totalServiceMins += Math.max(0.5, serv);
+        ratedTicketsCount++;
+      });
+      
+      const avgWait = ratedTicketsCount > 0 ? Math.round(totalWaitMins / ratedTicketsCount) : 8;
+      const avgService = ratedTicketsCount > 0 ? Math.round(totalServiceMins / ratedTicketsCount) : 11;
+      const resolutionRate = filteredTickets.length > 0 
+        ? Math.round((completed.length / filteredTickets.length) * 100) 
+        : 0;
+        
+      return {
+        ...office,
+        totalCount: filteredTickets.length,
+        completedCount: completed.length,
+        missedCount: missed.length,
+        waitingCount: waiting.length,
+        avgWaitTime: avgWait,
+        avgServiceTime: avgService,
+        resolutionRate,
+        procedureCounts
+      };
+    });
+  }, [officeTickets, selectedTimeframe]);
+
+  // Sort offices based on Registro Civil volume
+  const rankedRegistroOffices = useMemo(() => {
+    return [...officeRegistroMetrics].sort((a, b) => b.totalCount - a.totalCount);
+  }, [officeRegistroMetrics]);
+
+  // Selected Office Registro Civil drilldown detailed inspection
+  const selectedOfficeRegistroDetails = useMemo(() => {
+    return officeRegistroMetrics.find(o => o.id === selectedOfficeDetailId) || officeRegistroMetrics[0];
+  }, [officeRegistroMetrics, selectedOfficeDetailId]);
+
   // Selected Office drilldown detailed inspection
   const selectedOfficeDetails = useMemo(() => {
     return officeMetrics.find(o => o.id === selectedOfficeDetailId) || officeMetrics[0];
@@ -898,10 +970,10 @@ export default function SuperAdminConsole({
             <div className="space-y-0.5">
               <h3 className="text-xs font-black uppercase tracking-widest text-[#122e70] flex items-center gap-1.5">
                 <TrendingUp className="w-4 h-4 text-indigo-650" />
-                Tabla de Clasificación y Volumen
+                Tabla de Clasificación y Volumen (Registro Civil)
               </h3>
               <p className="text-[10px] font-medium text-slate-400 leading-normal font-sans">
-                Rango dinámico de sedes del Tribunal de Panamá con mayor flujo en oficina.
+                Rango dinámico de sedes del Tribunal de Panamá con mayor flujo en trámites de Registro Civil.
               </p>
             </div>
 
@@ -951,23 +1023,23 @@ export default function SuperAdminConsole({
           </div>
 
           {/* Graphical podium representing the top 3 high-performers */}
-          {rankedOffices[0] && rankedOffices[0].totalCount > 0 && (
+          {rankedRegistroOffices[0] && rankedRegistroOffices[0].totalCount > 0 && (
             <div className="bg-blue-50/40 border border-blue-100/50 rounded-xl p-5 flex flex-col sm:flex-row items-center justify-around gap-4 text-center">
               
               {/* Rank 2 (Silver) */}
-              {rankedOffices[1] && (
+              {rankedRegistroOffices[1] && (
                 <div className="order-2 sm:order-1 flex flex-col items-center p-3 rounded-xl bg-white border border-slate-150 shadow-xs max-w-[170px] flex-1">
                   <div className="w-9 h-9 bg-slate-100 text-slate-500 rounded-full flex items-center justify-center font-black border border-slate-200 text-sm shadow-inner mb-2">
                     2
                   </div>
                   <span className="text-[10px] font-black text-slate-700 uppercase line-clamp-1">
-                    {rankedOffices[1].name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
+                    {rankedRegistroOffices[1].name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
                   </span>
                   <span className="text-[11px] font-extrabold text-slate-500 font-mono mt-1">
-                    {rankedOffices[1].totalCount} trámites
+                    {rankedRegistroOffices[1].totalCount} trámites
                   </span>
                   <span className="text-[8px] uppercase tracking-wider text-slate-400 font-black mt-0.5">
-                    Resol: {rankedOffices[1].resolutionRate}%
+                    Resol: {rankedRegistroOffices[1].resolutionRate}%
                   </span>
                 </div>
               )}
@@ -981,30 +1053,30 @@ export default function SuperAdminConsole({
                   1
                 </div>
                 <span className="text-[10px] font-black text-amber-950 uppercase line-clamp-1">
-                  {rankedOffices[0].name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
+                  {rankedRegistroOffices[0].name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
                 </span>
                 <span className="text-[12px] font-black text-[#122e70] font-mono mt-1">
-                  {rankedOffices[0].totalCount} trámites
+                  {rankedRegistroOffices[0].totalCount} trámites
                 </span>
                 <span className="text-[8px] uppercase tracking-wider text-amber-700 font-black mt-0.5">
-                  Esperado: {rankedOffices[0].avgWaitTime} mins • {rankedOffices[0].resolutionRate}%
+                  Esperado: {rankedRegistroOffices[0].avgWaitTime} mins • {rankedRegistroOffices[0].resolutionRate}%
                 </span>
               </div>
 
               {/* Rank 3 (Bronze) */}
-              {rankedOffices[2] && (
+              {rankedRegistroOffices[2] && (
                 <div className="order-3 flex flex-col items-center p-3 rounded-xl bg-white border border-slate-150 shadow-xs max-w-[170px] flex-1 font-sans">
                   <div className="w-9 h-9 bg-amber-100 text-amber-800 rounded-full flex items-center justify-center font-black border border-amber-200 text-sm shadow-inner mb-2">
                     3
                   </div>
                   <span className="text-[10px] font-black text-slate-705 uppercase line-clamp-1">
-                    {rankedOffices[2].name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
+                    {rankedRegistroOffices[2].name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "")}
                   </span>
                   <span className="text-[11px] font-extrabold text-slate-500 font-mono mt-1">
-                    {rankedOffices[2].totalCount} trámites
+                    {rankedRegistroOffices[2].totalCount} trámites
                   </span>
                   <span className="text-[8px] uppercase tracking-wider text-slate-400 font-black mt-0.5">
-                    Resol: {rankedOffices[2].resolutionRate}%
+                    Resol: {rankedRegistroOffices[2].resolutionRate}%
                   </span>
                 </div>
               )}
@@ -1013,7 +1085,7 @@ export default function SuperAdminConsole({
 
           {/* Ranking list of the 16 regional offices */}
           <div id="office-leaderboard-scoring-list" className="space-y-2 max-h-[480px] overflow-y-auto pr-1 scrollbar-thin">
-            {rankedOffices.map((office, idx) => {
+            {rankedRegistroOffices.map((office, idx) => {
               const isSelected = office.id === selectedOfficeDetailId;
               const shortRegionName = office.name.replace("Dirección Regional de ", "").replace("Tribunal Electoral de ", "");
               
@@ -1054,7 +1126,7 @@ export default function SuperAdminConsole({
                     <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
                       <div 
                         className="h-full bg-[#122e70] rounded-full transition-all duration-500"
-                        style={{ width: `${globalStats.total > 0 ? (office.totalCount / rankedOffices[0].totalCount) * 100 : 0}%` }}
+                        style={{ width: `${rankedRegistroOffices[0].totalCount > 0 ? (office.totalCount / rankedRegistroOffices[0].totalCount) * 100 : 0}%` }}
                       />
                     </div>
                   </div>
@@ -1105,65 +1177,77 @@ export default function SuperAdminConsole({
           
           <div className="border-b border-slate-100 pb-3.5 space-y-1">
             <h3 className="text-xs font-black uppercase tracking-widest text-[#122e70] flex items-center gap-1">
-              <Building2 className="w-4 h-4 text-rose-650 shrink-0" />
-              Inspector de Sede Regional
+              <Building2 className="w-4 h-4 text-amber-500 shrink-0" />
+              Inspector de Sede Regional (Registro Civil)
             </h3>
             <p className="text-[9.5px] font-medium text-slate-400 leading-normal font-sans">
-              Inspeccione la volumetría por servicio en la sede seleccionada.
+              Inspeccione la volumetría por trámite específico en la sede seleccionada.
             </p>
           </div>
 
           {/* Sede Select card details */}
           <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-2">
-            <span className="text-[7.5px] tracking-[0.2em] font-black text-rose-500 bg-rose-50 border border-rose-100 rounded px-1.5 py-0.5 uppercase block w-fit">
-              ID SECTOR: {selectedOfficeDetails.id}
+            <span className="text-[7.5px] tracking-[0.2em] font-black text-blue-650 bg-blue-50 border border-blue-100 rounded px-1.5 py-0.5 uppercase block w-fit">
+              ID SECTOR: {selectedOfficeRegistroDetails.id}
             </span>
             <h4 className="text-[11px] font-black uppercase text-slate-800 leading-tight">
-              {selectedOfficeDetails.name}
+              {selectedOfficeRegistroDetails.name}
             </h4>
             <span className="text-[9px] text-slate-450 uppercase font-black flex items-center gap-1">
-              <MapPin className="w-3 h-3 text-rose-600 shrink-0" />
-              {selectedOfficeDetails.address}
+              <MapPin className="w-3 h-3 text-blue-600 shrink-0" />
+              {selectedOfficeRegistroDetails.address}
             </span>
           </div>
 
           {/* Service Volume Breakdown inside chosen office */}
           <div className="space-y-3">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest block font-sans">
-              Distribución por Trámite ({selectedTimeframe.toUpperCase()})
+            <span className="text-[9.5px] font-extrabold text-[#122e70] uppercase tracking-wider block font-sans">
+              Trámites de Registro Civil ({selectedTimeframe.toUpperCase()})
             </span>
 
-            <div className="space-y-2.5">
-              {Object.keys(SERVICES_CONFIG).map((serviceKey) => {
-                const sKey = serviceKey as ServiceType;
-                const conf = SERVICES_CONFIG[sKey];
-                const count = selectedOfficeDetails.serviceCounts[sKey] || 0;
-                const pct = selectedOfficeDetails.totalCount > 0 
-                  ? Math.round((count / selectedOfficeDetails.totalCount) * 100) 
+            {/* Scrollable list of specific procedures to make it extremely clean and readable */}
+            <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1 scrollbar-thin">
+              {REGISTRO_PROCEDURES.map((proc) => {
+                const count = selectedOfficeRegistroDetails.procedureCounts[proc.id] || 0;
+                const pct = selectedOfficeRegistroDetails.totalCount > 0 
+                  ? Math.round((count / selectedOfficeRegistroDetails.totalCount) * 100) 
                   : 0;
 
                 return (
-                  <div key={sKey} className="space-y-1 bg-white border border-slate-100 p-2 rounded-lg shadow-xxs">
-                    <div className="flex items-center justify-between text-[9.5px]">
-                      <span className="font-extrabold uppercase text-slate-650 tracking-wide flex items-center gap-1">
-                        <span className={`w-2 h-2 rounded-full ${conf.color.split(" ")[0]}`} />
-                        {conf.name}
+                  <div key={proc.id} className="space-y-1 bg-slate-50/60 border border-slate-100 p-2.5 rounded-xl hover:bg-slate-100/70 transition-all shadow-xxs">
+                    <div className="flex items-start justify-between gap-1.5 text-[9.5px]">
+                      <span className="font-extrabold uppercase text-slate-705 tracking-wide flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.5 bg-[#122e70]/10 text-[#122e70] font-black rounded text-[8px] shrink-0">
+                          {proc.id}
+                        </span>
+                        <span className="truncate max-w-[150px]" title={proc.name}>
+                          {proc.name}
+                        </span>
                       </span>
-                      <span className="font-mono font-black text-slate-800">
+                      <span className="font-mono font-black text-slate-800 shrink-0">
                         {count} <span className="text-[8px] font-semibold text-slate-400">({pct}%)</span>
                       </span>
                     </div>
 
                     {/* Progress relative bar */}
-                    <div className="h-1.5 w-full bg-slate-50 rounded-full overflow-hidden">
+                    <div className="h-1.5 w-full bg-slate-200/50 rounded-full overflow-hidden">
                       <div 
-                        className={`h-full rounded-full ${conf.color.split(" ")[0]} transition-all duration-500`}
+                        className="h-full bg-gradient-to-r from-blue-650 to-indigo-700 rounded-full transition-all duration-500"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
+                    <span className="text-[8px] text-slate-400 block leading-none font-medium truncate font-sans">
+                      {proc.description}
+                    </span>
                   </div>
                 );
               })}
+
+              {selectedOfficeRegistroDetails.totalCount === 0 && (
+                <div className="text-center py-8 text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                  Sin tickets de Registro Civil
+                </div>
+              )}
             </div>
           </div>
 
@@ -1175,7 +1259,7 @@ export default function SuperAdminConsole({
                 T. Medio Espera
               </span>
               <p className="text-sm font-black text-indigo-950 font-mono mt-0.5">
-                {selectedOfficeDetails.avgWaitTime} <span className="text-[9px] font-semibold">mins</span>
+                {selectedOfficeRegistroDetails.avgWaitTime} <span className="text-[9px] font-semibold">mins</span>
               </p>
             </div>
 
@@ -1184,7 +1268,7 @@ export default function SuperAdminConsole({
                 T. de Atención
               </span>
               <p className="text-sm font-black text-slate-900 font-mono mt-0.5">
-                {selectedOfficeDetails.avgServiceTime} <span className="text-[9px] font-semibold">mins</span>
+                {selectedOfficeRegistroDetails.avgServiceTime} <span className="text-[9px] font-semibold">mins</span>
               </p>
             </div>
           </div>
@@ -1197,7 +1281,7 @@ export default function SuperAdminConsole({
                 Auditoría en Línea Autorizada
               </span>
               <p className="text-[8px] leading-normal font-medium text-amber-700 font-sans">
-                Los datos visualizados en este inspector se recalculan en tiempo de ejecución de acuerdo a los tickets cargados en la memoria local de la regional.
+                Los datos de Registro Civil visualizados en este inspector se recalculan en tiempo de ejecución para auditar la eficiencia operacional de esta oficina regional.
               </p>
             </div>
           </div>
@@ -1297,8 +1381,8 @@ export default function SuperAdminConsole({
                   onChange={(e) => setNewRole(e.target.value as UserRole)}
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none font-bold text-slate-705 cursor-pointer"
                 >
-                  <option value={UserRole.AGENT_CAJA}>🏧 Agente de Caja / Hechos Vitales (Registro Civil)</option>
-                  <option value={UserRole.AGENT_TRIADA}>📸 Agente de Tríada / Investigación (Registro Civil)</option>
+                  <option value={UserRole.AGENT_CAJA}>🏧 Agente de Hechos Vitales (Registro Civil)</option>
+                  <option value={UserRole.AGENT_TRIADA}>📸 Agente de Investigación (Registro Civil)</option>
                   <option value={UserRole.SUPERVISOR}>👑 Administrador / Supervisor Regional</option>
                   <option value={UserRole.SUPERADMIN}>🛡️ Super Administrador Central</option>
                 </select>
@@ -1366,10 +1450,10 @@ export default function SuperAdminConsole({
                   roleLabel = "👑 Supervisor Regional";
                 } else if (u.role === UserRole.AGENT_CAJA) {
                   roleBadgeColor = "bg-emerald-500/10 text-emerald-950 border-emerald-400/30 font-black";
-                  roleLabel = "🏧 Agente de Caja / Hechos Vitales";
+                  roleLabel = "🏧 Agente de Hechos Vitales";
                 } else if (u.role === UserRole.AGENT_TRIADA) {
                   roleBadgeColor = "bg-cyan-500/10 text-cyan-950 border-cyan-400/30 font-black";
-                  roleLabel = "📸 Agente de Tríada / Investigación";
+                  roleLabel = "📸 Agente de Investigación";
                 }
 
                 return (
@@ -1417,7 +1501,7 @@ export default function SuperAdminConsole({
             </div>
 
             <div className="p-3.5 border border-sky-100 bg-sky-50 text-sky-950 rounded-xl text-[10px] leading-relaxed font-semibold">
-              ℹ️ <strong>Seguridad del Kiosko y Consolas:</strong> Los agentes creados aquí son inmediatamente funcionales. La división entre <strong>Usuarios de Caja</strong> y <strong>Usuarios de Tríada</strong> es estricta: un agente de Caja no tiene permitido ver los datos ni las colas del equipo de Tríada, garantizando la confidencialidad, optimización del caudal y mitigación de errores de flujos cruzados.
+              ℹ️ <strong>Seguridad del Kiosko y Consolas:</strong> Los agentes creados aquí son inmediatamente funcionales. La división entre <strong>Oficiales de Hechos Vitales</strong> y <strong>Oficiales de Investigación</strong> es estricta: un agente de Hechos Vitales no tiene permitido ver los datos ni las colas del equipo de Investigación, garantizando la confidencialidad, optimización del caudal y mitigación de errores de flujos cruzados.
             </div>
           </div>
 
