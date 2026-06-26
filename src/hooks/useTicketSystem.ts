@@ -702,14 +702,23 @@ export function useTicketSystem() {
     const cleanName = name.trim() || "Anónimo";
     const config = SERVICES_CONFIG[serviceType];
     
+    let finalProcedure = procedure;
+    if (serviceType === ServiceType.CEDULACION && !finalProcedure) {
+      const cedProcedures = ["CPV", "REN", "DUP", "CJ", "CRP", "RBM"];
+      finalProcedure = cedProcedures[Math.floor(Math.random() * cedProcedures.length)];
+    } else if (serviceType === ServiceType.REGISTRO && !finalProcedure) {
+      const rcProcedures = ["OR", "OHV", "RMAT", "STR", "OTR"];
+      finalProcedure = rcProcedures[Math.floor(Math.random() * rcProcedures.length)];
+    }
+
     // Calculate ticket number based on how many tickets of this type/procedure have been created today
     const sameServiceTickets = ticketsRef.current.filter(t => 
-      procedure 
-        ? (t.serviceType === serviceType && t.procedure === procedure)
+      finalProcedure 
+        ? (t.serviceType === serviceType && t.procedure === finalProcedure)
         : (t.serviceType === serviceType && !t.procedure)
     );
     const orderNumber = sameServiceTickets.length + 1;
-    const prefix = procedure || config.prefix;
+    const prefix = finalProcedure || config.prefix;
     const formattedNumber = `${prefix}-${orderNumber.toString().padStart(3, "0")}`;
 
     // Priority rule: The first 15 tickets of Cedulación each day are reserved and tagged for appointments
@@ -730,7 +739,7 @@ export function useTicketSystem() {
       createdAt: Date.now(),
       priority,
       isAppointment: finalIsAppointment,
-      procedure
+      procedure: finalProcedure
     };
 
     setTicketsForCurrentOffice(prev => [...prev, newTicket]);

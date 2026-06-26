@@ -29,6 +29,23 @@ export const REGISTRO_PROCEDURES = [
   { id: "OTR", name: "Otros Trámites", description: "Gestiones especiales no especificadas" }
 ];
 
+export const CEDULACION_PROCEDURES = [
+  { id: "CPV", name: "Cédula por Primera Vez", description: "Trámite de primera cédula para panameños" },
+  { id: "REN", name: "Renovación de Cédula", description: "Renovación por vencimiento de documento" },
+  { id: "DUP", name: "Duplicado de Cédula", description: "Reposición por pérdida, robo o deterioro" },
+  { id: "CJ", name: "Cédula Juvenil", description: "Documento de identidad para menores de edad" },
+  { id: "CRP", name: "Carné de Residente", description: "Carné de residente permanente extranjero" },
+  { id: "RBM", name: "Registro Biométrico", description: "Enrolamiento de huellas, foto y firma oficial" }
+];
+
+export const getProcedureName = (procId: string): string => {
+  const regProc = REGISTRO_PROCEDURES.find(p => p.id === procId);
+  if (regProc) return regProc.name;
+  const cedProc = CEDULACION_PROCEDURES.find(p => p.id === procId);
+  if (cedProc) return cedProc.name;
+  return procId;
+};
+
 export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: WelcomeKioskProps) {
   const [name, setName] = useState("");
   const [priority, setPriority] = useState(false);
@@ -67,6 +84,15 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
       clearInterval(interval);
     };
   }, [currentOfficeId]);
+
+  useEffect(() => {
+    if (gatewaySelection === "registro_civil") {
+      setSelectedService(ServiceType.REGISTRO);
+    } else {
+      setSelectedService(null);
+    }
+    setSelectedProcedure(null);
+  }, [gatewaySelection]);
 
   // Trigger physical thermal printer immediately upon ticket generation
   useEffect(() => {
@@ -428,7 +454,7 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
                   <span className="text-slate-400 uppercase tracking-widest text-[9px] font-bold shrink-0">TRÁMITE:</span>
                   <span className="font-bold text-right uppercase text-slate-900 truncate">
                     {printedTicket.procedure 
-                      ? (REGISTRO_PROCEDURES.find(p => p.id === printedTicket.procedure)?.name || printedTicket.procedure)
+                      ? getProcedureName(printedTicket.procedure)
                       : SERVICES_CONFIG[printedTicket.serviceType].name}
                   </span>
                 </div>
@@ -579,7 +605,7 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
               <span className="meta-label">Trámite:</span>
               <span className="meta-value font-bold uppercase">
                 {printedTicket.procedure 
-                  ? (REGISTRO_PROCEDURES.find(p => p.id === printedTicket.procedure)?.name || printedTicket.procedure)
+                  ? getProcedureName(printedTicket.procedure)
                   : SERVICES_CONFIG[printedTicket.serviceType].name}
               </span>
             </div>

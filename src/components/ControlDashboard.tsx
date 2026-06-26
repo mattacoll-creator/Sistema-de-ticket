@@ -41,7 +41,7 @@ import {
   Building2
 } from "lucide-react";
 import { generatePDFReport } from "../utils/reportGenerator";
-import { REGISTRO_PROCEDURES } from "./WelcomeKiosk";
+import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES } from "./WelcomeKiosk";
 import { playCallingChime, speakCall } from "../utils/audio";
 
 import { Copy, Cloud, Link, ExternalLink } from "lucide-react";
@@ -60,6 +60,7 @@ interface ControlDashboardProps {
   onToggleAutoAssign?: (active: boolean) => void;
   onPurgeOldTickets?: () => void;
   currentOfficeId?: string;
+  gatewaySelection?: "cedulacion" | "registro_civil";
 }
 
 export default function ControlDashboard({
@@ -74,7 +75,8 @@ export default function ControlDashboard({
   isAutoAssignActive = true,
   onToggleAutoAssign,
   onPurgeOldTickets,
-  currentOfficeId = "OFF-1"
+  currentOfficeId = "OFF-1",
+  gatewaySelection = "cedulacion"
 }: ControlDashboardProps) {
 
   // --- ESTADOS LOCALES PARA LAS 4 OPTIMIZACIONES ---
@@ -177,14 +179,17 @@ export default function ControlDashboard({
   const activeAgentsCount = cubicles.filter(c => c.status !== "OFFLINE").length || 1;
   const estWaitTimeMin = Math.max(0, Math.round((totalWaiting * 8) / activeAgentsCount));
 
-  // --- CALCULATIONS FOR INSPECTOR DE SEDE REGIONAL (REGISTRO CIVIL) ---
+  // --- CALCULATIONS FOR INSPECTOR DE SEDE REGIONAL ---
   const officeInfo = React.useMemo(() => {
     return OFFICES_CONFIG.find(o => o.id === currentOfficeId) || OFFICES_CONFIG[0];
   }, [currentOfficeId]);
 
+  const activeServiceType = gatewaySelection === "registro_civil" ? ServiceType.REGISTRO : ServiceType.CEDULACION;
+  const activeProcedures = gatewaySelection === "registro_civil" ? REGISTRO_PROCEDURES : CEDULACION_PROCEDURES;
+
   const filteredRegistroTickets = React.useMemo(() => {
-    return tickets.filter(t => t.serviceType === ServiceType.REGISTRO);
-  }, [tickets]);
+    return tickets.filter(t => t.serviceType === activeServiceType);
+  }, [tickets, activeServiceType]);
 
   const completedRegistroTickets = React.useMemo(() => {
     return filteredRegistroTickets.filter(t => t.status === TicketStatus.COMPLETED);
@@ -192,7 +197,7 @@ export default function ControlDashboard({
 
   const rcProcedureCounts = React.useMemo(() => {
     const counts: Record<string, number> = {};
-    REGISTRO_PROCEDURES.forEach(p => {
+    activeProcedures.forEach(p => {
       counts[p.id] = 0;
     });
     filteredRegistroTickets.forEach(t => {
@@ -201,7 +206,7 @@ export default function ControlDashboard({
       }
     });
     return counts;
-  }, [filteredRegistroTickets]);
+  }, [filteredRegistroTickets, activeProcedures]);
 
   const { rcAvgWaitTime, rcAvgServiceTime } = React.useMemo(() => {
     let totalWaitMins = 0;
@@ -645,13 +650,13 @@ export default function ControlDashboard({
           </div>
         </div>
 
-        {/* --- INSPECTOR DE SEDE REGIONAL (REGISTRO CIVIL) --- */}
+        {/* --- INSPECTOR DE SEDE REGIONAL --- */}
         <div id="civil-registry-specialized-metrics" className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col space-y-4">
           
           <div className="border-b border-slate-100 pb-3.5 space-y-1 text-left">
             <h3 className="text-xs font-black uppercase tracking-widest text-[#122e70] flex items-center gap-1.5">
               <Building2 className="w-4 h-4 text-amber-500 shrink-0" />
-              Inspector de Sede Regional (Registro Civil)
+              Inspector de Sede Regional ({gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"})
             </h3>
             <p className="text-[9.5px] font-medium text-slate-400 leading-normal font-sans">
               Inspeccione la volumetría por trámite específico en la sede seleccionada.
@@ -675,12 +680,12 @@ export default function ControlDashboard({
           {/* Service Volume Breakdown inside chosen office */}
           <div className="space-y-3 text-left">
             <span className="text-[9.5px] font-extrabold text-[#122e70] uppercase tracking-wider block font-sans">
-              Trámites de Registro Civil (MES)
+              Trámites de {gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"} (MES)
             </span>
 
             {/* Scrollable list of specific procedures matching screenshot */}
             <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1 scrollbar-thin">
-              {REGISTRO_PROCEDURES.map((proc) => {
+              {activeProcedures.map((proc) => {
                 const count = rcProcedureCounts[proc.id] || 0;
                 const pct = filteredRegistroTickets.length > 0 
                   ? Math.round((count / filteredRegistroTickets.length) * 100) 

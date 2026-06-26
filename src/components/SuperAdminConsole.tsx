@@ -31,7 +31,7 @@ import {
   Upload
 } from "lucide-react";
 import { jsPDF } from "jspdf";
-import { REGISTRO_PROCEDURES } from "./WelcomeKiosk";
+import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES } from "./WelcomeKiosk";
 import { resetSupabaseClient, SUPABASE_SQL_SETUP_SCRIPT } from "../utils/supabaseClient";
 
 interface SuperAdminConsoleProps {
@@ -45,6 +45,7 @@ interface SuperAdminConsoleProps {
   pullOfficeFromSupabase?: (officeId: string) => Promise<boolean>;
   pushOfficeToSupabase?: (officeId: string) => Promise<boolean>;
   currentOfficeId?: string;
+  gatewaySelection?: "cedulacion" | "registro_civil";
 }
 
 type Timeframe = "dia" | "semana" | "mes" | "ano";
@@ -59,7 +60,8 @@ export default function SuperAdminConsole({
   supabaseSyncStatus = "idle",
   pullOfficeFromSupabase,
   pushOfficeToSupabase,
-  currentOfficeId
+  currentOfficeId,
+  gatewaySelection = "cedulacion"
 }: SuperAdminConsoleProps) {
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>("mes");
   const [selectedOfficeDetailId, setSelectedOfficeDetailId] = useState<string>("OFF-1");
@@ -587,7 +589,15 @@ export default function SuperAdminConsole({
     };
   }, [officeMetrics]);
 
-  // National Civil Registry (Registro Civil) specialized metrics
+  const activeServiceType = useMemo(() => {
+    return gatewaySelection === "registro_civil" ? ServiceType.REGISTRO : ServiceType.CEDULACION;
+  }, [gatewaySelection]);
+
+  const activeProcedures = useMemo(() => {
+    return gatewaySelection === "registro_civil" ? REGISTRO_PROCEDURES : CEDULACION_PROCEDURES;
+  }, [gatewaySelection]);
+
+  // National Specialized metrics (Registro Civil or Cedulacion)
   const nationalCivilRegistryStats = useMemo(() => {
     const limitMs = getFilterLimitMs(selectedTimeframe);
     let total = 0;
@@ -603,7 +613,7 @@ export default function SuperAdminConsole({
     Object.keys(officeTickets).forEach(officeId => {
       const tickets = officeTickets[officeId] || [];
       tickets.forEach(t => {
-        if (t.createdAt >= limitMs && t.serviceType === ServiceType.REGISTRO) {
+        if (t.createdAt >= limitMs && t.serviceType === activeServiceType) {
           total++;
 
           if (t.status === TicketStatus.COMPLETED) {
@@ -644,24 +654,24 @@ export default function SuperAdminConsole({
       resolutionRate,
       procedureStats
     };
-  }, [officeTickets, selectedTimeframe]);
+  }, [officeTickets, selectedTimeframe, activeServiceType]);
 
-  // Calculate and filter Registro Civil tickets per office based on timeframe
+  // Calculate and filter specialized tickets per office based on timeframe
   const officeRegistroMetrics = useMemo(() => {
     const limitMs = getFilterLimitMs(selectedTimeframe);
     
     return OFFICES_CONFIG.map(office => {
       const allOfficeTickets = officeTickets[office.id] || [];
       
-      // Filter by timeframe and keep ONLY Registro Civil
-      const filteredTickets = allOfficeTickets.filter(t => t.createdAt >= limitMs && t.serviceType === ServiceType.REGISTRO);
+      // Filter by timeframe and keep ONLY the active service type (Registro Civil or Cedulación)
+      const filteredTickets = allOfficeTickets.filter(t => t.createdAt >= limitMs && t.serviceType === activeServiceType);
       const completed = filteredTickets.filter(t => t.status === TicketStatus.COMPLETED);
       const missed = filteredTickets.filter(t => t.status === TicketStatus.MISSED);
       const waiting = filteredTickets.filter(t => t.status === TicketStatus.WAITING);
       
-      // Compute specific procedure counts (e.g., OR, OHV, RMAT, etc.)
+      // Compute specific procedure counts (e.g., OR, OHV, RMAT, etc. or CPV, REN, DUP, etc.)
       const procedureCounts: Record<string, number> = {};
-      REGISTRO_PROCEDURES.forEach(p => {
+      activeProcedures.forEach(p => {
         procedureCounts[p.id] = 0;
       });
       
@@ -706,7 +716,7 @@ export default function SuperAdminConsole({
         procedureCounts
       };
     });
-  }, [officeTickets, selectedTimeframe]);
+  }, [officeTickets, selectedTimeframe, activeServiceType, activeProcedures]);
 
   // Sort offices based on Registro Civil volume
   const rankedRegistroOffices = useMemo(() => {
@@ -1203,7 +1213,9 @@ export default function SuperAdminConsole({
           </div>
 
           <div className="bg-white/5 border border-white/10 p-4.5 rounded-xl space-y-1">
-            <span className="text-[8.5px] font-bold text-slate-350 uppercase tracking-widest block font-sans">Espera Promedio RC</span>
+            <span className="text-[8.5px] font-bold text-slate-350 uppercase tracking-widest block font-sans">
+              Espera Promedio {gatewaySelection === "registro_civil" ? "RC" : "Céd."}
+            </span>
             <p className="text-2xl font-black text-white font-mono">{nationalCivilRegistryStats.avgWait} <span className="text-xs">mins</span></p>
             <span className="text-[8px] text-slate-350 block leading-tight font-sans">Promedio nacional de atención</span>
           </div>
@@ -1213,13 +1225,13 @@ export default function SuperAdminConsole({
         <div className="bg-white/5 border border-white/10 p-5 rounded-xl space-y-4 relative z-10">
           <div className="flex items-center justify-between border-b border-white/10 pb-2">
             <span className="text-[9.5px] font-extrabold text-amber-350 uppercase tracking-wider block font-sans">
-              Volumetría de Trámites Específicos de Registro Civil a Nivel Nacional:
+              Volumetría de Trámites Específicos de {gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"} a Nivel Nacional:
             </span>
             <span className="text-[8px] text-slate-300 font-medium">Clasificación consolidada de la República</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {REGISTRO_PROCEDURES.map(proc => {
+            {activeProcedures.map(proc => {
               const stat = nationalCivilRegistryStats.procedureStats[proc.id] || { waiting: 0, completed: 0, total: 0 };
               const pct = nationalCivilRegistryStats.total > 0
                 ? Math.round((stat.total / nationalCivilRegistryStats.total) * 100)
@@ -1492,7 +1504,7 @@ export default function SuperAdminConsole({
           <div className="border-b border-slate-100 pb-3.5 space-y-1">
             <h3 className="text-xs font-black uppercase tracking-widest text-[#122e70] flex items-center gap-1">
               <Building2 className="w-4 h-4 text-amber-500 shrink-0" />
-              Inspector de Sede Regional (Registro Civil)
+              Inspector de Sede Regional ({gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"})
             </h3>
             <p className="text-[9.5px] font-medium text-slate-400 leading-normal font-sans">
               Inspeccione la volumetría por trámite específico en la sede seleccionada.
@@ -1516,12 +1528,12 @@ export default function SuperAdminConsole({
           {/* Service Volume Breakdown inside chosen office */}
           <div className="space-y-3">
             <span className="text-[9.5px] font-extrabold text-[#122e70] uppercase tracking-wider block font-sans">
-              Trámites de Registro Civil ({selectedTimeframe.toUpperCase()})
+              Trámites de {gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"} ({selectedTimeframe.toUpperCase()})
             </span>
 
             {/* Scrollable list of specific procedures to make it extremely clean and readable */}
             <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1 scrollbar-thin">
-              {REGISTRO_PROCEDURES.map((proc) => {
+              {activeProcedures.map((proc) => {
                 const count = selectedOfficeRegistroDetails.procedureCounts[proc.id] || 0;
                 const pct = selectedOfficeRegistroDetails.totalCount > 0 
                   ? Math.round((count / selectedOfficeRegistroDetails.totalCount) * 100) 
