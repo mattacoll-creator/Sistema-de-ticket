@@ -638,7 +638,7 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
             </p>
             
             <p className="text-[8px] text-center font-serif font-black italic mt-3">
-              "La Patria la hacemos todos"
+              "La Patria la hacemos contigo"
             </p>
             <p className="text-[7.5px] text-center font-sans mt-1">
               Por favor espere su turno en los monitores de sala

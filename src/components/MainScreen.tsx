@@ -311,7 +311,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                     TRIBUNAL ELECTORAL
                   </span>
                   <span className="text-[7px] font-mono tracking-[0.2em] text-sky-200/50 leading-none mt-1 uppercase font-semibold">
-                    LA PATRIA LA HACEMOS TODOS
+                    LA PATRIA LA HACEMOS CONTIGO
                   </span>
                   <span className="text-[10px] font-sans font-extrabold tracking-wider text-sky-400 mt-1 uppercase leading-none">
                     Dirección Nacional de Cedulación
