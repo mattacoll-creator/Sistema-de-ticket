@@ -86,11 +86,7 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
   }, [currentOfficeId]);
 
   useEffect(() => {
-    if (gatewaySelection === "registro_civil") {
-      setSelectedService(ServiceType.REGISTRO);
-    } else {
-      setSelectedService(null);
-    }
+    setSelectedService(null);
     setSelectedProcedure(null);
   }, [gatewaySelection]);
 
@@ -300,7 +296,7 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
                         }}
                         className={`relative flex flex-col p-3 rounded-xl text-left border transition-all cursor-pointer h-full min-h-[110px] justify-between ${
                           isSelected
-                            ? "bg-blue-600 border-blue-800 text-white shadow-md shadow-blue-100/50 scale-[1.02]"
+                            ? "bg-[#122e70] border-blue-900 text-white shadow-md shadow-blue-100/50 scale-[1.02]"
                             : "bg-white hover:bg-slate-50 border-slate-200 text-slate-800 hover:border-slate-300 shadow-sm"
                         }`}
                       >

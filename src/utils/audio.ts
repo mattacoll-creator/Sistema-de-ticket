@@ -77,7 +77,11 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string)
     // Crear el mensaje a pronunciar
     // e.g.: "Ticket A-01, Juan Pérez, pase al Cubículo 1"
     const parsedCode = ticketCode.split("").join(" "); // Pronuncia dígito por dígito para mayor claridad
-    const message = `¿Atención, ticket? ${parsedCode}!... ${name}!... Por favor, pase al ${cubicleName}.`;
+    let targetPrep = "al";
+    if (cubicleName.toLowerCase().startsWith("caja")) {
+      targetPrep = "a la";
+    }
+    const message = `¿Atención, ticket? ${parsedCode}!... ${name}!... Por favor, pase ${targetPrep} ${cubicleName}.`;
     
     const rateStr = localStorage.getItem("ticket_tts_rate");
     const pitchStr = localStorage.getItem("ticket_tts_pitch");

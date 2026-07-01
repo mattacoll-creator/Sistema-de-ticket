@@ -29,7 +29,7 @@ export const SERVICES_CONFIG: Record<ServiceType, ServiceDetail> = {
   [ServiceType.REGISTRO]: {
     id: ServiceType.REGISTRO,
     name: "Registro Civil",
-    prefix: "R",
+    prefix: "RC",
     color: "bg-blue-500 text-blue-950 border-blue-200",
     estimatedTimeMin: 10
   },

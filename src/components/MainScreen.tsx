@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Ticket, Cubicle, TicketStatus, SERVICES_CONFIG, TicketPhase, PHASES_CONFIG, OFFICES_CONFIG } from "../types";
+import { Ticket, Cubicle, TicketStatus, SERVICES_CONFIG, TicketPhase, PHASES_CONFIG, OFFICES_CONFIG, ServiceType } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { Volume2, VolumeX, Tv, UserCheck, Users, HelpCircle, ArrowRight, UserMinus, ShieldAlert, Clock } from "lucide-react";
 import { getOfficeSchedule } from "../utils/scheduleStorage";
@@ -22,9 +22,13 @@ interface MainScreenProps {
 export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: MainScreenProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV">("general");
+  const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV" | "RC_OTROS">("general");
   const [layoutFocus, setLayoutFocus] = useState<"both" | "cubicles" | "queue" >("both");
   const [isImmersiveFullscreen, setIsImmersiveFullscreen] = useState(false);
+
+  useEffect(() => {
+    setSelectedChannel("general");
+  }, [gatewaySelection]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -115,8 +119,17 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     return () => clearInterval(timer);
   }, []);
 
+  // Isolate tickets strictly by system ecosystem (Cedulación vs Registro Civil)
+  const ecosystemTickets = tickets.filter(t => {
+    if (gatewaySelection === "registro_civil") {
+      return t.serviceType === ServiceType.REGISTRO;
+    } else {
+      return t.serviceType !== ServiceType.REGISTRO;
+    }
+  });
+
   // Fetch tickets currently waiting
-  const waitingTickets = tickets.filter(t => t.status === TicketStatus.WAITING);
+  const waitingTickets = ecosystemTickets.filter(t => t.status === TicketStatus.WAITING);
   
   // Sorted waiting queue (Priority and Appointments get moved to front)
   const sortedWaiting = [...waitingTickets].sort((a, b) => {
@@ -137,35 +150,62 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       ? sortedWaiting.filter(t => t.procedure === "OR")
       : selectedChannel === "OHV"
         ? sortedWaiting.filter(t => t.procedure === "OHV")
-        : sortedWaiting.filter(t => t.currentPhase === selectedChannel);
+        : selectedChannel === "RC_OTROS"
+          ? sortedWaiting.filter(t => t.procedure !== "OR" && t.procedure !== "OHV")
+          : sortedWaiting.filter(t => t.currentPhase === selectedChannel);
 
-  // Filter active call based on channel selection
-  const displayedActiveCall = activeCall && (
+  // Filter active call based on channel selection and strictly match ecosystem
+  const isCallInEcosystem = activeCall && (
+    gatewaySelection === "registro_civil"
+      ? activeCall.ticket.serviceType === ServiceType.REGISTRO
+      : activeCall.ticket.serviceType !== ServiceType.REGISTRO
+  );
+
+  const displayedActiveCall = isCallInEcosystem && (
     selectedChannel === "general" || 
     (selectedChannel === "OR" && activeCall.ticket.procedure === "OR") ||
     (selectedChannel === "OHV" && activeCall.ticket.procedure === "OHV") ||
+    (selectedChannel === "RC_OTROS" && activeCall.ticket.procedure !== "OR" && activeCall.ticket.procedure !== "OHV") ||
     activeCall.ticket.currentPhase === selectedChannel
   )
     ? activeCall
     : null;
 
+  // Filter cubicles strictly based on active ecosystem
+  const ecosystemCubicles = cubicles.filter(c => {
+    if (gatewaySelection === "registro_civil") {
+      // Cubicles assigned to Registro Civil procedures or CUB 2..23
+      return (c.supportedServices || []).includes(ServiceType.REGISTRO) || c.name.includes("(OR)") || c.name.includes("(OHV)") || c.name.includes("(OTR)") || c.name.includes("(ED)") || c.name.includes("(SAU)");
+    } else {
+      // Cubicles for Cedulación / Caja / Tríada
+      return (c.supportedPhases?.includes(TicketPhase.CAJA) || c.supportedPhases?.includes(TicketPhase.TRIADA)) && !c.name.includes("(OR)") && !c.name.includes("(OHV)") && !c.name.includes("(OTR)") && !c.name.includes("(ED)") && !c.name.includes("(SAU)");
+    }
+  });
+
   // Filter cubicles based on channel selection
   const filteredCubicles = selectedChannel === "general"
-    ? cubicles
+    ? ecosystemCubicles
     : selectedChannel === "OR"
-      ? cubicles.filter(c => {
+      ? ecosystemCubicles.filter(c => {
           const num = parseInt(c.id.replace("CUB-", ""), 10);
-          return num >= 2 && num <= 8;
+          return (num >= 2 && num <= 8) || c.name.includes("(OR)");
         })
       : selectedChannel === "OHV"
-        ? cubicles.filter(c => {
+        ? ecosystemCubicles.filter(c => {
             const num = parseInt(c.id.replace("CUB-", ""), 10);
-            return num >= 16 && num <= 20;
+            return (num >= 16 && num <= 20) || c.name.includes("(OHV)");
           })
-        : cubicles.filter(c => c.supportedPhases?.includes(selectedChannel as TicketPhase));
+        : selectedChannel === "RC_OTROS"
+          ? ecosystemCubicles.filter(c => {
+              const num = parseInt(c.id.replace("CUB-", ""), 10);
+              const isOr = (num >= 2 && num <= 8) || c.name.includes("(OR)");
+              const isOhv = (num >= 16 && num <= 20) || c.name.includes("(OHV)");
+              return !isOr && !isOhv;
+            })
+          : ecosystemCubicles.filter(c => c.supportedPhases?.includes(selectedChannel as TicketPhase));
 
-  // Recent completed or missed tickets (dynamic size depending on limitHistory config)
-  const recentHistory = tickets
+  // Recent completed or missed tickets strictly for active ecosystem
+  const recentHistory = ecosystemTickets
     .filter(t => t.status === TicketStatus.COMPLETED || t.status === TicketStatus.MISSED)
     .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0))
     .slice(0, limitHistory ? 5 : 12);
@@ -388,7 +428,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
           <span className={`text-[10px] font-mono uppercase tracking-wider pl-2 pr-2 font-black ${
             isTriadaChannel ? "text-slate-700" : "text-sky-300/70"
           }`}>
-            PANEL DEL MONITOR:
+            PANEL DEL MONITOR ({gatewaySelection === "registro_civil" ? "REGISTRO CIVIL" : "CEDULACIÓN"}):
           </span>
           
           <button
@@ -404,81 +444,101 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
             📺 MULTICANAL (TODOS)
           </button>
 
-          <button
-            onClick={() => setSelectedChannel("OR")}
-            className={`px-4 py-2 text-xs font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-2 border ${
-              selectedChannel === "OR"
-                ? "bg-blue-600 text-white border-transparent font-extrabold shadow-sm"
-                : isTriadaChannel
-                  ? "bg-white text-slate-700 hover:bg-slate-50 border-slate-300"
-                  : "bg-white/5 text-slate-300 hover:bg-white/10 border-white/5"
-            }`}
-          >
-            <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
-            <span>📺 PANTALLA CUBÍCULOS OR</span>
-            <span className={`text-[10px] font-mono px-1.5 py-0.5 font-bold rounded ${
-              sortedWaiting.filter(t => t.procedure === "OR").length > 0
-                ? "bg-rose-900/50 text-rose-200 border border-rose-800/40"
-                : "bg-white/5 text-slate-400"
-            }`}>
-              {sortedWaiting.filter(t => t.procedure === "OR").length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setSelectedChannel("OHV")}
-            className={`px-4 py-2 text-xs font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-2 border ${
-              selectedChannel === "OHV"
-                ? "bg-blue-600 text-white border-transparent font-extrabold shadow-sm"
-                : isTriadaChannel
-                  ? "bg-white text-slate-700 hover:bg-slate-50 border-slate-300"
-                  : "bg-white/5 text-slate-300 hover:bg-white/10 border-white/5"
-            }`}
-          >
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-            <span>📺 PANTALLA CUBÍCULOS OHV</span>
-            <span className={`text-[10px] font-mono px-1.5 py-0.5 font-bold rounded ${
-              sortedWaiting.filter(t => t.procedure === "OHV").length > 0
-                ? "bg-rose-900/50 text-rose-200 border border-rose-800/40"
-                : "bg-white/5 text-slate-400"
-            }`}>
-              {sortedWaiting.filter(t => t.procedure === "OHV").length}
-            </span>
-          </button>
-          
-          {gatewaySelection !== "registro_civil" && Object.entries(PHASES_CONFIG).map(([key, phase]) => {
-            const isActive = selectedChannel === key;
-            const waitingCount = sortedWaiting.filter(t => t.currentPhase === key).length;
-            return (
+          {gatewaySelection === "registro_civil" ? (
+            <>
               <button
-                key={key}
-                onClick={() => setSelectedChannel(key as TicketPhase)}
+                onClick={() => setSelectedChannel("OR")}
                 className={`px-4 py-2 text-xs font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-2 border ${
-                  isActive
-                    ? isTriadaChannel
-                      ? "bg-[#003087] text-white border-transparent font-extrabold shadow-sm"
-                      : "bg-[#00aaff] text-[#03122c] border-transparent font-extrabold shadow-sm"
-                    : isTriadaChannel
-                      ? "bg-white text-slate-700 hover:bg-slate-105 border-slate-300 shadow-xs"
-                      : "bg-white/5 text-slate-300 hover:bg-white/10 border-white/5"
+                  selectedChannel === "OR"
+                    ? "bg-blue-600 text-white border-transparent font-extrabold shadow-sm"
+                    : "bg-white/5 text-slate-300 hover:bg-white/10 border-white/5"
                 }`}
               >
-                <span className={`w-2 h-2 rounded-full ${phase.color.split(" ")[0]} animate-ping`} />
-                <span>PANTALLA {phase.shortName.toUpperCase()}</span>
+                <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
+                <span>📺 PANTALLA TV 3: CUBÍCULOS OR</span>
                 <span className={`text-[10px] font-mono px-1.5 py-0.5 font-bold rounded ${
-                  waitingCount > 0 
-                    ? isTriadaChannel 
-                      ? "bg-rose-100 text-rose-700 border border-rose-200" 
-                      : "bg-rose-900/50 text-rose-200 border border-rose-800/40" 
-                    : isTriadaChannel 
-                      ? "bg-slate-100 text-slate-500 border border-slate-205" 
-                      : "bg-white/5 text-slate-400"
+                  sortedWaiting.filter(t => t.procedure === "OR").length > 0
+                    ? "bg-rose-900/50 text-rose-200 border border-rose-800/40"
+                    : "bg-white/5 text-slate-400"
                 }`}>
-                  {waitingCount}
+                  {sortedWaiting.filter(t => t.procedure === "OR").length}
                 </span>
               </button>
-            );
-          })}
+
+              <button
+                onClick={() => setSelectedChannel("OHV")}
+                className={`px-4 py-2 text-xs font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-2 border ${
+                  selectedChannel === "OHV"
+                    ? "bg-blue-600 text-white border-transparent font-extrabold shadow-sm"
+                    : "bg-white/5 text-slate-300 hover:bg-white/10 border-white/5"
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                <span>📺 PANTALLA TV 4: CUBÍCULOS HV</span>
+                <span className={`text-[10px] font-mono px-1.5 py-0.5 font-bold rounded ${
+                  sortedWaiting.filter(t => t.procedure === "OHV").length > 0
+                    ? "bg-rose-900/50 text-rose-200 border border-rose-800/40"
+                    : "bg-white/5 text-slate-400"
+                }`}>
+                  {sortedWaiting.filter(t => t.procedure === "OHV").length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setSelectedChannel("RC_OTROS")}
+                className={`px-4 py-2 text-xs font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-2 border ${
+                  selectedChannel === "RC_OTROS"
+                    ? "bg-purple-600 text-white border-transparent font-extrabold shadow-sm"
+                    : "bg-white/5 text-slate-300 hover:bg-white/10 border-white/5"
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full bg-purple-400 animate-ping" />
+                <span>📺 PANTALLA TV 5: OTROS TRÁMITES</span>
+                <span className={`text-[10px] font-mono px-1.5 py-0.5 font-bold rounded ${
+                  sortedWaiting.filter(t => t.procedure !== "OR" && t.procedure !== "OHV").length > 0
+                    ? "bg-rose-900/50 text-rose-200 border border-rose-800/40"
+                    : "bg-white/5 text-slate-400"
+                }`}>
+                  {sortedWaiting.filter(t => t.procedure !== "OR" && t.procedure !== "OHV").length}
+                </span>
+              </button>
+            </>
+          ) : (
+            Object.entries(PHASES_CONFIG).map(([key, phase]) => {
+              const isActive = selectedChannel === key;
+              const waitingCount = sortedWaiting.filter(t => t.currentPhase === key).length;
+              const screenLabel = key === TicketPhase.CAJA ? "📺 PANTALLA TV 1: CAJA" : "📺 PANTALLA TV 2: TRIAJE FOTOGRAFÍA";
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSelectedChannel(key as TicketPhase)}
+                  className={`px-4 py-2 text-xs font-black uppercase transition-all rounded-lg cursor-pointer flex items-center gap-2 border ${
+                    isActive
+                      ? isTriadaChannel
+                        ? "bg-[#003087] text-white border-transparent font-extrabold shadow-sm"
+                        : "bg-[#00aaff] text-[#03122c] border-transparent font-extrabold shadow-sm"
+                      : isTriadaChannel
+                        ? "bg-white text-slate-700 hover:bg-slate-105 border-slate-300 shadow-xs"
+                        : "bg-white/5 text-slate-300 hover:bg-white/10 border-white/5"
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${phase.color.split(" ")[0]} animate-ping`} />
+                  <span>{screenLabel}</span>
+                  <span className={`text-[10px] font-mono px-1.5 py-0.5 font-bold rounded ${
+                    waitingCount > 0 
+                      ? isTriadaChannel 
+                        ? "bg-rose-100 text-rose-700 border border-rose-200" 
+                        : "bg-rose-900/50 text-rose-200 border border-rose-800/40" 
+                      : isTriadaChannel 
+                        ? "bg-slate-100 text-slate-500 border border-slate-205" 
+                        : "bg-white/5 text-slate-400"
+                  }`}>
+                    {waitingCount}
+                  </span>
+                </button>
+              );
+            })
+          )}
         </div>
 
         {/* --- DEDICATED VIEW MODE SELECTOR (ESTRUCTURA DE PANTALLA) --- */}
@@ -650,10 +710,15 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
                 {/* GIGANTIC DESTINATION BOX */}
                 <div className="flex flex-col items-center justify-center bg-white border-8 border-rose-600 px-12 py-10 rounded-3xl text-center min-w-[360px] lg:min-w-[480px] max-w-full z-10 shadow-2xl text-slate-900 transition-all transform hover:scale-[1.02]">
-                  <span className="text-xs md:text-sm tracking-widest text-[#122e70] uppercase font-mono font-black">POR FAVOR DIRÍJASE AL</span>
+                  <span className="text-xs md:text-sm tracking-widest text-[#122e70] uppercase font-mono font-black">
+                    {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
+                  </span>
                   
                   <p className="text-5xl md:text-7xl lg:text-8xl font-black text-[#122e70] mt-3 uppercase font-mono tracking-wide animate-pulse">
-                    {displayedActiveCall.cubicle.name.toUpperCase()}
+                    {(displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA
+                      ? `CAJA ${displayedActiveCall.cubicle.name.replace(/\D/g, '') || displayedActiveCall.cubicle.name}`
+                      : displayedActiveCall.cubicle.name
+                    ).toUpperCase()}
                   </p>
                   
                   <div className="h-1 w-24 bg-rose-600 my-4 rounded-full" />
@@ -693,7 +758,9 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                         ? "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OR"
                         : selectedChannel === "OHV"
                           ? "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OHV"
-                          : `📺 DETALLE DE PANTALLA: FASE DE ${PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()}`}
+                          : selectedChannel === "RC_OTROS"
+                            ? "📺 PANTALLA EXCLUSIVA: OTROS TRÁMITES Y ENTREGA"
+                            : `📺 DETALLE DE PANTALLA: FASE DE ${PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()}`}
                   </span>
                   <h2 className={`text-2xl font-black uppercase tracking-widest leading-tight ${isTriadaChannel ? "text-slate-900" : "text-white"}`}>Turnos Pendientes de Atención</h2>
                   <p className={`text-sm max-w-2xl leading-relaxed font-semibold ${isTriadaChannel ? "text-slate-500" : "text-sky-200/70"}`}>
@@ -703,7 +770,9 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                         ? "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Recepción (OR) - Cubículos 2 al 8."
                         : selectedChannel === "OHV"
                           ? "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Hechos Vitales (OHV) - Cubículos 16 al 20."
-                          : `Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de ${PHASES_CONFIG[selectedChannel as TicketPhase].name}.`}
+                          : selectedChannel === "RC_OTROS"
+                            ? "Los números en esta pantalla corresponden a Trámites Especiales, Investigación, Recepción de Sentencia, Matrimonio, Atención al Usuario y Entrega de Documentos (ED, SAU, OI, SI, RMAT, RS, STR, OTR)."
+                            : `Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de ${PHASES_CONFIG[selectedChannel as TicketPhase].name}.`}
                   </p>
                 </div>
                 
@@ -741,7 +810,9 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                        ? "(FILTRADOS: OFICIAL DE RECEPCIÓN OR)"
                        : selectedChannel === "OHV"
                          ? "(FILTRADOS: HECHOS VITALES OHV)"
-                         : `(FILTRADOS POR ${PHASES_CONFIG[selectedChannel as TicketPhase].shortName.toUpperCase()})` 
+                         : selectedChannel === "RC_OTROS"
+                           ? "(FILTRADOS: OTROS TRÁMITES Y ENTREGA)"
+                           : `(FILTRADOS POR ${PHASES_CONFIG[selectedChannel as TicketPhase].shortName.toUpperCase()})` 
                      : ""}
                   </span>
                  <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
@@ -984,11 +1055,13 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                           ? "OFICIAL DE RECEPCIÓN OR"
                           : selectedChannel === "OHV"
                             ? "OFICIAL DE HECHOS VITALES OHV"
-                            : PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()
+                            : selectedChannel === "RC_OTROS"
+                              ? "OTROS TRÁMITES Y ENTREGA"
+                              : PHASES_CONFIG[selectedChannel as TicketPhase]?.name?.toUpperCase() || "MONITOR"
                       })
                     </span>
                     <div className="flex items-center gap-3 shrink-0">
-                      {(selectedChannel === "OR" || selectedChannel === "OHV") && (
+                      {selectedChannel !== "general" && (
                         <button
                           id="btn-trigger-fullscreen"
                           onClick={toggleImmersiveFullscreen}
@@ -1156,9 +1229,14 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
                 {/* Destination */}
                 <div className="flex flex-col items-center justify-center bg-white border-[10px] border-rose-600 px-12 py-10 rounded-3xl text-center min-w-[400px] lg:min-w-[550px] shadow-2xl text-slate-900">
-                  <span className="text-sm tracking-widest text-[#122e70] uppercase font-mono font-black">POR FAVOR DIRÍJASE AL</span>
+                  <span className="text-sm tracking-widest text-[#122e70] uppercase font-mono font-black">
+                    {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
+                  </span>
                   <p className="text-6xl md:text-8xl font-black text-[#122e70] mt-3 uppercase font-mono tracking-wide animate-pulse">
-                    {displayedActiveCall.cubicle.name.toUpperCase()}
+                    {(displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA
+                      ? `CAJA ${displayedActiveCall.cubicle.name.replace(/\D/g, '') || displayedActiveCall.cubicle.name}`
+                      : displayedActiveCall.cubicle.name
+                    ).toUpperCase()}
                   </p>
                   <div className="h-1.5 w-32 bg-rose-600 my-4 rounded-full animate-pulse" />
                   <p className="text-xs text-slate-500 font-mono uppercase tracking-widest font-black">

@@ -711,14 +711,10 @@ export function useTicketSystem() {
       finalProcedure = rcProcedures[Math.floor(Math.random() * rcProcedures.length)];
     }
 
-    // Calculate ticket number based on how many tickets of this type/procedure have been created today
-    const sameServiceTickets = ticketsRef.current.filter(t => 
-      finalProcedure 
-        ? (t.serviceType === serviceType && t.procedure === finalProcedure)
-        : (t.serviceType === serviceType && !t.procedure)
-    );
+    // Calculate ticket number based on how many tickets of this service have been created today
+    const sameServiceTickets = ticketsRef.current.filter(t => t.serviceType === serviceType);
     const orderNumber = sameServiceTickets.length + 1;
-    const prefix = finalProcedure || config.prefix;
+    const prefix = config.prefix;
     const formattedNumber = `${prefix}-${orderNumber.toString().padStart(3, "0")}`;
 
     // Priority rule: The first 15 tickets of Cedulación each day are reserved and tagged for appointments
@@ -872,7 +868,10 @@ export function useTicketSystem() {
     setActiveCall({ ticket: updatedTicketRef, cubicle: targetCubicle });
 
     // Speak audio calling sequence
-    await announceAndCall(chosenTicket.numberCode, chosenTicket.name, targetCubicle.name);
+    const destName = chosenTicket.currentPhase === TicketPhase.CAJA
+      ? `Caja ${targetCubicle.name.replace(/\D/g, '') || targetCubicle.name}`
+      : targetCubicle.name;
+    await announceAndCall(chosenTicket.numberCode, chosenTicket.name, destName);
   }, [cubicles, tickets]);
 
   // 5. Active ticket actions (start actual attending or finish)
@@ -995,7 +994,10 @@ export function useTicketSystem() {
 
     // Trigger vocal repeat
     setActiveCall({ ticket: currentTicket, cubicle: targetCubicle });
-    announceAndCall(currentTicket.numberCode, currentTicket.name, targetCubicle.name);
+    const destName = currentTicket.currentPhase === TicketPhase.CAJA
+      ? `Caja ${targetCubicle.name.replace(/\D/g, '') || targetCubicle.name}`
+      : targetCubicle.name;
+    announceAndCall(currentTicket.numberCode, currentTicket.name, destName);
   }, [cubicles, tickets]);
 
   // 6. Change cubicle status (e.g., transition to BREAK or OFFLINE)
@@ -1115,7 +1117,10 @@ export function useTicketSystem() {
         setActiveCall(latestCall);
         
         try {
-          await announceAndCall(latestCall.ticket.numberCode, latestCall.ticket.name, latestCall.cubicle.name);
+          const destName = latestCall.ticket.currentPhase === TicketPhase.CAJA
+            ? `Caja ${latestCall.cubicle.name.replace(/\D/g, '') || latestCall.cubicle.name}`
+            : latestCall.cubicle.name;
+          await announceAndCall(latestCall.ticket.numberCode, latestCall.ticket.name, destName);
         } catch (err) {
           console.warn("Speech synthesis error", err);
         }
