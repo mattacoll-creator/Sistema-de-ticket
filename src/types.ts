@@ -7,7 +7,8 @@ export enum ServiceType {
   ELECTORAL = "ELECTORAL",       // Organización Electoral
   REGISTRO = "REGISTRO",         // Registro Civil
   CEDULACION = "CEDULACION",     // Cedulación
-  EXTRANJERIA = "EXTRANJERIA"    // Extranjería
+  EXTRANJERIA = "EXTRANJERIA",    // Extranjería
+  REG_CERTIFICATION = "REG_CERTIFICATION" // Certificación de REG
 }
 
 export interface ServiceDetail {
@@ -46,6 +47,13 @@ export const SERVICES_CONFIG: Record<ServiceType, ServiceDetail> = {
     prefix: "E",
     color: "bg-rose-500 text-rose-950 border-rose-200",
     estimatedTimeMin: 12
+  },
+  [ServiceType.REG_CERTIFICATION]: {
+    id: ServiceType.REG_CERTIFICATION,
+    name: "Certificación de REG",
+    prefix: "REG",
+    color: "bg-indigo-500 text-indigo-950 border-indigo-200",
+    estimatedTimeMin: 10
   }
 };
 
@@ -82,11 +90,11 @@ export const PHASES_CONFIG: Record<TicketPhase, PhaseDetail> = {
   },
   [TicketPhase.TRIADA]: {
     id: TicketPhase.TRIADA,
-    name: "Tríada y Fotografía",
-    shortName: "Tríada / Foto",
+    name: "Ventanilla / Tríada",
+    shortName: "Atención / Tríada",
     color: "bg-cyan-500 text-cyan-950 border-cyan-300",
     icon: "ClipboardCheck",
-    description: "Triage inicial de viabilidad, captura de fotografía y firma biométrica, y validación de requisitos"
+    description: "Atención en ventanillas de trámite, triage de viabilidad, biometría y validación"
   }
 };
 

@@ -177,8 +177,13 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       // Cubicles assigned to Registro Civil procedures or CUB 2..23
       return (c.supportedServices || []).includes(ServiceType.REGISTRO) || c.name.includes("(OR)") || c.name.includes("(OHV)") || c.name.includes("(OTR)") || c.name.includes("(ED)") || c.name.includes("(SAU)");
     } else {
-      // Cubicles for Cedulación / Caja / Tríada
-      return (c.supportedPhases?.includes(TicketPhase.CAJA) || c.supportedPhases?.includes(TicketPhase.TRIADA)) && !c.name.includes("(OR)") && !c.name.includes("(OHV)") && !c.name.includes("(OTR)") && !c.name.includes("(ED)") && !c.name.includes("(SAU)");
+      // Cubicles for Cedulación / Caja / Tríada (strictly exclude all Registro Civil specialized modules)
+      return (c.supportedPhases?.includes(TicketPhase.CAJA) || c.supportedPhases?.includes(TicketPhase.TRIADA)) && 
+        !(c.supportedServices || []).includes(ServiceType.REGISTRO) &&
+        !c.name.includes("(OR)") && !c.name.includes("(OHV)") && !c.name.includes("(OTR)") && 
+        !c.name.includes("(ED)") && !c.name.includes("(SAU)") && !c.name.includes("(SI") && 
+        !c.name.includes("(OI)") && !c.name.includes("(RS)") && !c.name.includes("(RMAT)") && 
+        !c.name.includes("(STR)");
     }
   });
 
@@ -209,6 +214,22 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     .filter(t => t.status === TicketStatus.COMPLETED || t.status === TicketStatus.MISSED)
     .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0))
     .slice(0, limitHistory ? 5 : 12);
+
+  const getFullscreenBadge = () => {
+    if (selectedChannel === "OR") return "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OR";
+    if (selectedChannel === "OHV") return "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OHV";
+    if (selectedChannel === "RC_OTROS") return "📺 PANTALLA EXCLUSIVA: OTROS TRÁMITES Y ENTREGA";
+    if (selectedChannel === TicketPhase.TRIADA) return "📺 PANTALLA EXCLUSIVA: FASE DE VENTANILLA / TRÍADA";
+    return `📺 PANTALLA EXCLUSIVA: FASE DE ${PHASES_CONFIG[selectedChannel as TicketPhase]?.name?.toUpperCase() || "MONITOR"}`;
+  };
+
+  const getFullscreenDescription = () => {
+    if (selectedChannel === "OR") return "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Recepción (OR) - Cubículos 2 al 8.";
+    if (selectedChannel === "OHV") return "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Hechos Vitales (OHV) - Cubículos 16 al 20.";
+    if (selectedChannel === "RC_OTROS") return "Los números en esta pantalla corresponden a otros trámites y entrega de documentos de Registro Civil.";
+    if (selectedChannel === TicketPhase.TRIADA) return "Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de Ventanilla / Tríada / Fotografía.";
+    return `Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de ${PHASES_CONFIG[selectedChannel as TicketPhase]?.name || "atención"}.`;
+  };
 
   return (
     <div id="main-public-screen" className={`rounded-2xl p-6.5 shadow-2xl border flex flex-col justify-between h-full min-h-[720px] overflow-hidden relative transition-all duration-700 ${
@@ -823,7 +844,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               {/* Responsive grid matching the 2-column layout from Photo when view is maximized */}
               <div className={`grid grid-cols-1 ${layoutFocus === "cubicles" ? "md:grid-cols-2" : "grid-cols-2"} gap-4.5 max-h-[490px] overflow-y-auto pr-1.5 scrollbar-thin scrollbar-thumb-blue-900/50`}>
                 {filteredCubicles.map((cubicle) => {
-                  const currentTicket = tickets.find(t => t.id === cubicle.currentTicketId);
+                  const currentTicket = ecosystemTickets.find(t => t.id === cubicle.currentTicketId);
                   const isFree = cubicle.status === "ONLINE_AVAILABLE";
                   const isBreak = cubicle.status === "BREAK";
                   const isAttending = cubicle.status === "ATTENDING";
@@ -1191,9 +1212,16 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
       {/* IMMERSIVE FULL SCREEN OVERLAY FOR PUBLIC TV (OR / OHV DETAILED VIEW) */}
       {isImmersiveFullscreen && (
-        <div className="absolute inset-0 z-50 bg-[#03122c] flex flex-col justify-between p-8 select-none overflow-hidden" style={{
-          backgroundImage: "radial-gradient(circle at 50% 30%, #0d295f 0%, #03122c 70%, #020918 105%)"
-        }}>
+        <div 
+          className={`absolute inset-0 z-50 flex flex-col justify-between p-8 select-none overflow-hidden ${
+            isTriadaChannel ? "bg-[#fafbfc] text-slate-900 border-slate-300" : "bg-[#03122c] text-white"
+          }`} 
+          style={
+            isTriadaChannel 
+              ? { backgroundImage: "linear-gradient(to bottom, #ffffff 0%, #f1f3f6 100%)" }
+              : { backgroundImage: "radial-gradient(circle at 50% 30%, #0d295f 0%, #03122c 70%, #020918 105%)" }
+          }
+        >
           <AnimatePresence mode="wait">
             {displayedActiveCall ? (
               /* FLASHING IMMERSIVE CALL OUT */
@@ -1202,7 +1230,11 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="bg-[#0b244c]/95 border-4 border-rose-500 rounded-3xl p-10 flex flex-col xl:flex-row items-center justify-between gap-8 h-full shadow-2xl relative overflow-hidden ring-8 ring-rose-500/10"
+                className={`border-4 rounded-3xl p-10 flex flex-col xl:flex-row items-center justify-between gap-8 h-full shadow-2xl relative overflow-hidden ring-8 ${
+                  isTriadaChannel
+                    ? "bg-white border-rose-500 text-slate-900 ring-rose-500/5"
+                    : "bg-[#0b244c]/95 border-rose-500 text-white ring-rose-500/10"
+                }`}
               >
                 {/* Flashing sides */}
                 <div className="absolute top-0 bottom-0 left-0 w-4 bg-rose-600 animate-pulse" />
@@ -1218,21 +1250,33 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                     </span>
                   )}
                   
-                  <h1 className="text-9xl md:text-[13rem] lg:text-[15rem] font-black tracking-widest text-white leading-none drop-shadow-[0_10px_30px_rgba(255,255,255,0.3)] animate-pulse font-mono">
+                  <h1 className={`text-9xl md:text-[13rem] lg:text-[15rem] font-black tracking-widest leading-none drop-shadow-md animate-pulse font-mono ${
+                    isTriadaChannel ? "text-[#003087]" : "text-white"
+                  }`}>
                     {displayedActiveCall.ticket.numberCode}
                   </h1>
                   
-                  <p className="text-3xl md:text-5xl font-black text-blue-200 uppercase tracking-widest italic truncate max-w-[800px]">
+                  <p className={`text-3xl md:text-5xl font-black uppercase tracking-widest italic truncate max-w-[800px] ${
+                    isTriadaChannel ? "text-slate-800" : "text-blue-200"
+                  }`}>
                     {displayedActiveCall.ticket.name}
                   </p>
                 </div>
 
                 {/* Destination */}
-                <div className="flex flex-col items-center justify-center bg-white border-[10px] border-rose-600 px-12 py-10 rounded-3xl text-center min-w-[400px] lg:min-w-[550px] shadow-2xl text-slate-900">
-                  <span className="text-sm tracking-widest text-[#122e70] uppercase font-mono font-black">
+                <div className={`flex flex-col items-center justify-center border-[10px] px-12 py-10 rounded-3xl text-center min-w-[400px] lg:min-w-[550px] shadow-2xl ${
+                  isTriadaChannel
+                    ? "bg-slate-50 border-rose-500 text-slate-900"
+                    : "bg-white border-rose-600 text-slate-900"
+                }`}>
+                  <span className={`text-sm tracking-widest uppercase font-mono font-black ${
+                    isTriadaChannel ? "text-[#003087]" : "text-[#122e70]"
+                  }`}>
                     {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
                   </span>
-                  <p className="text-6xl md:text-8xl font-black text-[#122e70] mt-3 uppercase font-mono tracking-wide animate-pulse">
+                  <p className={`text-6xl md:text-8xl font-black mt-3 uppercase font-mono tracking-wide animate-pulse ${
+                    isTriadaChannel ? "text-[#003087]" : "text-[#122e70]"
+                  }`}>
                     {(displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA
                       ? `CAJA ${displayedActiveCall.cubicle.name.replace(/\D/g, '') || displayedActiveCall.cubicle.name}`
                       : displayedActiveCall.cubicle.name
@@ -1254,57 +1298,89 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 className="h-full flex flex-col justify-between"
               >
                 {/* Header Banner - exactly matching the screenshot style */}
-                <div className="border border-white/5 rounded-2xl p-6 bg-[#041a3e]/85 flex flex-col lg:flex-row items-center justify-between gap-6 text-left relative overflow-hidden transition-all duration-300">
+                <div className={`border rounded-2xl p-6 flex flex-col lg:flex-row items-center justify-between gap-6 text-left relative overflow-hidden transition-all duration-300 ${
+                  isTriadaChannel
+                    ? "bg-white border-slate-300 shadow-sm"
+                    : "border-white/5 bg-[#041a3e]/85"
+                }`}>
                   <div className="space-y-1.5 relative z-10 flex-grow">
-                    <span className="px-3 py-1 text-[11px] font-mono tracking-widest bg-sky-955/70 text-[#00aaff] border border-sky-800/40 rounded-md font-black uppercase inline-block">
-                      {selectedChannel === "OR" ? "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OR" : "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OHV"}
+                    <span className={`px-3 py-1 text-[11px] font-mono tracking-widest rounded-md font-black uppercase inline-block border ${
+                      isTriadaChannel
+                        ? "bg-[#003087]/10 text-[#003087] border-[#003087]/20"
+                        : "bg-sky-955/70 text-[#00aaff] border-sky-800/40"
+                    }`}>
+                      {getFullscreenBadge()}
                     </span>
-                    <h2 className="text-3xl font-black uppercase tracking-widest leading-tight text-white mt-1">
+                    <h2 className={`text-3xl font-black uppercase tracking-widest leading-tight mt-1 ${
+                      isTriadaChannel ? "text-slate-900" : "text-white"
+                    }`}>
                       Turnos Pendientes de Atención
                     </h2>
-                    <p className="text-xs text-sky-200/70 max-w-3xl leading-relaxed font-semibold">
-                      {selectedChannel === "OR" 
-                        ? "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Recepción (OR) - Cubículos 2 al 8."
-                        : "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Hechos Vitales (OHV) - Cubículos 16 al 20."}
+                    <p className={`text-xs max-w-3xl leading-relaxed font-semibold ${
+                      isTriadaChannel ? "text-slate-550" : "text-sky-200/70"
+                    }`}>
+                      {getFullscreenDescription()}
                     </p>
                   </div>
                   
                   <div className="flex items-center gap-4 shrink-0 z-10">
                     {/* Clock */}
                     <div className="text-right mr-2">
-                      <p className="text-2xl font-sans font-black text-white/95 leading-none">
+                      <p className={`text-2xl font-sans font-black leading-none ${
+                        isTriadaChannel ? "text-slate-900" : "text-white/95"
+                      }`}>
                         {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </p>
-                      <p className="text-[9px] text-sky-405 font-mono tracking-widest uppercase font-black mt-1">
+                      <p className={`text-[9px] font-mono tracking-widest uppercase font-black mt-1 ${
+                        isTriadaChannel ? "text-slate-500" : "text-sky-405"
+                      }`}>
                         {currentTime.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }).toUpperCase()}
                       </p>
                     </div>
 
                     {/* Speaker Controls */}
-                    <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-xl font-mono text-[10px] shadow-sm">
+                    <div className={`flex items-center gap-2 border px-3 py-1.5 rounded-xl font-mono text-[10px] shadow-sm ${
+                      isTriadaChannel
+                        ? "bg-slate-50 border-slate-250 text-[#003087]"
+                        : "bg-white/5 border border-white/10 text-[#00aaff]"
+                    }`}>
                       <button
                         id="btn-fs-test-voice"
                         onClick={onTestSpeaker}
-                        className="text-[#00aaff] hover:text-sky-305 font-extrabold uppercase cursor-pointer transition-colors"
+                        className={`font-extrabold uppercase cursor-pointer transition-colors ${
+                          isTriadaChannel ? "text-[#003087] hover:text-[#002060]" : "text-[#00aaff] hover:text-sky-305"
+                        }`}
                       >
                         VOZ
                       </button>
-                      <div className="h-3 w-[1px] bg-white/15" />
+                      <div className={`h-3 w-[1px] ${isTriadaChannel ? "bg-slate-200" : "bg-white/15"}`} />
                       <button
                         id="btn-fs-toggle-sound"
                         onClick={() => setSoundEnabled(!soundEnabled)}
-                        className={`p-0.5 hover:bg-white/5 rounded transition-colors cursor-pointer ${soundEnabled ? 'text-[#00aaff]' : 'text-slate-400'}`}
+                        className={`p-0.5 rounded transition-colors cursor-pointer ${
+                          isTriadaChannel 
+                            ? soundEnabled ? 'text-[#003087] hover:bg-slate-100' : 'text-slate-400 hover:bg-slate-100'
+                            : soundEnabled ? 'text-[#00aaff] hover:bg-white/5' : 'text-slate-400 hover:bg-white/5'
+                        }`}
                       >
-                        {soundEnabled ? <Volume2 className="w-3.5 h-3.5 animate-pulse text-[#00aaff]" /> : <VolumeX className="w-3.5 h-3.5" />}
+                        {soundEnabled ? (
+                          <Volume2 className={`w-3.5 h-3.5 animate-pulse ${isTriadaChannel ? "text-[#003087]" : "text-[#00aaff]"}`} />
+                        ) : (
+                          <VolumeX className="w-3.5 h-3.5" />
+                        )}
                       </button>
                     </div>
 
                     {/* Total Waiting Card */}
-                    <div className="px-5 py-3 border border-sky-850/50 bg-[#061e47] text-white rounded-xl flex items-center gap-3 shadow-sm select-none">
-                      <Users className="w-6 h-6 animate-pulse text-[#00aaff]" />
+                    <div className={`px-5 py-3 border rounded-xl flex items-center gap-3 shadow-sm select-none ${
+                      isTriadaChannel
+                        ? "border-slate-250 bg-slate-50 text-slate-800"
+                        : "border-sky-850/50 bg-[#061e47] text-white"
+                    }`}>
+                      <Users className={`w-6 h-6 animate-pulse ${isTriadaChannel ? "text-[#003087]" : "text-[#00aaff]"}`} />
                       <div className="text-left font-mono">
-                        <span className="block text-2xl font-black leading-none">{filteredWaiting.length}</span>
-                        <span className="text-[8px] font-mono tracking-widest font-black block mt-1 text-sky-305">EN ESPERA</span>
+                        <span className={`block text-2xl font-black leading-none ${isTriadaChannel ? "text-[#003087]" : "text-white"}`}>{filteredWaiting.length}</span>
+                        <span className={`text-[8px] font-mono tracking-widest font-black block mt-1 ${isTriadaChannel ? "text-slate-500" : "text-sky-305"}`}>EN ESPERA</span>
                       </div>
                     </div>
 
@@ -1323,19 +1399,35 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-6 flex-grow overflow-hidden">
                   {/* COLUMN LEFT: Filtered Cubicles List */}
                   <div className="lg:col-span-7 flex flex-col min-h-0 text-left">
-                    <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-3">
-                      <span className="text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 text-sky-400">
-                        <UserCheck className="w-5 h-5 text-[#00aaff]" />
-                        MÓDULOS DE ATENCIÓN {selectedChannel === "OR" ? "(FILTRADOS: OFICIAL DE RECEPCIÓN OR)" : "(FILTRADOS: HECHOS VITALES OHV)"}
+                    <div className={`flex items-center justify-between border-b pb-2 mb-3 ${
+                      isTriadaChannel ? "border-slate-300" : "border-white/10"
+                    }`}>
+                      <span className={`text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 ${
+                        isTriadaChannel ? "text-slate-805" : "text-sky-400"
+                      }`}>
+                        <UserCheck className={`w-5 h-5 ${isTriadaChannel ? "text-[#003087]" : "text-[#00aaff]"}`} />
+                        MÓDULOS DE ATENCIÓN {
+                          selectedChannel === "OR"
+                            ? "(FILTRADOS: OFICIAL DE RECEPCIÓN OR)"
+                            : selectedChannel === "OHV"
+                              ? "(FILTRADOS: HECHOS VITALES OHV)"
+                              : selectedChannel === "RC_OTROS"
+                                ? "(FILTRADOS: OTROS TRÁMITES)"
+                                : selectedChannel === TicketPhase.TRIADA
+                                  ? "(FILTRADOS: ATENCIÓN / TRÍADA)"
+                                  : `(FILTRADOS: ${PHASES_CONFIG[selectedChannel as TicketPhase]?.name?.toUpperCase() || "MONITOR"})`
+                        }
                       </span>
-                      <span className="text-xs font-mono tracking-wider font-bold uppercase text-sky-300/60">
+                      <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
+                        isTriadaChannel ? "text-slate-500" : "text-sky-300/60"
+                      }`}>
                         {filteredCubicles.length} EN SERVICIO
                       </span>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4 overflow-y-auto pr-1 flex-grow max-h-[50vh] scrollbar-thin scrollbar-thumb-blue-900/50">
                       {filteredCubicles.map((cubicle) => {
-                        const currentTicket = tickets.find(t => t.id === cubicle.currentTicketId);
+                        const currentTicket = ecosystemTickets.find(t => t.id === cubicle.currentTicketId);
                         const isFree = cubicle.status === "ONLINE_AVAILABLE";
                         const isBreak = cubicle.status === "BREAK";
                         const isAttending = cubicle.status === "ATTENDING";
@@ -1398,12 +1490,28 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
                   {/* COLUMN RIGHT: Filtered Waiting List */}
                   <div className="lg:col-span-5 flex flex-col min-h-0 text-left">
-                    <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-3">
-                      <span className="text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 text-sky-400">
-                        <Users className="w-5 h-5 text-[#00aaff]" />
-                        COLA DE ESPERA EN EXCLUSIVA ({selectedChannel === "OR" ? "OFICIAL DE RECEPCIÓN OR" : "OFICIAL DE HECHOS VITALES OHV"})
+                    <div className={`flex items-center justify-between border-b pb-2 mb-3 ${
+                      isTriadaChannel ? "border-slate-300" : "border-white/10"
+                    }`}>
+                      <span className={`text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 ${
+                        isTriadaChannel ? "text-slate-805" : "text-sky-400"
+                      }`}>
+                        <Users className={`w-5 h-5 ${isTriadaChannel ? "text-[#003087]" : "text-[#00aaff]"}`} />
+                        COLA DE ESPERA EN EXCLUSIVA ({
+                          selectedChannel === "OR"
+                            ? "OFICIAL DE RECEPCIÓN OR"
+                            : selectedChannel === "OHV"
+                              ? "OFICIAL DE HECHOS VITALES OHV"
+                              : selectedChannel === "RC_OTROS"
+                                ? "OTROS TRÁMITES Y ENTREGA"
+                                : selectedChannel === TicketPhase.TRIADA
+                                  ? "VENTANILLA / TRÍADA"
+                                  : PHASES_CONFIG[selectedChannel as TicketPhase]?.name?.toUpperCase() || "MONITOR"
+                        })
                       </span>
-                      <span className="text-xs font-mono font-extrabold text-sky-305/70">
+                      <span className={`text-xs font-mono font-extrabold ${
+                        isTriadaChannel ? "text-slate-500" : "text-sky-305/70"
+                      }`}>
                         TOTAL: {filteredWaiting.length} TURNOS EN FILA
                       </span>
                     </div>
@@ -1418,23 +1526,35 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                 key={ticket.id}
                                 className={`p-4 rounded-2xl flex items-center justify-between border transition-all ${
                                   ticket.priority
-                                    ? "bg-amber-500/10 border-amber-500/40 text-amber-250 shadow-md"
+                                    ? isTriadaChannel
+                                      ? "bg-amber-50 border-amber-300 text-amber-950 shadow-sm"
+                                      : "bg-amber-500/10 border-amber-500/40 text-amber-250 shadow-md"
                                     : (ticket.isAppointment && gatewaySelection !== "registro_civil")
-                                      ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-200 shadow-md animate-pulse"
-                                      : "bg-[#051c44]/80 border-blue-900/50 text-white hover:border-blue-700/60 shadow-md"
+                                      ? isTriadaChannel
+                                        ? "bg-sky-50 border-sky-350 text-sky-950 shadow-sm animate-pulse"
+                                        : "bg-emerald-500/10 border-emerald-500/40 text-emerald-200 shadow-md animate-pulse"
+                                      : isTriadaChannel
+                                        ? "bg-white border-slate-250 text-slate-805 hover:border-slate-300 shadow-sm"
+                                        : "bg-[#051c44]/80 border-blue-900/50 text-white hover:border-blue-700/60 shadow-md"
                                 }`}
                               >
                                 <div className="space-y-1 truncate max-w-[150px] text-left">
-                                  <span className="text-[9px] font-mono font-black block leading-none text-[#00d0ff]/50">
+                                  <span className={`text-[9px] font-mono font-black block leading-none ${
+                                    isTriadaChannel ? "text-slate-400" : "text-[#00d0ff]/50"
+                                  }`}>
                                     ORDEN #{index+1}{(ticket.isAppointment && gatewaySelection !== "registro_civil") && " • 📅 CITA PREVIA"}
                                   </span>
-                                  <h5 className="font-black tracking-wider uppercase truncate text-xs text-white">
+                                  <h5 className={`font-black tracking-wider uppercase truncate text-xs ${
+                                    isTriadaChannel ? "text-slate-805" : "text-white"
+                                  }`}>
                                     {ticket.name}
                                   </h5>
                                 </div>
                                 
                                 <div className="flex flex-col items-end gap-1 font-mono">
-                                  <span className="font-black leading-none text-[#00aaff] text-lg">
+                                  <span className={`font-black leading-none text-lg ${
+                                    isTriadaChannel ? "text-[#003087]" : "text-[#00aaff]"
+                                  }`}>
                                     {ticket.numberCode}
                                   </span>
                                   <span className={`text-[9px] px-2 py-0.5 font-black uppercase text-center rounded ${styleConfig.color}`}>
@@ -1446,9 +1566,17 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                           })}
                         </div>
                       ) : (
-                        <div className="h-[250px] border border-dashed border-white/10 rounded-xl bg-slate-950/20 flex flex-col items-center justify-center p-6 text-center backdrop-blur shadow-sm">
-                          <p className="text-sm uppercase tracking-widest font-black text-sky-455">No hay Turnos en Fila</p>
-                          <p className="text-xs text-slate-400 mt-2 uppercase tracking-wide max-w-sm leading-relaxed font-bold">
+                        <div className={`h-[250px] border border-dashed rounded-xl flex flex-col items-center justify-center p-6 text-center backdrop-blur shadow-sm ${
+                          isTriadaChannel
+                            ? "border-slate-300 bg-white"
+                            : "border-white/10 bg-slate-950/20"
+                        }`}>
+                          <p className={`text-sm uppercase tracking-widest font-black ${
+                            isTriadaChannel ? "text-slate-600" : "text-sky-455"
+                          }`}>No hay Turnos en Fila</p>
+                          <p className={`text-xs mt-2 uppercase tracking-wide max-w-sm leading-relaxed font-bold ${
+                            isTriadaChannel ? "text-slate-500" : "text-slate-400"
+                          }`}>
                             Los turnos pasarán automáticamente a esta pantalla tan pronto se completen de Caja
                           </p>
                         </div>
@@ -1458,9 +1586,13 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 </div>
 
                 {/* Bottom Recent Attention History */}
-                <div className="pt-4 border-t border-white/10 flex items-center justify-between text-xs text-sky-400/50 font-bold font-mono">
+                <div className={`pt-4 border-t flex items-center justify-between text-xs font-bold font-mono ${
+                  isTriadaChannel ? "border-slate-300 text-slate-650" : "border-white/10 text-sky-400/50"
+                }`}>
                   <div className="flex items-center gap-3 w-full">
-                    <span className="text-[10px] font-black min-w-max uppercase font-mono tracking-widest text-sky-305/45 font-bold">
+                    <span className={`text-[10px] font-black min-w-max uppercase font-mono tracking-widest font-bold ${
+                      isTriadaChannel ? "text-slate-500" : "text-sky-305/45"
+                    }`}>
                       📢 ÚLTIMAS ATENCIONES REALIZADAS:
                     </span>
                     {recentHistory.length > 0 ? (
@@ -1470,17 +1602,25 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                             key={h.id}
                             className={`px-3 py-1 text-xs font-mono rounded-lg font-bold flex items-center gap-1.5 shrink-0 border ${
                               h.status === TicketStatus.COMPLETED 
-                                ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30 shadow-sm"
-                                : "bg-slate-900/50 text-slate-400 border-white/5"
+                                ? isTriadaChannel
+                                  ? "bg-emerald-50 text-emerald-800 border-emerald-200 shadow-sm"
+                                  : "bg-emerald-500/10 text-emerald-300 border-emerald-500/30 shadow-sm"
+                                : isTriadaChannel
+                                  ? "bg-slate-100 text-slate-500 border-slate-200"
+                                  : "bg-[#051c44]/80 text-slate-400 border-white/5"
                             }`}
                           >
                             <span>{h.numberCode}</span>
-                            <span className="text-[10px] font-sans truncate max-w-[80px] uppercase font-bold text-slate-400">{h.name}</span>
+                            <span className={`text-[10px] font-sans truncate max-w-[80px] uppercase font-bold ${
+                              isTriadaChannel ? "text-slate-600" : "text-slate-400"
+                            }`}>{h.name}</span>
                           </span>
                         ))}
                       </div>
                     ) : (
-                      <span className="text-[10px] font-sans tracking-widest font-black uppercase text-slate-500">SIN HISTORIAL RECIENTE</span>
+                      <span className={`text-[10px] font-sans tracking-widest font-black uppercase ${
+                        isTriadaChannel ? "text-slate-400" : "text-[#051c44]/80"
+                      }`}>SIN HISTORIAL RECIENTE</span>
                     )}
                   </div>
                 </div>

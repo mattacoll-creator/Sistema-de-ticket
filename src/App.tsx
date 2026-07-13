@@ -40,6 +40,9 @@ import {
 } from "lucide-react";
 
 export default function App() {
+  // Track selected gateway option: "select" | "cedulacion" | "registro_civil"
+  const [gatewaySelection, setGatewaySelection] = useState<"select" | "cedulacion" | "registro_civil">("select");
+
   const {
     currentOfficeId,
     setCurrentOfficeId,
@@ -57,6 +60,7 @@ export default function App() {
     callNextTicket,
     startAttendingTicket,
     completeTicket,
+    transferTicketToCajaRC,
     markTicketAsMissed,
     recallCurrentTicket,
     changeCubicleStatus,
@@ -70,7 +74,7 @@ export default function App() {
     supabaseSyncStatus,
     pullOfficeFromSupabase,
     pushOfficeToSupabase
-  } = useTicketSystem();
+  } = useTicketSystem(gatewaySelection);
 
   // --- INTEGRACIÓN GESTIÓN DE ROLES Y USUARIOS ---
   const DEFAULT_USERS: SystemUser[] = [
@@ -152,9 +156,6 @@ export default function App() {
 
   // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin" | "super-admin"
   const [activeTab, setActiveTab ] = useState<string>("kiosk");
-
-  // Track selected gateway option: "select" | "cedulacion" | "registro_civil"
-  const [gatewaySelection, setGatewaySelection] = useState<"select" | "cedulacion" | "registro_civil">("select");
 
   // Track the tab requested during login redirection
   const [pendingAuthTab, setPendingAuthTab] = useState<string>("admin");
@@ -259,12 +260,14 @@ export default function App() {
       "Felipe Rojas", "Camila Montes", "Juan Diego", "Adriana Rincón", "Héctor Soler"
     ];
 
-    const randomServices = [
+    const randomServices = (gatewaySelection === "registro_civil" ? [
+      ServiceType.REGISTRO
+    ] : [
       ServiceType.ELECTORAL,
-      ServiceType.REGISTRO,
       ServiceType.CEDULACION,
-      ServiceType.EXTRANJERIA
-    ].filter(s => s !== ServiceType.EXTRANJERIA || currentOfficeId === "OFF-1");
+      ServiceType.EXTRANJERIA,
+      ServiceType.REG_CERTIFICATION
+    ]).filter(s => s !== ServiceType.EXTRANJERIA || currentOfficeId === "OFF-1");
 
     const randomName = randomNames[Math.floor(Math.random() * randomNames.length)];
     const randomService = randomServices[Math.floor(Math.random() * randomServices.length)];
@@ -471,29 +474,29 @@ export default function App() {
 
       {/* UPPER NATIONAL FLAG BAR */}
       {!isHeaderHidden && (
-        <div className="w-full h-1.5 flex select-none shrink-0">
-          <div className="bg-red-600 flex-1"></div>
-          <div className="bg-[#122e70] flex-1"></div>
+        <div className="w-full h-1 flex select-none shrink-0 relative z-35 shadow-sm">
+          <div className="bg-[#da121a] flex-1"></div>
+          <div className="bg-[#003087] flex-1"></div>
         </div>
       )}
 
       {/* MASTER SIMULATOR & COMPATIBILITY BAR */}
-      <div className="w-full bg-[#122e70] text-white py-2.5 px-4 md:px-8 border-b border-[#0d2150] flex flex-wrap items-center justify-between gap-3 shadow-md shrink-0">
+      <div className="w-full bg-[#0a1931] text-white py-2.5 px-4 md:px-8 border-b border-[#15305b] flex flex-wrap items-center justify-between gap-3 shadow-lg shrink-0 relative z-30 font-sans premium-glow-blue">
         <div className="flex items-center gap-3.5 flex-wrap">
-          <div className="flex items-center gap-1.5 bg-blue-950/60 px-2.5 py-1 rounded-lg border border-blue-800 text-[9px] font-black tracking-widest uppercase shrink-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block animate-pulse"></span>
+          <div className="flex items-center gap-1.5 bg-blue-950/80 px-3 py-1 rounded-full border border-blue-800/60 text-[9px] font-black tracking-widest uppercase shrink-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
             <span>Controles</span>
           </div>
-          <div className="flex items-center gap-2 text-[11px] font-semibold text-blue-200">
+          <div className="flex items-center gap-2 text-[11px] font-semibold text-blue-100">
             <span>Departamento:</span>
-            <span className={`px-2.5 py-0.5 rounded-md text-[10.5px] font-black uppercase tracking-wider ${
+            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
               gatewaySelection === "registro_civil" ? "bg-blue-600 text-white" : "bg-amber-500 text-slate-950"
             }`}>
               {gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"}
             </span>
             <button
               onClick={() => setGatewaySelection("select")}
-              className="ml-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 hover:text-white border border-white/20 hover:border-white/40 text-blue-100 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer active:scale-95"
+              className="ml-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 hover:text-white border border-white/25 hover:border-white/50 text-blue-100 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer active:scale-95"
               title="Volver a la selección inicial"
             >
               Cambiar Sede/Trámite
@@ -601,43 +604,43 @@ export default function App() {
         </div>
 
         {/* VIEWPORT CONTROLLER TABS */}
-        <div className="flex flex-wrap items-center justify-start gap-2 border-b border-slate-200/50 pb-2.5">
+        <div className="flex flex-wrap items-center justify-start gap-2.5 border-b border-slate-200/60 pb-3">
           <button
             id="tab-view-kiosk"
             onClick={() => setActiveTab("kiosk")}
-            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
+            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
               activeTab === "kiosk"
-                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
-                : "bg-white text-slate-600 border-slate-205 hover:bg-slate-50 hover:text-slate-900"
+                ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
             }`}
           >
-            <Printer className="w-4 h-4" />
+            <Printer className="w-4 h-4 text-amber-500" />
             <span>Kiosko de Turnos (Clientes)</span>
           </button>
 
           <button
             id="tab-view-tv"
             onClick={() => setActiveTab("tv")}
-            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
+            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
               activeTab === "tv"
-                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
-                : "bg-white text-slate-600 border-slate-205 hover:bg-slate-50 hover:text-slate-900"
+                ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
             }`}
           >
-            <Tv className="w-4 h-4" />
+            <Tv className="w-4 h-4 text-sky-500" />
             <span>TV de Sala (Público)</span>
           </button>
 
           <button
             id="tab-view-agent"
             onClick={() => setActiveTab("agent")}
-            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
+            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
               activeTab === "agent"
-                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
-                : "bg-white text-slate-600 border-slate-205 hover:bg-slate-50 hover:text-slate-900"
+                ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
             }`}
           >
-            <UserCheck className="w-4 h-4" />
+            <UserCheck className="w-4 h-4 text-emerald-500" />
             <span>Consola del Agente</span>
           </button>
 
@@ -751,6 +754,7 @@ export default function App() {
               onCallNext={callNextTicket}
               onStartAttending={startAttendingTicket}
               onComplete={completeTicket}
+              onTransferToCajaRC={transferTicketToCajaRC}
               onMiss={markTicketAsMissed}
               onRecall={recallCurrentTicket}
               onChangeStatus={changeCubicleStatus}

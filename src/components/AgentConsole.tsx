@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from "react";
-import { REGISTRO_PROCEDURES } from "./WelcomeKiosk";
+import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES, getProcedureName } from "./WelcomeKiosk";
 import { Ticket, Cubicle, TicketStatus, CubicleStatus, SERVICES_CONFIG, ServiceType, TicketPhase, PHASES_CONFIG, SystemUser, UserRole, OFFICES_CONFIG } from "../types";
 import { canCubicleServeProcedure } from "../hooks/useTicketSystem";
 import { 
@@ -31,7 +31,9 @@ import {
   BarChart2,
   Clock,
   Grid,
-  ShieldAlert
+  ShieldAlert,
+  DollarSign,
+  Camera
 } from "lucide-react";
 
 export function getUserDisplayDetails(u: SystemUser, isRc: boolean) {
@@ -80,10 +82,11 @@ interface AgentConsoleProps {
   cubicles: Cubicle[];
   onCallNext: (cubicleId: string) => Promise<void>;
   onStartAttending: (cubicleId: string) => void;
-  onComplete: (cubicleId: string) => void;
+  onComplete: (cubicleId: string, outcome?: "administrative" | "emission_physical") => void;
+  onTransferToCajaRC?: (cubicleId: string) => void;
   onMiss: (cubicleId: string) => void;
   onRecall: (cubicleId: string) => void;
-  onChangeStatus: (cubicleId: string, status: CubicleStatus) => void;
+  onChangeStatus: (cubicleId: string, status: CubicleStatus, agentName?: string) => void;
   onUpdateCubicleConfig: (cubicleId: string, phases: TicketPhase[], services: ServiceType[]) => void;
   currentOfficeId?: string;
   users: SystemUser[];
@@ -98,6 +101,7 @@ export default function AgentConsole({
   onCallNext,
   onStartAttending,
   onComplete,
+  onTransferToCajaRC,
   onMiss,
   onRecall,
   onChangeStatus,
@@ -119,7 +123,10 @@ export default function AgentConsole({
 
   const [viewMode, setViewMode] = useState<"agent" | "supervisor">("agent");
   const [activeRoleFilter, setActiveRoleFilter] = useState<TicketPhase>(TicketPhase.CAJA);
-  const [showConfig, setShowConfig] = useState<boolean>(false);
+  const [showConfig, setShowConfig] = useState<boolean>(() => {
+    return gatewaySelection !== "registro_civil";
+  });
+  const [preLoginRole, setPreLoginRole] = useState<"caja" | "triada" | null>(null);
 
   // --- COMPORTAMIENTO DE ACCESO PARA SUPERVISIÓN REGISTRO CIVIL ---
   const [isRcSupervisorAuthenticated, setIsRcSupervisorAuthenticated] = useState<boolean>(false);
@@ -258,6 +265,16 @@ export default function AgentConsole({
   const isCajaOnly = loggedInUser.role === UserRole.AGENT_CAJA;
   const isTriadaOnly = loggedInUser.role === UserRole.AGENT_TRIADA;
 
+  const ecosystemTickets = React.useMemo(() => {
+    return tickets.filter(t => {
+      if (gatewaySelection === "registro_civil") {
+        return t.serviceType === ServiceType.REGISTRO;
+      } else {
+        return t.serviceType !== ServiceType.REGISTRO;
+      }
+    });
+  }, [tickets, gatewaySelection]);
+
   React.useEffect(() => {
     if (isCajaOnly && activeRoleFilter !== TicketPhase.CAJA) {
       setActiveRoleFilter(TicketPhase.CAJA);
@@ -276,18 +293,25 @@ export default function AgentConsole({
 
   // Guarantee we filter cubicles for active selection:
   const filteredRoleCubicles = cubicles.filter(c => {
+    if (gatewaySelection !== "registro_civil") {
+      const isRcSpecific = (c.supportedServices || []).includes(ServiceType.REGISTRO) ||
+        c.name.includes("(OR)") || c.name.includes("(OHV)") || c.name.includes("(OTR)") ||
+        c.name.includes("(ED)") || c.name.includes("(SAU)") || c.name.includes("(SI") ||
+        c.name.includes("(OI)") || c.name.includes("(RS)") || c.name.includes("(RMAT)") ||
+        c.name.includes("(STR)");
+      if (isRcSpecific) return false;
+    }
+
     if (activeRoleFilter === TicketPhase.CAJA) {
-      // Show ONLY cashiers (Booths with CAJA phase supported, or booths named "Caja")
       return c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja");
     } else {
-      // Show ONLY triads (Booths with TRIADA phase supported, or booths named "Tríada" / "Foto")
       return c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("foto") || c.name.toLowerCase().includes("triada");
     }
   });
 
   // Ensure current cubicle is valid based on selection
   let currentCubicle = cubicles.find(c => c.id === activeCubicleId);
-  if (gatewaySelection !== "registro_civil") {
+  if (gatewaySelection !== "registro_civil" && !hasSelectedCubicle) {
     const isMatched = filteredRoleCubicles.some(c => c.id === activeCubicleId);
     if (!isMatched && filteredRoleCubicles.length > 0) {
       currentCubicle = filteredRoleCubicles[0];
@@ -300,7 +324,7 @@ export default function AgentConsole({
   const activeTicket = tickets.find(t => t.id === currentCubicle.currentTicketId);
 
   // Filter candidates waiting that can be processed by this agent (supports current phase or RC specialty)
-  const candidateWaitingTickets = tickets.filter(t => {
+  const candidateWaitingTickets = ecosystemTickets.filter(t => {
     if (t.status !== TicketStatus.WAITING) return false;
     
     if (gatewaySelection === "registro_civil") {
@@ -313,7 +337,7 @@ export default function AgentConsole({
     return currentCubicle.supportedPhases?.includes(t.currentPhase);
   });
 
-  const needsCubicleSelection = gatewaySelection === "registro_civil" && !hasSelectedCubicle;
+  const needsCubicleSelection = !hasSelectedCubicle;
 
   // Sort queue showing priorities first
   const sortedCandidates = [...candidateWaitingTickets].sort((a, b) => {
@@ -345,6 +369,77 @@ export default function AgentConsole({
   };
 
   if (!sessionUser) {
+    if (gatewaySelection !== "registro_civil" && preLoginRole === null) {
+      return (
+        <div id="agent-auth-gateway" className="bg-white border border-slate-200 rounded-3xl p-8 flex flex-col justify-center items-center min-h-[750px] shadow-lg font-sans relative overflow-hidden">
+          {/* Subtle geometric grid backdrop */}
+          <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.6))] pointer-events-none" />
+          
+          <div className="w-full max-w-2xl space-y-8 animate-fadeIn relative z-10">
+            {/* Header */}
+            <div className="text-center space-y-3.5">
+              <div className="mx-auto w-16 h-16 bg-gradient-to-br from-[#003087] to-[#122e70] text-amber-400 rounded-2xl flex items-center justify-center shadow-lg border border-[#003087]/20 premium-glow-blue">
+                <Lock className="w-8 h-8" />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="text-2xl font-black uppercase tracking-widest text-[#003087] leading-none">
+                  Consola del Operador
+                </h3>
+                <p className="text-[10px] text-slate-450 font-extrabold uppercase tracking-widest leading-none">
+                  Cedulación — Selección de Área de Trabajo
+                </p>
+              </div>
+              <div className="h-[2px] bg-gradient-to-r from-transparent via-slate-200 to-transparent w-40 mx-auto"></div>
+            </div>
+
+            <div className="p-4 border border-blue-100 bg-blue-50/50 text-blue-950 rounded-2xl text-xs font-semibold text-center max-w-xl mx-auto shadow-xs">
+              Bienvenido al sistema de atención de Cedulación. Por favor, seleccione su área de trabajo para comenzar a atender.
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setPreLoginRole("caja");
+                  setActiveRoleFilter(TicketPhase.CAJA);
+                }}
+                className="p-8 bg-white hover:bg-slate-50/50 border-2 border-slate-200 hover:border-[#003087] rounded-3xl text-center transition-all duration-300 shadow-sm hover:shadow-lg cursor-pointer group flex flex-col items-center justify-center space-y-4 hover:scale-[1.01]"
+              >
+                <div className="w-16 h-16 rounded-2xl bg-blue-50 text-[#003087] flex items-center justify-center group-hover:scale-105 transition-all shadow-inner">
+                  <DollarSign className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <span className="text-base font-black text-slate-900 uppercase group-hover:text-[#003087]">Caja</span>
+                  <p className="text-xs text-slate-450 font-bold uppercase tracking-wider leading-relaxed">
+                    Módulos de Pago y Recaudación (Cajas 0 a 8)
+                  </p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPreLoginRole("triada");
+                  setActiveRoleFilter(TicketPhase.TRIADA);
+                }}
+                className="p-8 bg-white hover:bg-slate-50/50 border-2 border-slate-200 hover:border-[#003087] rounded-3xl text-center transition-all duration-300 shadow-sm hover:shadow-lg cursor-pointer group flex flex-col items-center justify-center space-y-4 hover:scale-[1.01]"
+              >
+                <div className="w-16 h-16 rounded-2xl bg-cyan-50 text-cyan-850 flex items-center justify-center group-hover:scale-105 transition-all shadow-inner">
+                  <Layers className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <span className="text-base font-black text-slate-900 uppercase group-hover:text-[#003087]">Tríada / Fotografía</span>
+                  <p className="text-xs text-slate-450 font-bold uppercase tracking-wider leading-relaxed">
+                    Atención, Trámite y Captura (Módulos 1 a 8)
+                  </p>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div id="agent-auth-gateway" className="bg-white border border-slate-250 rounded-2xl p-8 flex flex-col justify-center items-center min-h-[750px] shadow-sm font-sans">
         <div className="w-full max-w-lg space-y-8 animate-fadeIn">
@@ -359,7 +454,7 @@ export default function AgentConsole({
                 Consola del Operador
               </h3>
               <p className="text-[10px] text-slate-450 font-extrabold uppercase tracking-widest leading-none">
-                Control de Acceso de Agentes & Regionales
+                {gatewaySelection === "registro_civil" ? "Control de Acceso de Agentes & Regionales" : `Cedulación — Iniciar Sesión como ${preLoginRole === "caja" ? "Caja" : "Tríada"}`}
               </p>
             </div>
             <div className="h-[2px] bg-gradient-to-r from-transparent via-slate-200 to-transparent w-40 mx-auto"></div>
@@ -371,9 +466,18 @@ export default function AgentConsole({
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#122e70]"></span>
                 <span className="text-xs font-black uppercase text-[#122e70]">
-                  Identificación del Operador
+                  Identificación del Operador {preLoginRole && `— ${preLoginRole === "caja" ? "Caja" : "Tríada / Fotografía"}`}
                 </span>
               </div>
+              {gatewaySelection !== "registro_civil" && (
+                <button
+                  type="button"
+                  onClick={() => setPreLoginRole(null)}
+                  className="text-[10px] font-black uppercase text-[#122e70] hover:underline"
+                >
+                  Cambiar Área 🔄
+                </button>
+              )}
             </div>
 
             <form onSubmit={handleLoginSubmit} className="space-y-4">
@@ -448,6 +552,108 @@ export default function AgentConsole({
   }
 
   if (needsCubicleSelection) {
+    if (gatewaySelection !== "registro_civil") {
+      // Find the cubicles that correspond to the activeRoleFilter (Caja vs Tríada)
+      // Caja: IDs CUB-34 to CUB-42 (Caja 0 to Caja 8)
+      // Tríada: IDs CUB-24 to CUB-31 (Módulo 1 to Módulo 8)
+      const roleCubicles = cubicles.filter(c => {
+        const num = parseInt(c.id.replace("CUB-", ""), 10);
+        if (activeRoleFilter === TicketPhase.CAJA) {
+          return num >= 34 && num <= 42;
+        } else {
+          return num >= 24 && num <= 31;
+        }
+      });
+
+      return (
+        <div id="agent-cubicle-selection-gateway" className="bg-white border border-slate-250 rounded-2xl p-8 flex flex-col justify-center items-center min-h-[750px] shadow-sm font-sans">
+          <div className="w-full max-w-4xl space-y-8 animate-fadeIn">
+            {/* Header */}
+            <div className="text-center space-y-3">
+              <div className="mx-auto w-16 h-16 bg-[#122e70] text-white rounded-2xl flex items-center justify-center shadow-md border border-[#122e70]/10">
+                <MapPin className="w-8 h-8 text-amber-400" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-2xl font-black uppercase tracking-widest text-slate-900 leading-none">
+                  Selección de Módulo
+                </h3>
+                <p className="text-[10px] text-slate-450 font-extrabold uppercase tracking-widest leading-none mt-1">
+                  Cedulación — {activeRoleFilter === TicketPhase.CAJA ? "Área de Cajas" : "Área de Tríada / Fotografía"}
+                </p>
+              </div>
+              <div className="h-[2px] bg-gradient-to-r from-transparent via-slate-200 to-transparent w-40 mx-auto"></div>
+            </div>
+
+            <div className="p-4 border border-blue-100 bg-blue-50/50 text-blue-950 rounded-xl text-xs font-semibold text-center max-w-2xl mx-auto">
+              Hola, <strong>{loggedInUser.fullName}</strong>. Seleccione el módulo o caja libre que ocupará para iniciar su turno de atención.
+            </div>
+
+            {/* Grid of Free / Available Cubicles */}
+            <div className="space-y-4">
+              <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 font-mono flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#122e70] animate-pulse"></span>
+                Módulos Disponibles ({activeRoleFilter === TicketPhase.CAJA ? "Caja 0 al 8" : "Tríada 1 al 8"})
+              </span>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {roleCubicles.map(c => {
+                  // A cubicle is "libre" (free) if its status is OFFLINE
+                  const isLibre = c.status === CubicleStatus.OFFLINE;
+
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        setActiveCubicleId(c.id);
+                        // Mark it as ONLINE_AVAILABLE when selected!
+                        onChangeStatus(c.id, CubicleStatus.ONLINE_AVAILABLE, loggedInUser.fullName);
+                        setHasSelectedCubicle(true);
+                      }}
+                      className={`p-5 bg-white hover:bg-slate-50 border rounded-2xl text-left transition-all duration-200 shadow-sm hover:shadow-md cursor-pointer group flex flex-col justify-between h-32 ${
+                        isLibre 
+                          ? "border-emerald-250 hover:border-emerald-450 bg-emerald-50/10" 
+                          : "border-slate-200 hover:border-slate-350"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-sm font-black text-[#122e70] uppercase group-hover:text-blue-900">{c.name}</span>
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                          isLibre ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"
+                        }`}>
+                          {isLibre ? "🟢 LIBRE" : "🔴 EN SERVICIO"}
+                        </span>
+                      </div>
+                      <div className="mt-3 space-y-1">
+                        <p className="text-[10px] text-slate-500 font-bold uppercase">
+                          Rol: {activeRoleFilter === TicketPhase.CAJA ? "Caja / Pago" : "Tríada / Fotografía"}
+                        </p>
+                        <p className="text-[9px] text-slate-450 font-bold truncate">
+                          Último Agente: {c.agentName || "Ninguno"}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-between pt-6 border-t border-slate-200">
+              <button
+                onClick={() => {
+                  setSessionUser(null);
+                  setCurrentActiveUserId("");
+                  setPreLoginRole(null);
+                }}
+                className="py-2.5 px-5 bg-slate-150 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer transition-all"
+              >
+                ← Volver al login
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div id="agent-cubicle-selection-gateway" className="bg-white border border-slate-250 rounded-2xl p-8 flex flex-col justify-center items-center min-h-[750px] shadow-sm font-sans">
         <div className="w-full max-w-4xl space-y-8">
@@ -611,6 +817,8 @@ export default function AgentConsole({
                 ))}
               </div>
             </div>
+
+
           </div>
 
           <div className="flex justify-end pt-4 border-t border-slate-200">
@@ -651,8 +859,12 @@ export default function AgentConsole({
           <div className="flex items-center gap-3">
             <button
               onClick={() => {
+                if (currentCubicle) {
+                  onChangeStatus(currentCubicle.id, CubicleStatus.OFFLINE);
+                }
                 setSessionUser(null);
                 setCurrentActiveUserId("");
+                setHasSelectedCubicle(false);
               }}
               className="py-1.5 px-3 bg-rose-50 text-rose-750 hover:bg-rose-100 border border-rose-200 font-black text-[10px] uppercase tracking-wider rounded-lg cursor-pointer transition-colors flex items-center justify-center gap-1.5"
               title="Cerrar la sesión de agente actual"
@@ -917,7 +1129,8 @@ export default function AgentConsole({
                     const currentServingTicket = tickets.find(t => t.id === cub.currentTicketId);
                     
                     let procType = "Gral";
-                    if (num >= 2 && num <= 8) procType = "OR";
+                    if (num === 1) procType = "OTR";
+                    else if (num >= 2 && num <= 8) procType = "OR";
                     else if (num === 9) procType = "SI/OI";
                     else if (num === 10) procType = "ED";
                     else if (num === 11) procType = "RS";
@@ -925,6 +1138,9 @@ export default function AgentConsole({
                     else if (num === 15) procType = "SAU";
                     else if (num >= 16 && num <= 20) procType = "OHV";
                     else if (num === 23) procType = "STR";
+                    else if (num >= 24 && num <= 31) procType = "Tríada Ced";
+                    else if (num === 32 || num === 33) procType = "Caja Ced";
+                    else if (num >= 34 && num <= 42) procType = "Caja Ced";
 
                     return (
                       <div key={cub.id} className="bg-white border border-slate-150 p-4 rounded-xl flex items-center justify-between transition-all duration-200 hover:shadow-xs">
@@ -1115,141 +1331,49 @@ export default function AgentConsole({
           </p>
         </div>
 
-        {gatewaySelection === "registro_civil" ? (
-          /* REGISTRO CIVIL: SELECTED CUBICLE CARD WITH RE-SELECTOR BUTTON */
-          <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 font-sans shadow-inner">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-900 text-white rounded-xl shadow-sm">
-                <MapPin className="w-6 h-6" />
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-450 uppercase font-black tracking-widest block font-mono">Módulo de Registro Civil Activo</span>
-                <span className="text-base font-black text-[#122e70] uppercase">{currentCubicle.name}</span>
-                <span className="text-[9.5px] text-emerald-850 font-black bg-emerald-50 border border-emerald-150 px-2 py-0.5 rounded-md ml-2 inline-block align-middle">
-                  Agente: {currentCubicle.agentName}
-                </span>
-              </div>
+        {/* ACTIVE CUBICLE CARD WITH RE-SELECTOR BUTTON */}
+        <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 font-sans shadow-inner">
+          <div className="flex items-center gap-3">
+            <div className={`p-3 text-white rounded-xl shadow-sm ${gatewaySelection === "registro_civil" ? "bg-blue-900" : "bg-amber-500"}`}>
+              <MapPin className="w-6 h-6" />
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setHasSelectedCubicle(false);
-              }}
-              className="py-2.5 px-4 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-250 hover:border-slate-350 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm shrink-0"
-            >
-              Cambiar de Módulo 🔄
-            </button>
+            <div>
+              <span className="text-[10px] text-slate-450 uppercase font-black tracking-widest block font-mono">
+                {gatewaySelection === "registro_civil" ? "Módulo de Registro Civil Activo" : "Módulo de Cedulación Activo"}
+              </span>
+              <span className="text-base font-black text-[#122e70] uppercase">{currentCubicle.name}</span>
+              <span className="text-[9.5px] text-emerald-850 font-black bg-emerald-50 border border-emerald-150 px-2 py-0.5 rounded-md ml-2 inline-block align-middle">
+                Agente: {currentCubicle.agentName}
+              </span>
+            </div>
           </div>
-        ) : (
-          /* CEDULACION: PROMINENT ROLE INDICATOR & SELECTION BUTTONS + ALL CUBICLES SELECTOR */
-          <>
-            {/* PROMINENT ROLE INDICATOR & SELECTION BUTTONS AT THE TOP */}
-            <div className="space-y-3 bg-blue-50/30 p-5 border border-blue-100 rounded-2xl shadow-sm">
-              <div className="flex items-center justify-between">
-                <label className="block text-[11px] uppercase tracking-widest font-black text-[#122e70] font-mono">
-                  ★ ROL SELECCIONADO DE ATENCIÓN (FILTRO GLOBAL DE MÓDULOS) ★
-                </label>
-                <span className="text-[10px] bg-[#122e70] text-white px-2 py-0.5 rounded-md font-black">ACTIVO</span>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4 font-sans">
-                <button
-                  id="role-filter-caja"
-                  type="button"
-                  disabled={isTriadaOnly}
-                  onClick={() => {
-                    if (isTriadaOnly) return;
-                    setActiveRoleFilter(TicketPhase.CAJA);
-                    const firstCaja = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja"));
-                    if (firstCaja) setActiveCubicleId(firstCaja.id);
-                  }}
-                  className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center border relative ${
-                    activeRoleFilter === TicketPhase.CAJA
-                      ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
-                      : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
-                  } ${isTriadaOnly ? "opacity-45 cursor-not-allowed bg-slate-100 text-slate-405" : "cursor-pointer"}`}
-                >
-                  <span className="block">🏧 VER SÓLO CAJAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja")).length})</span>
-                  {isTriadaOnly && <span className="block text-[8px] text-red-550 mt-1 font-sans font-extrabold uppercase tracking-wider">🔒 BLOQUEADO</span>}
-                </button>
-
-                <button
-                  id="role-filter-triada"
-                  type="button"
-                  disabled={isCajaOnly}
-                  onClick={() => {
-                    if (isCajaOnly) return;
-                    setActiveRoleFilter(TicketPhase.TRIADA);
-                    const firstTriada = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada"));
-                    if (firstTriada) setActiveCubicleId(firstTriada.id);
-                  }}
-                  className={`py-4 px-4 text-xs sm:text-sm font-black uppercase tracking-widest transition-all rounded-xl text-center border relative ${
-                    activeRoleFilter === TicketPhase.TRIADA
-                      ? "bg-[#122e70] text-white border-blue-900 shadow-md scale-[1.01]"
-                      : "bg-white text-slate-600 hover:text-slate-900 border-slate-200 hover:bg-slate-100"
-                  } ${isCajaOnly ? "opacity-45 cursor-not-allowed bg-slate-100 text-slate-405" : "cursor-pointer"}`}
-                >
-                  <span className="block">📸 VER SÓLO TRÍADAS ({cubicles.filter(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada")).length})</span>
-                  {isCajaOnly && <span className="block text-[8px] text-red-550 mt-1 font-sans font-extrabold uppercase tracking-wider">🔒 BLOQUEADO</span>}
-                </button>
-              </div>
-            </div>
-
-            {/* CUBICLE SELECTOR FOR FILTERED ROLE */}
-            <div className="space-y-2">
-              <label className="block text-xs uppercase tracking-widest font-black text-slate-500 font-mono">
-                Módulos del Operador Disponibles:
-              </label>
-              
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200 shadow-inner">
-                {filteredRoleCubicles.map((c) => {
-                  const isActive = c.id === activeCubicleId;
-                  return (
-                    <button
-                      id={`btn-select-agent-${c.id.toLowerCase()}`}
-                      key={c.id}
-                      onClick={() => setActiveCubicleId(c.id)}
-                      className={`text-left p-4 rounded-xl border transition-all cursor-pointer ${
-                        isActive
-                          ? "bg-slate-900 text-white border-slate-900 font-black shadow-md scale-[1.02]"
-                          : "hover:bg-slate-200 text-slate-700 border-slate-200 bg-white"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-1.5 truncate uppercase tracking-wider text-[11px] font-black">
-                        <span className="truncate">{c.name.toUpperCase()}</span>
-                        <span className={`w-3 h-3 rounded-full outline outline-2 outline-white shrink-0 ${
-                          c.status === CubicleStatus.ONLINE_AVAILABLE 
-                            ? "bg-emerald-500 animate-pulse" 
-                            : c.status === CubicleStatus.ATTENDING
-                              ? "bg-blue-600"
-                              : c.status === CubicleStatus.BREAK
-                                ? "bg-amber-500"
-                                : "bg-rose-500"
-                        }`} />
-                      </div>
-                      <p className="text-[10px] text-slate-550 font-bold truncate mt-1.5 uppercase tracking-wide">AGENTE: {c.agentName.toUpperCase()}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </>
-        )}
+          <button
+            type="button"
+            onClick={() => {
+              setHasSelectedCubicle(false);
+            }}
+            className="py-2.5 px-4 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-250 hover:border-slate-350 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm shrink-0"
+          >
+            Cambiar de Módulo 🔄
+          </button>
+        </div>
 
         {/* AGENT STATE CARD & CONFIGURATOR */}
         <div className="space-y-4 pt-2">
           <div className="bg-slate-50 p-4 border border-slate-200 rounded-xl flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between shadow-sm">
-            <div className="space-y-1">
-              <span className="text-[9px] uppercase font-mono tracking-widest text-slate-400 block font-black">MÓDULO SELECCIONADO:</span>
-              <p className="text-sm font-black text-slate-900 uppercase tracking-wider leading-none">
-                {currentCubicle.name} • AGENTE {currentCubicle.agentName}
-              </p>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="space-y-1">
+                <span className="text-[9px] uppercase font-mono tracking-widest text-slate-400 block font-black">MÓDULO SELECCIONADO:</span>
+                <p className="text-sm font-black text-slate-900 uppercase tracking-wider leading-none">
+                  {currentCubicle.name} • AGENTE {currentCubicle.agentName}
+                </p>
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <button
                 id="btn-status-available"
-                onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.ONLINE_AVAILABLE)}
+                onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.ONLINE_AVAILABLE, loggedInUser.fullName)}
                 className={`px-3.5 py-2.5 rounded-xl border text-[11px] uppercase font-black tracking-widest flex items-center gap-1.5 cursor-pointer transition-all ${
                   currentCubicle.status === CubicleStatus.ONLINE_AVAILABLE || currentCubicle.status === CubicleStatus.ATTENDING
                     ? "bg-emerald-600 text-white border-emerald-700 shadow-sm"
@@ -1262,7 +1386,7 @@ export default function AgentConsole({
 
               <button
                 id="btn-status-break"
-                onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.BREAK)}
+                onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.BREAK, loggedInUser.fullName)}
                 className={`px-3.5 py-2.5 rounded-xl border text-[11px] uppercase font-black tracking-widest flex items-center gap-1.5 cursor-pointer transition-all ${
                   currentCubicle.status === CubicleStatus.BREAK
                     ? "bg-amber-500 text-white border-amber-600 shadow-sm"
@@ -1385,7 +1509,7 @@ export default function AgentConsole({
                     SERVICIO: <span className="font-extrabold text-blue-900">{SERVICES_CONFIG[activeTicket.serviceType].name.toUpperCase()}</span>
                     {activeTicket.procedure && (
                       <span className="ml-2 px-2 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-black uppercase tracking-wider rounded border border-blue-200 inline-block align-middle">
-                        {REGISTRO_PROCEDURES.find(p => p.id === activeTicket.procedure)?.name || activeTicket.procedure}
+                        {getProcedureName(activeTicket.procedure)}
                       </span>
                     )}
                   </p>
@@ -1461,6 +1585,37 @@ export default function AgentConsole({
                     <Play className="w-4 h-4 text-emerald-400" />
                     Iniciar Atención
                   </button>
+                ) : gatewaySelection === "registro_civil" && !currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
+                  <button
+                    id="btn-action-complete-rc"
+                    onClick={() => onComplete(currentCubicle.id)}
+                    className="col-span-2 w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
+                    title="Trámite concluido con éxito"
+                  >
+                    <Check className="w-4 h-4 text-white shrink-0" />
+                    <span>Fin de Atención</span>
+                  </button>
+                ) : gatewaySelection === "cedulacion" && currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
+                  <div className="col-span-2 grid grid-cols-2 gap-3">
+                    <button
+                      id="btn-action-complete-ced-adm"
+                      onClick={() => onComplete(currentCubicle.id, "administrative")}
+                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.99]"
+                      title="Trámite Administrativo (REG, O, u Opciones C/E). El ticket finaliza aquí."
+                    >
+                      <Check className="w-4 h-4 text-white shrink-0" />
+                      <span>Fin de Atención</span>
+                    </button>
+                    <button
+                      id="btn-action-complete-ced-phys"
+                      onClick={() => onComplete(currentCubicle.id, "emission_physical")}
+                      className="w-full py-3 bg-[#003087] hover:bg-blue-800 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.99]"
+                      title="Trámite de Emisión Física (Renovación, Duplicado, etc.). Envía el ticket a Espera en Fotografía."
+                    >
+                      <Camera className="w-4 h-4 text-white shrink-0" />
+                      <span>Pasar a Tríada</span>
+                    </button>
+                  </div>
                 ) : (
                   <button
                     id="btn-action-complete"
@@ -1552,7 +1707,14 @@ export default function AgentConsole({
                       }`}>
                         {item.numberCode}
                       </span>
-                      <span className="font-extrabold text-slate-800 truncate max-w-[170px] uppercase tracking-wide">{item.name}</span>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-extrabold text-slate-800 truncate max-w-[170px] uppercase tracking-wide leading-none">{item.name}</span>
+                        {item.procedure && (
+                          <span className="text-[10px] text-blue-800 font-extrabold uppercase tracking-wider mt-1 truncate max-w-[170px]">
+                            {getProcedureName(item.procedure)}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-2 font-mono">

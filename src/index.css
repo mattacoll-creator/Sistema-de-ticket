@@ -147,3 +147,53 @@ html, body, #root {
   }
 }
 
+/* Custom premium scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Premium micro-interactions and ambient styles */
+.premium-glow-emerald {
+  box-shadow: 0 0 15px -3px rgba(16, 185, 129, 0.25);
+}
+
+.premium-glow-blue {
+  box-shadow: 0 0 20px -5px rgba(18, 46, 112, 0.25);
+}
+
+.premium-glow-amber {
+  box-shadow: 0 0 15px -3px rgba(245, 158, 11, 0.25);
+}
+
+.ticket-serrated-edge {
+  position: relative;
+}
+
+.ticket-serrated-edge::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background-image: linear-gradient(-45deg, #ffffff 3px, transparent 0), linear-gradient(45deg, #ffffff 3px, transparent 0);
+  background-position: left bottom;
+  background-size: 6px 6px;
+  background-repeat: repeat-x;
+}
+
+

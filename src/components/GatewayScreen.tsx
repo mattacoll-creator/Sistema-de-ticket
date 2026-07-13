@@ -19,13 +19,13 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-between font-sans relative overflow-hidden">
       {/* Upper Panama Flag Ribbon */}
-      <div className="w-full h-2 flex select-none shrink-0">
+      <div className="w-full h-1 flex select-none shrink-0 relative z-30 shadow-sm">
         <div className="bg-[#da121a] flex-1"></div>
-        <div className="bg-[#122e70] flex-1"></div>
+        <div className="bg-[#003087] flex-1"></div>
       </div>
 
       {/* Decorative ambient background curves */}
-      <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-[#122e70]/5 rounded-full blur-3xl pointer-events-none -z-10" />
+      <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-[#003087]/5 rounded-full blur-3xl pointer-events-none -z-10 animate-pulse" />
       <div className="absolute bottom-0 right-1/4 w-[600px] h-[600px] bg-[#da121a]/5 rounded-full blur-3xl pointer-events-none -z-10" />
 
       {/* Main Container */}
@@ -38,15 +38,15 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
               src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/AGENDATE-01.png" 
               referrerPolicy="no-referrer" 
               alt="Tribunal Electoral de Panamá" 
-              className="h-16 md:h-20 w-auto object-contain drop-shadow-sm select-none" 
+              className="h-16 md:h-20 w-auto object-contain drop-shadow-md select-none hover:scale-[1.02] transition-transform duration-500" 
             />
           </div>
           
-          <div className="space-y-1">
-            <h1 className="text-xs font-black uppercase tracking-[0.3em] text-[#122e70]">
+          <div className="space-y-1.5">
+            <h1 className="text-xs font-black uppercase tracking-[0.3em] text-[#003087]">
               República de Panamá • Tribunal Electoral
             </h1>
-            <h2 className="text-xl sm:text-2xl font-black uppercase tracking-wider text-slate-900">
+            <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-tight text-slate-900">
               Sistema Unificado de Turnos
             </h2>
             <p className="text-xs text-slate-500 max-w-md mx-auto font-medium">
@@ -63,12 +63,12 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
             type="button"
             id="gateway-opt-cedulacion"
             onClick={() => onSelectOption("cedulacion")}
-            className="group flex flex-col text-left justify-between bg-white border-2 border-slate-200 rounded-3xl p-6 sm:p-8 hover:border-[#122e70] hover:shadow-2xl hover:scale-[1.02] transition-all duration-300 cursor-pointer relative"
+            className="group flex flex-col text-left justify-between bg-white border-2 border-slate-200 rounded-3xl p-6 sm:p-8 hover:border-[#003087] hover:shadow-2xl hover:scale-[1.02] transition-all duration-300 cursor-pointer relative premium-glow-amber hover:bg-gradient-to-b hover:from-white hover:to-amber-50/5"
           >
             <div className="space-y-5">
               {/* Icon & Category Indicator */}
               <div className="flex items-center justify-between">
-                <div className="p-4 bg-amber-500/10 border border-amber-500/20 text-amber-600 rounded-2xl group-hover:bg-amber-500 group-hover:text-white transition-all duration-300">
+                <div className="p-4 bg-amber-500/10 border border-amber-500/20 text-amber-600 rounded-2xl group-hover:bg-amber-550 group-hover:text-white transition-all duration-300 shadow-sm">
                   <CreditCard className="w-8 h-8" />
                 </div>
                 <span className="text-[9px] font-black uppercase tracking-widest bg-amber-100 text-amber-850 px-3 py-1 rounded-full border border-amber-200">
@@ -78,7 +78,7 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
 
               {/* Text Blocks */}
               <div className="space-y-2">
-                <h3 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-wide group-hover:text-[#122e70] transition-colors">
+                <h3 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-wide group-hover:text-[#003087] transition-colors">
                   Ticket de Cedulación
                 </h3>
                 <p className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest leading-none">
@@ -91,11 +91,11 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
             </div>
 
             {/* CTA Arrow Bar */}
-            <div className="border-t border-slate-100 mt-6 pt-4 w-full flex items-center justify-between text-[#122e70] group-hover:text-amber-500 font-sans transition-colors">
+            <div className="border-t border-slate-100 mt-6 pt-4 w-full flex items-center justify-between text-[#003087] group-hover:text-amber-600 font-sans transition-colors">
               <span className="text-[11px] font-black uppercase tracking-widest">
                 Iniciar Trámite de Cédula →
               </span>
-              <span className="text-[9px] text-slate-400 font-bold uppercase">
+              <span className="text-[9px] text-slate-450 font-bold uppercase">
                 Acceso Kiosco
               </span>
             </div>
@@ -106,22 +106,22 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
             type="button"
             id="gateway-opt-registro-civil"
             onClick={() => onSelectOption("registro_civil")}
-            className="group flex flex-col text-left justify-between bg-white border-2 border-slate-200 rounded-3xl p-6 sm:p-8 hover:border-[#122e70] hover:shadow-2xl hover:scale-[1.02] transition-all duration-300 cursor-pointer relative"
+            className="group flex flex-col text-left justify-between bg-white border-2 border-slate-200 rounded-3xl p-6 sm:p-8 hover:border-[#003087] hover:shadow-2xl hover:scale-[1.02] transition-all duration-300 cursor-pointer relative premium-glow-blue hover:bg-gradient-to-b hover:from-white hover:to-blue-50/5"
           >
             <div className="space-y-5">
               {/* Icon & Category Indicator */}
               <div className="flex items-center justify-between">
-                <div className="p-4 bg-blue-500/10 border border-blue-500/20 text-[#122e70] rounded-2xl group-hover:bg-[#122e70] group-hover:text-white transition-all duration-300">
+                <div className="p-4 bg-blue-500/10 border border-blue-500/20 text-[#003087] rounded-2xl group-hover:bg-[#003087] group-hover:text-white transition-all duration-300 shadow-sm">
                   <FileText className="w-8 h-8" />
                 </div>
-                <span className="text-[9px] font-black uppercase tracking-widest bg-blue-50 text-[#122e70] px-3 py-1 rounded-full border border-blue-100">
+                <span className="text-[9px] font-black uppercase tracking-widest bg-blue-50 text-[#003087] px-3 py-1 rounded-full border border-blue-100">
                   Hechos Vitales
                 </span>
               </div>
 
               {/* Text Blocks */}
               <div className="space-y-2">
-                <h3 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-wide group-hover:text-[#122e70] transition-colors">
+                <h3 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-wide group-hover:text-[#003087] transition-colors">
                   Ticket de Registro Civil
                 </h3>
                 <p className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest leading-none">
@@ -134,11 +134,11 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
             </div>
 
             {/* CTA Arrow Bar */}
-            <div className="border-t border-slate-100 mt-6 pt-4 w-full flex items-center justify-between text-[#122e70] group-hover:text-blue-500 font-sans transition-colors">
+            <div className="border-t border-slate-100 mt-6 pt-4 w-full flex items-center justify-between text-[#003087] group-hover:text-[#003087] font-sans transition-colors">
               <span className="text-[11px] font-black uppercase tracking-widest">
                 Iniciar Trámite de Registro Civil →
               </span>
-              <span className="text-[9px] text-slate-400 font-bold uppercase">
+              <span className="text-[9px] text-slate-450 font-bold uppercase">
                 Acceso Kiosco
               </span>
             </div>
@@ -146,9 +146,9 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
         </div>
 
         {/* Informative bottom card */}
-        <div className="bg-blue-50/60 border border-blue-100/80 rounded-2xl p-4 max-w-lg mx-auto flex items-start gap-3">
-          <Info className="w-4 h-4 text-blue-800 shrink-0 mt-0.5" />
-          <p className="text-[10.5px] text-blue-900 font-medium leading-relaxed">
+        <div className="bg-blue-50/60 border border-blue-100/80 rounded-2xl p-4.5 max-w-lg mx-auto flex items-start gap-3 shadow-xs">
+          <Info className="w-4 h-4 text-[#003087] shrink-0 mt-0.5" />
+          <p className="text-[10.5px] text-blue-900 font-semibold leading-relaxed">
             <strong>Instrucciones:</strong> El terminal físico del Kiosco se autoconfigurará según el trámite seleccionado. Recuerde tener listos los documentos de identidad correspondientes antes de emitir su ticket físico.
           </p>
         </div>
@@ -156,14 +156,14 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
       </div>
 
       {/* Corporate Panama Footer */}
-      <div className="border-t border-slate-200 bg-white py-4 px-6 flex flex-col md:flex-row items-center justify-between gap-4 text-[10px] text-slate-400 font-medium shrink-0">
+      <div className="border-t border-slate-200 bg-white py-4.5 px-6 flex flex-col md:flex-row items-center justify-between gap-4 text-[10px] text-slate-400 font-medium shrink-0 relative z-10 shadow-md">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-600" />
+          <ShieldCheck className="w-4 h-4 text-emerald-600 animate-pulse" />
           <span className="font-extrabold uppercase tracking-wider text-slate-500">Sistema Validado • Tribunal Electoral de Panamá</span>
         </div>
         <div className="flex items-center gap-1.5 font-sans">
           <span>Servidores Locales de Sincronización Supabase Cloud DB</span>
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.7)]"></span>
         </div>
       </div>
     </div>

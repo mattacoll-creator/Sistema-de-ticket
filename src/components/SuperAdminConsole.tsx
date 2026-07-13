@@ -785,8 +785,22 @@ export default function SuperAdminConsole({
         }
 
         const createdAt = now - dateOffsetMs;
-        const prefix = SERVICES_CONFIG[servType].prefix;
-        const padNum = String(i).padStart(3, "0");
+
+        let proc: string | undefined = undefined;
+        if (servType === ServiceType.CEDULACION) {
+          const cedProcedures = ["CPV", "REN", "DUP", "CJ", "CRP", "RBM", "REG"];
+          proc = cedProcedures[Math.floor(Math.random() * cedProcedures.length)];
+        } else if (servType === ServiceType.REGISTRO) {
+          const rcProcedures = ["OR", "OHV", "RMAT", "STR", "OTR", "OI", "SI", "RS", "ED", "SAU"];
+          proc = rcProcedures[Math.floor(Math.random() * rcProcedures.length)];
+        }
+
+        const prefix = (servType === ServiceType.REGISTRO || proc === "REG") ? (proc || SERVICES_CONFIG[servType].prefix) : SERVICES_CONFIG[servType].prefix;
+        const sameProcCount = ticketsList.filter(t => {
+          const tPrefix = (t.serviceType === ServiceType.REGISTRO || t.procedure === "REG") ? (t.procedure || SERVICES_CONFIG[t.serviceType].prefix) : SERVICES_CONFIG[t.serviceType].prefix;
+          return tPrefix === prefix;
+        }).length;
+        const padNum = String(sameProcCount + 1).padStart(3, "0");
         const numberCode = `${prefix}-${padNum}`;
 
         // Determine real-looking statuses: 85% completed, 8% waiting, 7% missed
@@ -810,9 +824,10 @@ export default function SuperAdminConsole({
         ticketsList.push({
           id: `seed_${office.id}_${i}_${createdAt}`,
           numberCode,
-          number: i,
+          number: sameProcCount + 1,
           name: creatorName,
           serviceType: servType,
+          procedure: proc,
           status,
           currentPhase: seedPhaseObj,
           phaseHistory: [
