@@ -1224,68 +1224,152 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         >
           <AnimatePresence mode="wait">
             {displayedActiveCall ? (
-              /* FLASHING IMMERSIVE CALL OUT */
+              /* FLASHING IMMERSIVE CALL OUT WITH ACTIVE CUBICLES SIDEBAR */
               <motion.div
                 key={displayedActiveCall.ticket.id}
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className={`border-4 rounded-3xl p-10 flex flex-col xl:flex-row items-center justify-between gap-8 h-full shadow-2xl relative overflow-hidden ring-8 ${
+                className={`border-4 rounded-3xl p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 h-full shadow-2xl relative overflow-hidden ring-8 ${
                   isTriadaChannel
                     ? "bg-white border-rose-500 text-slate-900 ring-rose-500/5"
                     : "bg-[#0b244c]/95 border-rose-500 text-white ring-rose-500/10"
                 }`}
               >
-                {/* Flashing sides */}
-                <div className="absolute top-0 bottom-0 left-0 w-4 bg-rose-600 animate-pulse" />
-                <div className="absolute top-0 bottom-0 right-0 w-4 bg-amber-400 animate-pulse" />
+                {/* COLUMN LEFT (Col Span 8): Flashing Active Called Ticket */}
+                <div className="lg:col-span-8 flex flex-col xl:flex-row items-center justify-between gap-8 h-full relative p-6 bg-black/15 rounded-2xl border border-white/5 overflow-hidden">
+                  {/* Flashing sides */}
+                  <div className="absolute top-0 bottom-0 left-0 w-3 bg-rose-600 animate-pulse" />
+                  <div className="absolute top-0 bottom-0 right-0 w-3 bg-amber-400 animate-pulse" />
 
-                <div className="space-y-4 text-center xl:text-left flex-grow">
-                  <span className="px-5 py-2 text-sm font-mono tracking-widest font-black uppercase bg-rose-600 text-white rounded-md animate-bounce shadow-md inline-block">
-                    🛎️ TURNO LLAMADO
-                  </span>
-                  {displayedActiveCall.ticket.priority && (
-                    <span className="ml-3 px-3 py-2 text-sm font-black bg-amber-500 text-white rounded-md uppercase inline-flex items-center gap-1 shadow-md animate-pulse">
-                      <ShieldAlert className="w-4 h-4" /> PRIORITARIO
+                  <div className="space-y-4 text-center xl:text-left flex-grow pl-4">
+                    <span className="px-4 py-1.5 text-xs font-mono tracking-widest font-black uppercase bg-rose-600 text-white rounded-md animate-bounce shadow-md inline-block">
+                      🛎️ TURNO LLAMADO
                     </span>
-                  )}
-                  
-                  <h1 className={`text-9xl md:text-[13rem] lg:text-[15rem] font-black tracking-widest leading-none drop-shadow-md animate-pulse font-mono ${
-                    isTriadaChannel ? "text-[#003087]" : "text-white"
+                    {displayedActiveCall.ticket.priority && (
+                      <span className="ml-2 px-2.5 py-1.5 text-xs font-black bg-amber-500 text-white rounded-md uppercase inline-flex items-center gap-1 shadow-md animate-pulse">
+                        <ShieldAlert className="w-3.5 h-3.5" /> PRIORITARIO
+                      </span>
+                    )}
+                    
+                    <h1 className={`text-7xl md:text-[8rem] lg:text-[9.5rem] font-black tracking-widest leading-none drop-shadow-md animate-pulse font-mono ${
+                      isTriadaChannel ? "text-[#003087]" : "text-white"
+                    }`}>
+                      {displayedActiveCall.ticket.numberCode}
+                    </h1>
+                    
+                    <p className={`text-2xl md:text-3xl lg:text-4xl font-black uppercase tracking-widest italic truncate max-w-[500px] ${
+                      isTriadaChannel ? "text-slate-800" : "text-blue-200"
+                    }`}>
+                      {displayedActiveCall.ticket.name}
+                    </p>
+                  </div>
+
+                  {/* Destination */}
+                  <div className={`flex flex-col items-center justify-center border-[8px] px-8 py-8 rounded-2xl text-center min-w-[320px] lg:min-w-[420px] shadow-2xl mr-4 ${
+                    isTriadaChannel
+                      ? "bg-slate-50 border-rose-500 text-slate-900"
+                      : "bg-white border-rose-600 text-slate-900"
                   }`}>
-                    {displayedActiveCall.ticket.numberCode}
-                  </h1>
-                  
-                  <p className={`text-3xl md:text-5xl font-black uppercase tracking-widest italic truncate max-w-[800px] ${
-                    isTriadaChannel ? "text-slate-800" : "text-blue-200"
-                  }`}>
-                    {displayedActiveCall.ticket.name}
-                  </p>
+                    <span className={`text-xs tracking-widest uppercase font-mono font-black ${
+                      isTriadaChannel ? "text-[#003087]" : "text-[#122e70]"
+                    }`}>
+                      {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
+                    </span>
+                    <p className={`text-4xl md:text-6xl font-black mt-2 uppercase font-mono tracking-wide animate-pulse ${
+                      isTriadaChannel ? "text-[#003087]" : "text-[#122e70]"
+                    }`}>
+                      {(displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA
+                        ? `CAJA ${displayedActiveCall.cubicle.name.replace(/\D/g, '') || displayedActiveCall.cubicle.name}`
+                        : displayedActiveCall.cubicle.name
+                      ).toUpperCase()}
+                    </p>
+                    <div className="h-1 w-24 bg-rose-600 my-3 rounded-full animate-pulse" />
+                    <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest font-black">
+                      📢 ATENDIDO POR AGENTE: <span className="text-slate-800">{displayedActiveCall.cubicle.agentName.toUpperCase()}</span>
+                    </p>
+                  </div>
                 </div>
 
-                {/* Destination */}
-                <div className={`flex flex-col items-center justify-center border-[10px] px-12 py-10 rounded-3xl text-center min-w-[400px] lg:min-w-[550px] shadow-2xl ${
-                  isTriadaChannel
-                    ? "bg-slate-50 border-rose-500 text-slate-900"
-                    : "bg-white border-rose-600 text-slate-900"
-                }`}>
-                  <span className={`text-sm tracking-widest uppercase font-mono font-black ${
-                    isTriadaChannel ? "text-[#003087]" : "text-[#122e70]"
+                {/* COLUMN RIGHT (Col Span 4): Real-Time Cubicles List (Cajas disponibles) */}
+                <div className="lg:col-span-4 flex flex-col min-h-0 text-left h-full overflow-hidden">
+                  <div className={`flex items-center justify-between border-b pb-2 mb-3 ${
+                    isTriadaChannel ? "border-slate-300" : "border-white/10"
                   }`}>
-                    {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
-                  </span>
-                  <p className={`text-6xl md:text-8xl font-black mt-3 uppercase font-mono tracking-wide animate-pulse ${
-                    isTriadaChannel ? "text-[#003087]" : "text-[#122e70]"
-                  }`}>
-                    {(displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA
-                      ? `CAJA ${displayedActiveCall.cubicle.name.replace(/\D/g, '') || displayedActiveCall.cubicle.name}`
-                      : displayedActiveCall.cubicle.name
-                    ).toUpperCase()}
-                  </p>
-                  <div className="h-1.5 w-32 bg-rose-600 my-4 rounded-full animate-pulse" />
-                  <p className="text-xs text-slate-500 font-mono uppercase tracking-widest font-black">
-                    📢 ATENDIDO POR AGENTE: <span className="text-slate-800">{displayedActiveCall.cubicle.agentName.toUpperCase()}</span>
-                  </p>
+                    <span className={`text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 ${
+                      isTriadaChannel ? "text-slate-805" : "text-[#00aaff]"
+                    }`}>
+                      <UserCheck className={`w-5 h-5 ${isTriadaChannel ? "text-[#003087]" : "text-[#00aaff]"}`} />
+                      CAJAS DISPONIBLES
+                    </span>
+                    <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
+                      isTriadaChannel ? "text-slate-500" : "text-sky-300/60"
+                    }`}>
+                      {filteredCubicles.length} ACTIVO
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 overflow-y-auto pr-1 flex-grow max-h-[75vh] scrollbar-thin scrollbar-thumb-blue-900/50">
+                    {filteredCubicles.map((cubicle) => {
+                      const currentTicket = ecosystemTickets.find(t => t.id === cubicle.currentTicketId);
+                      const isFree = cubicle.status === "ONLINE_AVAILABLE";
+                      const isBreak = cubicle.status === "BREAK";
+                      const isAttending = cubicle.status === "ATTENDING";
+                      const cajaNumber = cubicle.name.replace(/\D/g, '') || cubicle.name;
+
+                      let mainText = "DISPONIBLE";
+                      let textStyle = "text-[#00d0ff]/70 font-semibold";
+
+                      if (isAttending && currentTicket) {
+                        mainText = currentTicket.name && currentTicket.name.trim() !== ""
+                          ? currentTicket.name
+                          : currentTicket.numberCode;
+                        textStyle = "text-white font-black";
+                      } else if (isBreak) {
+                        mainText = "EN RECESO";
+                        textStyle = "text-amber-400 font-bold";
+                      } else if (cubicle.status === "OFFLINE") {
+                        mainText = "MÓDULO INACTIVO";
+                        textStyle = "text-slate-450 font-semibold opacity-40";
+                      }
+
+                      return (
+                        <div
+                          key={cubicle.id}
+                          className={`relative p-4 rounded-xl bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-blue-950/20 border-b-[4px] border-r-[3px] border-b-[#00b0ff] border-r-[#0081f9] flex flex-col justify-center min-h-[78px] shadow-[0_4px_10px_rgba(0,0,0,0.2)] ${
+                            isAttending ? "scale-[1.01] brightness-110 shadow-[0_6px_20px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]" : ""
+                          }`}
+                        >
+                          {isAttending && (
+                            <div className="absolute inset-0 bg-blue-400/5 animate-pulse rounded-xl" />
+                          )}
+                          <div className="flex items-center w-full truncate">
+                            <span className="text-[#00d0ff] text-xs mr-1.5 select-none">▶</span>
+                            <span className={`uppercase font-sans tracking-wide text-xs leading-tight truncate ${textStyle}`}>
+                              {mainText}
+                            </span>
+                          </div>
+
+                          <div className="mt-2 flex items-center">
+                            <div className="inline-flex items-center gap-1 px-4 py-0.5 bg-[#0081f9] rounded-full text-white font-black text-xs tracking-wider shadow-[inset_0_2px_4px_rgba(0,0,0,0.15)] ml-3">
+                              <span className="text-[#aae3ff] text-[9px] leading-none select-none font-sans">▶</span>
+                              <span>{cajaNumber}</span>
+                            </div>
+                            {isFree && (
+                              <span className="ml-2 text-[8px] uppercase font-mono tracking-widest text-[#00d0ff]/65 font-bold animate-pulse">
+                                ★ LIBRE
+                              </span>
+                            )}
+                            {isBreak && (
+                              <span className="ml-2 text-[8px] uppercase font-mono tracking-widest text-amber-400/65 font-bold">
+                                ★ REC
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </motion.div>
             ) : (
