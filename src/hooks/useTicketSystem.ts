@@ -952,6 +952,35 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         if (t.currentPhase !== TicketPhase.TRIADA) return false;
       }
 
+      // Caja preferential attention routing rules:
+      // Preferential attention (priority) in CAJA phase must go to Caja 0 and Caja 8 only.
+      // Other Cajas (1 to 7) must not attend priority tickets.
+      // Caja 0 and 8 must prioritize priority tickets, and only take normal tickets if no priority tickets are waiting.
+      const isCajaPhase = t.currentPhase === TicketPhase.CAJA;
+      if (isCajaPhase) {
+        const isCaja0Or8 = targetCubicle.id === "CUB-34" || 
+                           targetCubicle.id === "CUB-42" || 
+                           targetCubicle.name.startsWith("Caja 0") || 
+                           targetCubicle.name.startsWith("Caja 8");
+        
+        if (isCaja0Or8) {
+          const anyPriorityWaiting = tickets.some(otherT => 
+            otherT.status === TicketStatus.WAITING &&
+            otherT.currentPhase === TicketPhase.CAJA &&
+            otherT.priority &&
+            targetCubicle.supportedServices.includes(otherT.serviceType) &&
+            canCubicleServeProcedure(cubicleId, otherT.procedure)
+          );
+          if (anyPriorityWaiting && !t.priority) {
+            return false;
+          }
+        } else {
+          if (t.priority) {
+            return false;
+          }
+        }
+      }
+
       return canCubicleServeProcedure(cubicleId, t.procedure);
     });
 
@@ -1318,6 +1347,36 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         if (t.status !== TicketStatus.WAITING) return false;
         if (!cubicle.supportedPhases.includes(t.currentPhase)) return false;
         if (cubicle.supportedServices && !cubicle.supportedServices.includes(t.serviceType)) return false;
+
+        // Caja preferential attention routing rules:
+        // Preferential attention (priority) in CAJA phase must go to Caja 0 and Caja 8 only.
+        // Other Cajas (1 to 7) must not attend priority tickets.
+        // Caja 0 and 8 must prioritize priority tickets, and only take normal tickets if no priority tickets are waiting.
+        const isCajaPhase = t.currentPhase === TicketPhase.CAJA;
+        if (isCajaPhase) {
+          const isCaja0Or8 = cubicle.id === "CUB-34" || 
+                             cubicle.id === "CUB-42" || 
+                             cubicle.name.startsWith("Caja 0") || 
+                             cubicle.name.startsWith("Caja 8");
+          
+          if (isCaja0Or8) {
+            const anyPriorityWaiting = updatedTickets.some(otherT => 
+              otherT.status === TicketStatus.WAITING &&
+              otherT.currentPhase === TicketPhase.CAJA &&
+              otherT.priority &&
+              cubicle.supportedServices.includes(otherT.serviceType) &&
+              canCubicleServeProcedure(cubicle.id, otherT.procedure)
+            );
+            if (anyPriorityWaiting && !t.priority) {
+              return false;
+            }
+          } else {
+            if (t.priority) {
+              return false;
+            }
+          }
+        }
+
         return canCubicleServeProcedure(cubicle.id, t.procedure);
       });
 
