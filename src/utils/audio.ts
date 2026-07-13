@@ -143,7 +143,7 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string)
     };
 
     utterance.onerror = (err) => {
-      console.error("Error en SpeechSynthesisUtterance:", err);
+      console.warn("SpeechSynthesisUtterance event/error (benign in sandboxed iframes):", err);
       resolve();
     };
 
