@@ -755,7 +755,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.98 }}
                 transition={{ duration: 0.25 }}
-                className="bg-[#0c244c] border-2 border-sky-505/60 rounded-3xl p-10 lg:p-14 flex flex-col xl:flex-row items-center justify-between gap-10 shadow-2xl relative overflow-hidden ring-8 ring-sky-500/10"
+                className="bg-[#0c244c] border-2 border-sky-505/60 rounded-3xl p-10 lg:p-14 flex flex-col-reverse xl:flex-row-reverse items-center justify-between gap-10 shadow-2xl relative overflow-hidden ring-8 ring-sky-500/10"
               >
                 {/* Visual flashy background indicators */}
                 <div className="absolute top-0 bottom-0 left-0 w-3 bg-rose-600 animate-pulse" />
@@ -1297,7 +1297,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 }`}
               >
                 {/* COLUMN LEFT (Col Span 8): Flashing Active Called Ticket */}
-                <div className="lg:col-span-8 flex flex-col xl:flex-row items-center justify-between gap-8 h-full relative p-6 bg-black/15 rounded-2xl border border-white/5 overflow-hidden">
+                <div className="lg:col-span-8 flex flex-col-reverse xl:flex-row-reverse items-center justify-between gap-8 h-full relative p-6 bg-black/15 rounded-2xl border border-white/5 overflow-hidden">
                   {/* Flashing sides */}
                   <div className="absolute top-0 bottom-0 left-0 w-3 bg-rose-600 animate-pulse" />
                   <div className="absolute top-0 bottom-0 right-0 w-3 bg-amber-400 animate-pulse" />
