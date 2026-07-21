@@ -1642,7 +1642,7 @@ export default function AgentConsole({
                 <button
                   id="btn-action-recall"
                   onClick={() => onRecall(currentCubicle.id)}
-                  className="w-full py-3 bg-white hover:bg-slate-100 text-indigo-700 border border-indigo-550 font-black text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm"
+                  className="w-full py-3 bg-white hover:bg-slate-100 text-indigo-700 border border-indigo-400 font-black text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm"
                   title="Re-llamar al altavoz"
                 >
                   <Volume2 className="w-4 h-4 text-indigo-600 animate-pulse" />

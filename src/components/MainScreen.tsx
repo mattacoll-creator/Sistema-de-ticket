@@ -793,7 +793,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                   
                   <div className="h-1.5 w-36 bg-rose-600 my-5 rounded-full" />
                   
-                  <p className="text-xs md:text-sm lg:text-base xl:text-lg text-slate-550 font-mono uppercase tracking-widest font-black">
+                  <p className="text-xs md:text-sm lg:text-base xl:text-lg text-slate-500 font-mono uppercase tracking-widest font-black">
                     📢 ATENDIDO POR AGENTE: <span className="text-slate-800">{displayedActiveCall.cubicle.agentName.toUpperCase()}</span>
                   </p>
                 </div>
@@ -1501,7 +1501,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       Turnos Pendientes de Atención
                     </h2>
                     <p className={`text-xs max-w-3xl leading-relaxed font-semibold ${
-                      isTriadaChannel ? "text-slate-550" : "text-sky-200/70"
+                      isTriadaChannel ? "text-slate-500" : "text-sky-200/70"
                     }`}>
                       {getFullscreenDescription()}
                     </p>

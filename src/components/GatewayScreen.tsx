@@ -68,7 +68,7 @@ export default function GatewayScreen({ onSelectOption }: GatewayScreenProps) {
             <div className="space-y-5">
               {/* Icon & Category Indicator */}
               <div className="flex items-center justify-between">
-                <div className="p-4 bg-amber-500/10 border border-amber-500/20 text-amber-600 rounded-2xl group-hover:bg-amber-550 group-hover:text-white transition-all duration-300 shadow-sm">
+                <div className="p-4 bg-amber-500/10 border border-amber-500/20 text-amber-600 rounded-2xl group-hover:bg-amber-500 group-hover:text-white transition-all duration-300 shadow-sm">
                   <CreditCard className="w-8 h-8" />
                 </div>
                 <span className="text-[9px] font-black uppercase tracking-widest bg-amber-100 text-amber-850 px-3 py-1 rounded-full border border-amber-200">
