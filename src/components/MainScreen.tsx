@@ -767,12 +767,29 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                     {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
                   </span>
                   
-                  <p className="text-6xl md:text-8xl lg:text-[6.5rem] xl:text-[8rem] font-black text-[#122e70] mt-4 uppercase font-mono tracking-wide animate-pulse">
-                    {(displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA
-                      ? `CAJA ${displayedActiveCall.cubicle.name.replace(/\D/g, '') || displayedActiveCall.cubicle.name}`
-                      : displayedActiveCall.cubicle.name
-                    ).toUpperCase()}
-                  </p>
+                  {(() => {
+                    const isCaja = displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA;
+                    const fullName = displayedActiveCall.cubicle.name;
+                    const cleanName = isCaja 
+                      ? `CAJA ${fullName.replace(/\D/g, '') || fullName}`
+                      : fullName.replace(/\s*\(.*?\)\s*/g, '').trim();
+                    const subtitle = !isCaja && fullName.includes("(")
+                      ? fullName.match(/\((.*?)\)/)?.[1].trim()
+                      : null;
+
+                    return (
+                      <div className="flex flex-col items-center justify-center">
+                        <p className="text-6xl md:text-8xl lg:text-[7.5rem] xl:text-[9rem] font-black text-[#122e70] mt-4 uppercase font-mono tracking-wide leading-none animate-pulse">
+                          {cleanName.toUpperCase()}
+                        </p>
+                        {subtitle && (
+                          <p className="text-sm md:text-lg lg:text-xl xl:text-3xl font-black text-rose-600 mt-4 tracking-widest uppercase font-mono bg-rose-50 border border-rose-100 px-6 py-2 rounded-full shadow-sm animate-pulse">
+                            {subtitle.toUpperCase()}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                   
                   <div className="h-1.5 w-36 bg-rose-600 my-5 rounded-full" />
                   
@@ -1313,14 +1330,35 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                     }`}>
                       {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
                     </span>
-                    <p className={`text-5xl md:text-7xl lg:text-[5.5rem] xl:text-[6.5rem] font-black mt-3 uppercase font-mono tracking-wide animate-pulse ${
-                      isTriadaChannel ? "text-[#003087]" : "text-[#122e70]"
-                    }`}>
-                      {(displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA
-                        ? `CAJA ${displayedActiveCall.cubicle.name.replace(/\D/g, '') || displayedActiveCall.cubicle.name}`
-                        : displayedActiveCall.cubicle.name
-                      ).toUpperCase()}
-                    </p>
+                    {(() => {
+                      const isCaja = displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA;
+                      const fullName = displayedActiveCall.cubicle.name;
+                      const cleanName = isCaja 
+                        ? `CAJA ${fullName.replace(/\D/g, '') || fullName}`
+                        : fullName.replace(/\s*\(.*?\)\s*/g, '').trim();
+                      const subtitle = !isCaja && fullName.includes("(")
+                        ? fullName.match(/\((.*?)\)/)?.[1].trim()
+                        : null;
+
+                      return (
+                        <div className="flex flex-col items-center justify-center w-full">
+                          <p className={`text-5xl md:text-7xl lg:text-[6.5rem] xl:text-[7.5rem] font-black mt-3 uppercase font-mono tracking-wide leading-none animate-pulse ${
+                            isTriadaChannel ? "text-[#003087]" : "text-[#122e70]"
+                          }`}>
+                            {cleanName.toUpperCase()}
+                          </p>
+                          {subtitle && (
+                            <p className={`text-xs md:text-sm lg:text-base xl:text-lg font-black mt-3.5 tracking-widest uppercase font-mono px-4 py-1.5 rounded-full border shadow-sm ${
+                              isTriadaChannel 
+                                ? "bg-slate-100 border-slate-200 text-[#003087]" 
+                                : "bg-rose-50 border-rose-100 text-[#122e70]"
+                            }`}>
+                              {subtitle.toUpperCase()}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="h-1.5 w-36 bg-rose-600 my-4 rounded-full animate-pulse" />
                     <p className="text-xs md:text-sm lg:text-base text-slate-500 font-mono uppercase tracking-widest font-black">
                       📢 ATENDIDO POR AGENTE: <span className="text-slate-800">{displayedActiveCall.cubicle.agentName.toUpperCase()}</span>
