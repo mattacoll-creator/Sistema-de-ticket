@@ -743,11 +743,13 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           auto_assign: remoteAutoAssign
         });
 
-        lastSupabaseStateRef.current = remoteStateStr;
+        if (remoteStateStr !== currentStateRef.current) {
+          lastSupabaseStateRef.current = remoteStateStr;
 
-        setOfficeTickets(prev => ({ ...prev, [targetOfficeId]: remoteTickets }));
-        setOfficeCubicles(prev => ({ ...prev, [targetOfficeId]: remoteCubicles }));
-        setOfficeAutoAssign(prev => ({ ...prev, [targetOfficeId]: remoteAutoAssign }));
+          setOfficeTickets(prev => ({ ...prev, [targetOfficeId]: remoteTickets }));
+          setOfficeCubicles(prev => ({ ...prev, [targetOfficeId]: remoteCubicles }));
+          setOfficeAutoAssign(prev => ({ ...prev, [targetOfficeId]: remoteAutoAssign }));
+        }
         
         setSupabaseSyncStatus("success");
         return true;
@@ -860,6 +862,103 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       supabase.removeChannel(channel);
     };
   }, [currentOfficeId]);
+
+  // Robust periodic polling fallback from Supabase to guarantee synchronization on separate physical TV screens
+  useEffect(() => {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+
+    const interval = setInterval(() => {
+      // Only poll if the tab is active and visible to prevent backend spam
+      if (document.visibilityState === "visible") {
+        pullOfficeFromSupabase(currentOfficeId);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [currentOfficeId, pullOfficeFromSupabase]);
+
+  // Listen to standard storage events to keep multiple tabs on the same computer synchronized in real-time
+  useEffect(() => {
+    const handleStorageChange = (e: Event) => {
+      const se = e as StorageEvent;
+      // If it's a StorageEvent, check key. Otherwise process anyway for manual reload dispatches
+      if (
+        se.key &&
+        se.key !== STORAGE_KEYS.OFFICE_TICKETS &&
+        se.key !== STORAGE_KEYS.OFFICE_CUBICLES &&
+        se.key !== STORAGE_KEYS.OFFICE_AUTO_ASSIGN &&
+        se.key !== STORAGE_KEYS.CURRENT_OFFICE
+      ) {
+        return;
+      }
+
+      try {
+        const storedOffice = localStorage.getItem(STORAGE_KEYS.CURRENT_OFFICE);
+        if (storedOffice && storedOffice !== currentOfficeId) {
+          setCurrentOfficeId(storedOffice);
+        }
+
+        const storedOfficeTickets = localStorage.getItem(STORAGE_KEYS.OFFICE_TICKETS);
+        if (storedOfficeTickets) {
+          const parsedTickets = JSON.parse(storedOfficeTickets);
+          const incomingStateStr = JSON.stringify({
+            tickets: parsedTickets[currentOfficeId] || [],
+            cubicles: officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
+            auto_assign: officeAutoAssign[currentOfficeId] !== false
+          });
+
+          if (incomingStateStr !== currentStateRef.current) {
+            setOfficeTickets(parsedTickets);
+          }
+        }
+
+        const storedOfficeCubicles = localStorage.getItem(STORAGE_KEYS.OFFICE_CUBICLES);
+        if (storedOfficeCubicles) {
+          const loadedCubicles = JSON.parse(storedOfficeCubicles);
+          Object.keys(loadedCubicles).forEach(officeId => {
+            loadedCubicles[officeId] = loadedCubicles[officeId]
+              .filter((c: any) => {
+                const num = parseInt(c.id.replace("CUB-", ""), 10);
+                return !isNaN(num) && (num < 32 || num > 33);
+              })
+              .map((c: any) => migrateCubicleState(c, officeId));
+          });
+
+          const incomingStateStr = JSON.stringify({
+            tickets: officeTickets[currentOfficeId] || [],
+            cubicles: loadedCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
+            auto_assign: officeAutoAssign[currentOfficeId] !== false
+          });
+
+          if (incomingStateStr !== currentStateRef.current) {
+            setOfficeCubicles(loadedCubicles);
+          }
+        }
+
+        const storedOfficeAutoAssign = localStorage.getItem(STORAGE_KEYS.OFFICE_AUTO_ASSIGN);
+        if (storedOfficeAutoAssign) {
+          const parsedAuto = JSON.parse(storedOfficeAutoAssign);
+          const incomingStateStr = JSON.stringify({
+            tickets: officeTickets[currentOfficeId] || [],
+            cubicles: officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
+            auto_assign: parsedAuto[currentOfficeId] !== false
+          });
+
+          if (incomingStateStr !== currentStateRef.current) {
+            setOfficeAutoAssign(parsedAuto);
+          }
+        }
+      } catch (err) {
+        console.error("Error syncing from storage change event:", err);
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, [currentOfficeId, officeTickets, officeCubicles, officeAutoAssign]);
 
   // Initial pull trigger for active office if Supabase keys exist
   useEffect(() => {

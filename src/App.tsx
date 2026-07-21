@@ -742,6 +742,7 @@ export default function App() {
               onTestSpeaker={handleTestSpeaker}
               currentOfficeId={currentOfficeId}
               gatewaySelection={gatewaySelection}
+              supabaseSyncStatus={supabaseSyncStatus}
             />
           </div>
         )}

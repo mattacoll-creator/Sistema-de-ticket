@@ -18,9 +18,10 @@ interface MainScreenProps {
   onTestSpeaker: () => void;
   currentOfficeId?: string;
   gatewaySelection?: "select" | "cedulacion" | "registro_civil";
+  supabaseSyncStatus?: "idle" | "offline" | "syncing" | "success" | "error";
 }
 
-export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: MainScreenProps) {
+export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion", supabaseSyncStatus = "offline" }: MainScreenProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV" | "RC_OTROS">("general");
@@ -331,6 +332,19 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 {officeConfig.name}
               </span>
 
+              {/* Sync Status Badge */}
+              {supabaseSyncStatus === "offline" ? (
+                <span className="text-[9.5px] bg-amber-50 border border-amber-200 text-amber-700 font-mono px-3 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Sincronización fuera de línea: La información se guarda y actualiza de manera local en este navegador. Para usar varias pantallas/dispositivos por separado, configure Supabase en el panel de control.">
+                  <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse"></span>
+                  <span>Modo Local / Sin Servidor</span>
+                </span>
+              ) : (
+                <span className="text-[9.5px] bg-emerald-50 border border-emerald-200 text-emerald-700 font-mono px-3 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Conexión en tiempo real activa: Esta pantalla está sincronizada con el servidor central.">
+                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
+                  <span>Conectado (Nube TE)</span>
+                </span>
+              )}
+
               {/* Speaker Control & Test (styled as glassy settings badge) */}
               <div className="flex items-center gap-2.5 bg-slate-100 border border-slate-205 px-3.5 py-1.5 rounded-xl font-mono text-[10px] tracking-wider text-slate-805 select-none shadow-sm">
                 <button
@@ -417,6 +431,19 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               <span className="text-[9px] bg-sky-955/50 border border-sky-500/20 text-sky-305 font-mono px-2.5 py-1 rounded-lg font-black uppercase tracking-wider md:ml-3 shrink-0">
                 {officeConfig.name}
               </span>
+
+              {/* Sync Status Badge */}
+              {supabaseSyncStatus === "offline" ? (
+                <span className="text-[9px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono px-2.5 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Sincronización fuera de línea: La información se guarda de manera local en este navegador. Para usar varias pantallas por separado, configure Supabase en el panel de control.">
+                  <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
+                  <span>Modo Local / Sin Servidor</span>
+                </span>
+              ) : (
+                <span className="text-[9px] bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 font-mono px-2.5 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Conexión en tiempo real activa: Esta pantalla está sincronizada con el servidor central.">
+                  <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+                  <span>Conectado (Nube TE)</span>
+                </span>
+              )}
             </div>
 
             <div className="flex items-center justify-between md:justify-end gap-5">
