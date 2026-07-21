@@ -15,7 +15,8 @@ const STORAGE_KEYS = {
   CURRENT_OFFICE: "ticket_system_current_office_v1",
   OFFICE_TICKETS: "ticket_system_office_tickets_v1",
   OFFICE_CUBICLES: "ticket_system_office_cubicles_v1",
-  OFFICE_AUTO_ASSIGN: "ticket_system_office_auto_assign_v1"
+  OFFICE_AUTO_ASSIGN: "ticket_system_office_auto_assign_v1",
+  ACTIVE_CALL: "ticket_system_active_call_v1"
 };
 
 export function canCubicleServeProcedure(cubicleId: string, procedure?: string): boolean {
@@ -605,12 +606,33 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         }
       }
       setOfficeAutoAssign(loadedAutoAssign);
+
+      const storedActiveCall = localStorage.getItem(STORAGE_KEYS.ACTIVE_CALL);
+      if (storedActiveCall) {
+        try {
+          setActiveCall(JSON.parse(storedActiveCall));
+        } catch (err) {
+          console.error("Error parsing stored active call:", err);
+        }
+      }
     } catch (e) {
       console.error("Error loading states from localStorage", e);
     }
   }, []);
 
   // 2. Persist to localStorage on changes
+  useEffect(() => {
+    try {
+      if (activeCall) {
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_CALL, JSON.stringify(activeCall));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.ACTIVE_CALL);
+      }
+    } catch (e) {
+      console.error("Error saving active call to localStorage", e);
+    }
+  }, [activeCall]);
+
   useEffect(() => {
     try {
       if (Object.keys(officeTickets).length > 0) {
@@ -888,12 +910,26 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         se.key !== STORAGE_KEYS.OFFICE_TICKETS &&
         se.key !== STORAGE_KEYS.OFFICE_CUBICLES &&
         se.key !== STORAGE_KEYS.OFFICE_AUTO_ASSIGN &&
-        se.key !== STORAGE_KEYS.CURRENT_OFFICE
+        se.key !== STORAGE_KEYS.CURRENT_OFFICE &&
+        se.key !== STORAGE_KEYS.ACTIVE_CALL
       ) {
         return;
       }
 
       try {
+        if (se.key === STORAGE_KEYS.ACTIVE_CALL) {
+          if (se.newValue) {
+            try {
+              setActiveCall(JSON.parse(se.newValue));
+            } catch (err) {
+              console.error("Error parsing storage active call update:", err);
+            }
+          } else {
+            setActiveCall(null);
+          }
+          return;
+        }
+
         const storedOffice = localStorage.getItem(STORAGE_KEYS.CURRENT_OFFICE);
         if (storedOffice && storedOffice !== currentOfficeId) {
           setCurrentOfficeId(storedOffice);
@@ -1129,12 +1165,24 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         let finalCompletedAt: number | undefined = undefined;
 
         if (t.currentPhase === TicketPhase.CAJA) {
-          const isShortFlow = t.serviceType === ServiceType.ELECTORAL || t.serviceType === ServiceType.REGISTRO;
-          if (isShortFlow) {
-            nextStatus = TicketStatus.COMPLETED;
-            finalCompletedAt = Date.now();
+          if (t.serviceType === ServiceType.CEDULACION) {
+            const doesCorrespond = t.procedure !== "REG";
+            if (doesCorrespond) {
+              nextPhase = TicketPhase.TRIADA;
+              nextStatus = TicketStatus.WAITING;
+            } else {
+              nextStatus = TicketStatus.COMPLETED;
+              finalCompletedAt = Date.now();
+            }
           } else {
-            nextPhase = TicketPhase.TRIADA;
+            const isShortFlow = t.serviceType === ServiceType.ELECTORAL || t.serviceType === ServiceType.REGISTRO;
+            if (isShortFlow) {
+              nextStatus = TicketStatus.COMPLETED;
+              finalCompletedAt = Date.now();
+            } else {
+              nextPhase = TicketPhase.TRIADA;
+              nextStatus = TicketStatus.WAITING;
+            }
           }
         } else {
           nextStatus = TicketStatus.COMPLETED;
@@ -1208,7 +1256,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     }));
 
     // Trigger UI Voice Event & TV Display
-    const updatedTicketRef = { ...chosenTicket, status: TicketStatus.CALLING, assignedCubicleId: cubicleId };
+    const updatedTicketRef = { ...chosenTicket, status: TicketStatus.CALLING, assignedCubicleId: cubicleId, calledAt: Date.now() };
     setActiveCall({ ticket: updatedTicketRef, cubicle: targetCubicle });
   }, [cubicles, tickets, setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
 
@@ -1244,12 +1292,24 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
             nextPhase = TicketPhase.TRIADA;
             nextStatus = TicketStatus.WAITING;
           } else {
-            const isShortFlow = t.serviceType === ServiceType.ELECTORAL || t.serviceType === ServiceType.REGISTRO;
-            if (isShortFlow) {
-              nextStatus = TicketStatus.COMPLETED;
-              finalCompletedAt = Date.now();
+            if (t.serviceType === ServiceType.CEDULACION) {
+              const doesCorrespond = t.procedure !== "REG";
+              if (doesCorrespond) {
+                nextPhase = TicketPhase.TRIADA;
+                nextStatus = TicketStatus.WAITING;
+              } else {
+                nextStatus = TicketStatus.COMPLETED;
+                finalCompletedAt = Date.now();
+              }
             } else {
-              nextPhase = TicketPhase.TRIADA;
+              const isShortFlow = t.serviceType === ServiceType.ELECTORAL || t.serviceType === ServiceType.REGISTRO;
+              if (isShortFlow) {
+                nextStatus = TicketStatus.COMPLETED;
+                finalCompletedAt = Date.now();
+              } else {
+                nextPhase = TicketPhase.TRIADA;
+                nextStatus = TicketStatus.WAITING;
+              }
             }
           }
         } else {
@@ -1546,7 +1606,8 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       const updatedTicketRef = { 
         ...chosenTicket, 
         status: TicketStatus.CALLING, 
-        assignedCubicleId: cubicle.id 
+        assignedCubicleId: cubicle.id,
+        calledAt: Date.now()
       };
       callsToTrigger.push({ ticket: updatedTicketRef, cubicle });
     }

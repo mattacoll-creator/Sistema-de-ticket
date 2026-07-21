@@ -253,7 +253,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     if (selectedChannel === "OR") return "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OR";
     if (selectedChannel === "OHV") return "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OHV";
     if (selectedChannel === "RC_OTROS") return "📺 PANTALLA EXCLUSIVA: OTROS TRÁMITES Y ENTREGA";
-    if (selectedChannel === TicketPhase.TRIADA) return "📺 PANTALLA EXCLUSIVA: FASE DE VENTANILLA / TRÍADA";
+    if (selectedChannel === TicketPhase.TRIADA) return "📺 PANTALLA EXCLUSIVA: FASE DE TRÍADA Y FOTOGRAFÍA";
     return `📺 PANTALLA EXCLUSIVA: FASE DE ${PHASES_CONFIG[selectedChannel as TicketPhase]?.name?.toUpperCase() || "MONITOR"}`;
   };
 
@@ -261,7 +261,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     if (selectedChannel === "OR") return "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Recepción (OR) - Cubículos 2 al 8.";
     if (selectedChannel === "OHV") return "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Hechos Vitales (OHV) - Cubículos 16 al 20.";
     if (selectedChannel === "RC_OTROS") return "Los números en esta pantalla corresponden a otros trámites y entrega de documentos de Registro Civil.";
-    if (selectedChannel === TicketPhase.TRIADA) return "Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de Ventanilla / Tríada / Fotografía.";
+    if (selectedChannel === TicketPhase.TRIADA) return "Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de Tríada y Fotografía.";
     return `Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de ${PHASES_CONFIG[selectedChannel as TicketPhase]?.name || "atención"}.`;
   };
 
@@ -1560,7 +1560,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                               : selectedChannel === "RC_OTROS"
                                 ? "(FILTRADOS: OTROS TRÁMITES)"
                                 : selectedChannel === TicketPhase.TRIADA
-                                  ? "(FILTRADOS: ATENCIÓN / TRÍADA)"
+                                  ? "(FILTRADOS: TRÍADA Y FOTOGRAFÍA)"
                                   : `(FILTRADOS: ${PHASES_CONFIG[selectedChannel as TicketPhase]?.name?.toUpperCase() || "MONITOR"})`
                         }
                       </span>

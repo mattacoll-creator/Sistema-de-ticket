@@ -1595,27 +1595,39 @@ export default function AgentConsole({
                     <Check className="w-4 h-4 text-white shrink-0" />
                     <span>Fin de Atención</span>
                   </button>
-                ) : gatewaySelection === "cedulacion" && currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
-                  <div className="col-span-2 grid grid-cols-2 gap-3">
+                ) : (activeTicket?.serviceType === ServiceType.CEDULACION || gatewaySelection === "cedulacion") && currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
+                  activeTicket?.procedure === "REG" ? (
                     <button
-                      id="btn-action-complete-ced-adm"
+                      id="btn-action-complete-ced-reg"
                       onClick={() => onComplete(currentCubicle.id, "administrative")}
-                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.99]"
-                      title="Trámite Administrativo (REG, O, u Opciones C/E). El ticket finaliza aquí."
+                      className="col-span-2 w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
+                      title="Certificación de Registro (Trámite Administrativo). El ticket finaliza aquí."
                     >
                       <Check className="w-4 h-4 text-white shrink-0" />
                       <span>Fin de Atención</span>
                     </button>
-                    <button
-                      id="btn-action-complete-ced-phys"
-                      onClick={() => onComplete(currentCubicle.id, "emission_physical")}
-                      className="w-full py-3 bg-[#003087] hover:bg-blue-800 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.99]"
-                      title="Trámite de Emisión Física (Renovación, Duplicado, etc.). Envía el ticket a Espera en Fotografía."
-                    >
-                      <Camera className="w-4 h-4 text-white shrink-0" />
-                      <span>Pasar a Tríada</span>
-                    </button>
-                  </div>
+                  ) : (
+                    <div className="col-span-2 grid grid-cols-2 gap-3">
+                      <button
+                        id="btn-action-complete-ced-adm"
+                        onClick={() => onComplete(currentCubicle.id, "administrative")}
+                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.99]"
+                        title="Trámite Administrativo (No requiere fotografía). El ticket finaliza aquí."
+                      >
+                        <Check className="w-4 h-4 text-white shrink-0" />
+                        <span>Fin de Atención</span>
+                      </button>
+                      <button
+                        id="btn-action-complete-ced-phys"
+                        onClick={() => onComplete(currentCubicle.id, "emission_physical")}
+                        className="w-full py-3 bg-[#003087] hover:bg-blue-800 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.99]"
+                        title="Trámite de Emisión Física (Requiere fotografía). Envía el ticket a Espera en Fotografía."
+                      >
+                        <Camera className="w-4 h-4 text-white shrink-0" />
+                        <span>Pasar a Tríada</span>
+                      </button>
+                    </div>
+                  )
                 ) : (
                   <button
                     id="btn-action-complete"

@@ -90,11 +90,11 @@ export const PHASES_CONFIG: Record<TicketPhase, PhaseDetail> = {
   },
   [TicketPhase.TRIADA]: {
     id: TicketPhase.TRIADA,
-    name: "Ventanilla / Tríada",
-    shortName: "Atención / Tríada",
+    name: "Tríada y Fotografía",
+    shortName: "Tríada y Fotografía",
     color: "bg-cyan-500 text-cyan-950 border-cyan-300",
     icon: "ClipboardCheck",
-    description: "Atención en ventanillas de trámite, triage de viabilidad, biometría y validación"
+    description: "Atención en ventanillas de trámite, triage de viabilidad, biometría, toma de fotografía y firma"
   }
 };
 

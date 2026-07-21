@@ -74,14 +74,18 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string)
     // Cancelar cualquier discurso pendiente
     window.speechSynthesis.cancel();
 
+    // Clean up cubicle name for a more natural voice announcement (e.g., removing text inside parenthesis)
+    // e.g. "Módulo 1 (Tríada / Fotografía)" -> "Módulo 1"
+    const cleanCubicleName = cubicleName.replace(/\s*\(.*?\)\s*/g, '').trim();
+
     // Crear el mensaje a pronunciar
     // e.g.: "Ticket A-01, Juan Pérez, pase al Cubículo 1"
     const parsedCode = ticketCode.split("").join(" "); // Pronuncia dígito por dígito para mayor claridad
     let targetPrep = "al";
-    if (cubicleName.toLowerCase().startsWith("caja")) {
+    if (cleanCubicleName.toLowerCase().startsWith("caja")) {
       targetPrep = "a la";
     }
-    const message = `¿Atención, ticket? ${parsedCode}!... ${name}!... Por favor, pase ${targetPrep} ${cubicleName}.`;
+    const message = `¿Atención, ticket? ${parsedCode}!... ${name}!... Por favor, pase ${targetPrep} ${cleanCubicleName}.`;
     
     const rateStr = localStorage.getItem("ticket_tts_rate");
     const pitchStr = localStorage.getItem("ticket_tts_pitch");
