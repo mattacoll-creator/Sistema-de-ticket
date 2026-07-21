@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Ticket, Cubicle, TicketStatus, SERVICES_CONFIG, TicketPhase, PHASES_CONFIG, OFFICES_CONFIG, ServiceType } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { Volume2, VolumeX, Tv, UserCheck, Users, HelpCircle, ArrowRight, UserMinus, ShieldAlert, Clock } from "lucide-react";
 import { getOfficeSchedule } from "../utils/scheduleStorage";
+import { announceAndCall } from "../utils/audio";
 
 interface MainScreenProps {
   tickets: Ticket[];
@@ -170,6 +171,38 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   )
     ? activeCall
     : null;
+
+  // Audio announcement ref to keep track of the last announced ticket and calledAt
+  const lastAnnouncedRef = useRef<{ id: string; calledAt: number } | null>(null);
+
+  useEffect(() => {
+    if (!displayedActiveCall || !soundEnabled) return;
+
+    const { ticket, cubicle } = displayedActiveCall;
+    const ticketId = ticket.id;
+    const calledAt = ticket.calledAt || 0;
+
+    // Only announce if it's a new call or a recall (represented by a newer calledAt timestamp)
+    if (lastAnnouncedRef.current?.id === ticketId && lastAnnouncedRef.current?.calledAt === calledAt) {
+      return;
+    }
+
+    // Update last announced ref
+    lastAnnouncedRef.current = { id: ticketId, calledAt };
+
+    if (ticket.serviceType === ServiceType.REGISTRO && ticket.currentPhase === TicketPhase.CAJA) {
+      return; // Sin llamado en TV para la Caja de Registro Civil
+    }
+
+    const destName = ticket.currentPhase === TicketPhase.CAJA
+      ? `Caja ${cubicle.name.replace(/\D/g, '') || cubicle.name}`
+      : cubicle.name;
+
+    // Play the calling sequence
+    announceAndCall(ticket.numberCode, ticket.name, destName).catch(err => {
+      console.warn("Speech synthesis error on TV screen:", err);
+    });
+  }, [displayedActiveCall, soundEnabled]);
 
   // Filter cubicles strictly based on active ecosystem
   const ecosystemCubicles = cubicles.filter(c => {

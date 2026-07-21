@@ -5,7 +5,6 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Ticket, TicketStatus, TicketPhase, Cubicle, CubicleStatus, ServiceType, SERVICES_CONFIG } from "../types";
-import { announceAndCall } from "../utils/audio";
 import { getSupabaseClient } from "../utils/supabaseClient";
 
 const STORAGE_KEYS = {
@@ -460,7 +459,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
   const [officeAutoAssign, setOfficeAutoAssign] = useState<Record<string, boolean>>({});
 
   const [activeCall, setActiveCall] = useState<{ ticket: Ticket; cubicle: Cubicle } | null>(null);
-  
+
   // Simulation states
   const [isSimulationActive, setIsSimulationActive] = useState<boolean>(false);
   const [simulationSpeed, setSimulationSpeed] = useState<number>(10000); // ms per user arrival (10s default)
@@ -477,6 +476,31 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
   const ticketsRef = useRef<Ticket[]>(EMPTY_TICKETS);
   ticketsRef.current = tickets;
+
+  // Synchronize activeCall state based on calling tickets (vital for remote screens like TV)
+  useEffect(() => {
+    // Find all tickets currently in CALLING status
+    const callingTickets = tickets.filter(t => t.status === TicketStatus.CALLING);
+    if (callingTickets.length === 0) {
+      if (activeCall !== null) {
+        setActiveCall(null);
+      }
+      return;
+    }
+
+    // Find the one with the latest calledAt timestamp
+    const mostRecentTicket = [...callingTickets].sort((a, b) => (b.calledAt || 0) - (a.calledAt || 0))[0];
+    
+    // Check if the current activeCall is already this ticket to avoid redundant state updates
+    if (activeCall?.ticket.id === mostRecentTicket.id && activeCall?.ticket.calledAt === mostRecentTicket.calledAt) {
+      return;
+    }
+
+    const assignedCubicle = cubicles.find(c => c.id === mostRecentTicket.assignedCubicleId);
+    if (assignedCubicle) {
+      setActiveCall({ ticket: mostRecentTicket, cubicle: assignedCubicle });
+    }
+  }, [tickets, cubicles, activeCall, setActiveCall]);
 
   const isAutoAssignActive = officeAutoAssign[currentOfficeId] !== false;
 
@@ -1087,13 +1111,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     // Trigger UI Voice Event & TV Display
     const updatedTicketRef = { ...chosenTicket, status: TicketStatus.CALLING, assignedCubicleId: cubicleId };
     setActiveCall({ ticket: updatedTicketRef, cubicle: targetCubicle });
-
-    // Speak audio calling sequence
-    const destName = chosenTicket.currentPhase === TicketPhase.CAJA
-      ? `Caja ${targetCubicle.name.replace(/\D/g, '') || targetCubicle.name}`
-      : targetCubicle.name;
-    await announceAndCall(chosenTicket.numberCode, chosenTicket.name, destName);
-  }, [cubicles, tickets]);
+  }, [cubicles, tickets, setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
 
   // 5. Active ticket actions (start actual attending or finish)
   const startAttendingTicket = useCallback((cubicleId: string) => {
@@ -1277,13 +1295,22 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       return; // Sin llamado en TV para la Caja de Registro Civil
     }
 
-    // Trigger vocal repeat
-    setActiveCall({ ticket: currentTicket, cubicle: targetCubicle });
-    const destName = currentTicket.currentPhase === TicketPhase.CAJA
-      ? `Caja ${targetCubicle.name.replace(/\D/g, '') || targetCubicle.name}`
-      : targetCubicle.name;
-    announceAndCall(currentTicket.numberCode, currentTicket.name, destName);
-  }, [cubicles, tickets]);
+    // Update calledAt to current time so TV screen can detect it as a fresh recall
+    const updatedCalledAt = Date.now();
+    setTicketsForCurrentOffice(prev => prev.map(t => {
+      if (t.id === currentTicket.id) {
+        return {
+          ...t,
+          calledAt: updatedCalledAt
+        };
+      }
+      return t;
+    }));
+
+    // Trigger local activeCall state
+    const updatedTicket = { ...currentTicket, calledAt: updatedCalledAt };
+    setActiveCall({ ticket: updatedTicket, cubicle: targetCubicle });
+  }, [cubicles, tickets, setTicketsForCurrentOffice, setActiveCall]);
 
   // 6. Change cubicle status (e.g., transition to BREAK or OFFLINE)
   const changeCubicleStatus = useCallback((cubicleId: string, newStatus: CubicleStatus, agentName?: string) => {
@@ -1432,15 +1459,6 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       if (callsToTrigger.length > 0) {
         const latestCall = callsToTrigger[callsToTrigger.length - 1];
         setActiveCall(latestCall);
-        
-        try {
-          const destName = latestCall.ticket.currentPhase === TicketPhase.CAJA
-            ? `Caja ${latestCall.cubicle.name.replace(/\D/g, '') || latestCall.cubicle.name}`
-            : latestCall.cubicle.name;
-          await announceAndCall(latestCall.ticket.numberCode, latestCall.ticket.name, destName);
-        } catch (err) {
-          console.warn("Speech synthesis error", err);
-        }
       }
     }
   }, [setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
