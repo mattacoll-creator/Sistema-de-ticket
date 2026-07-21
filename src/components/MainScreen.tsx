@@ -761,6 +761,26 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 <div className="absolute top-0 bottom-0 left-0 w-3 bg-rose-600 animate-pulse" />
                 <div className="absolute top-0 bottom-0 right-0 w-3 bg-amber-400 animate-pulse" />
 
+                {/* GIGANTIC DESTINATION BOX */}
+                <div className="flex flex-col items-center justify-center bg-white border-[10px] border-rose-600 px-14 py-12 rounded-3xl text-center min-w-[380px] lg:min-w-[540px] max-w-full z-10 shadow-2xl text-slate-900 transition-all transform hover:scale-[1.02]">
+                  <span className="text-sm md:text-lg lg:text-xl xl:text-2xl tracking-widest text-[#122e70] uppercase font-mono font-black">
+                    {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
+                  </span>
+                  
+                  <p className="text-6xl md:text-8xl lg:text-[6.5rem] xl:text-[8rem] font-black text-[#122e70] mt-4 uppercase font-mono tracking-wide animate-pulse">
+                    {(displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA
+                      ? `CAJA ${displayedActiveCall.cubicle.name.replace(/\D/g, '') || displayedActiveCall.cubicle.name}`
+                      : displayedActiveCall.cubicle.name
+                    ).toUpperCase()}
+                  </p>
+                  
+                  <div className="h-1.5 w-36 bg-rose-600 my-5 rounded-full" />
+                  
+                  <p className="text-xs md:text-sm lg:text-base xl:text-lg text-slate-550 font-mono uppercase tracking-widest font-black">
+                    📢 ATENDIDO POR AGENTE: <span className="text-slate-800">{displayedActiveCall.cubicle.agentName.toUpperCase()}</span>
+                  </p>
+                </div>
+
                 <div className="space-y-4 text-center z-10 w-full flex flex-col items-center justify-center">
                   <div className="flex flex-wrap items-center justify-center gap-2.5">
                     <span className="px-4 py-1.5 text-xs md:text-sm lg:text-base font-mono tracking-widest font-black uppercase bg-rose-600 text-white rounded-md animate-bounce shadow-md">
@@ -787,26 +807,6 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       {PHASES_CONFIG[displayedActiveCall.ticket.currentPhase].name.toUpperCase()}
                     </span>
                   </div>
-                </div>
-
-                {/* GIGANTIC DESTINATION BOX */}
-                <div className="flex flex-col items-center justify-center bg-white border-[10px] border-rose-600 px-14 py-12 rounded-3xl text-center min-w-[380px] lg:min-w-[540px] max-w-full z-10 shadow-2xl text-slate-900 transition-all transform hover:scale-[1.02]">
-                  <span className="text-sm md:text-lg lg:text-xl xl:text-2xl tracking-widest text-[#122e70] uppercase font-mono font-black">
-                    {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
-                  </span>
-                  
-                  <p className="text-6xl md:text-8xl lg:text-[6.5rem] xl:text-[8rem] font-black text-[#122e70] mt-4 uppercase font-mono tracking-wide animate-pulse">
-                    {(displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA
-                      ? `CAJA ${displayedActiveCall.cubicle.name.replace(/\D/g, '') || displayedActiveCall.cubicle.name}`
-                      : displayedActiveCall.cubicle.name
-                    ).toUpperCase()}
-                  </p>
-                  
-                  <div className="h-1.5 w-36 bg-rose-600 my-5 rounded-full" />
-                  
-                  <p className="text-xs md:text-sm lg:text-base xl:text-lg text-slate-550 font-mono uppercase tracking-widest font-black">
-                    📢 ATENDIDO POR AGENTE: <span className="text-slate-800">{displayedActiveCall.cubicle.agentName.toUpperCase()}</span>
-                  </p>
                 </div>
 
                 {/* Dismiss Call indicator */}
@@ -1302,31 +1302,6 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                   <div className="absolute top-0 bottom-0 left-0 w-3 bg-rose-600 animate-pulse" />
                   <div className="absolute top-0 bottom-0 right-0 w-3 bg-amber-400 animate-pulse" />
 
-                  <div className="space-y-4 text-center w-full flex flex-col items-center justify-center">
-                    <div>
-                      <span className="px-4 py-1.5 text-xs md:text-sm lg:text-base font-mono tracking-widest font-black uppercase bg-rose-600 text-white rounded-md animate-bounce shadow-md inline-block">
-                        🛎️ TURNO LLAMADO
-                      </span>
-                      {displayedActiveCall.ticket.priority && (
-                        <span className="ml-2 px-3.5 py-1.5 text-xs md:text-sm lg:text-base font-black bg-amber-500 text-white rounded-md uppercase inline-flex items-center gap-1 shadow-md animate-pulse">
-                          <ShieldAlert className="w-4 h-4" /> PRIORITARIO
-                        </span>
-                      )}
-                    </div>
-                    
-                    <h1 className={`text-8xl md:text-[10rem] lg:text-[12rem] xl:text-[14rem] font-black tracking-widest leading-none drop-shadow-md animate-pulse font-mono ${
-                      isTriadaChannel ? "text-[#003087]" : "text-white"
-                    }`}>
-                      {displayedActiveCall.ticket.numberCode}
-                    </h1>
-                    
-                    <p className={`text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-black uppercase tracking-widest italic truncate max-w-[650px] ${
-                      isTriadaChannel ? "text-slate-800" : "text-blue-200"
-                    }`}>
-                      {displayedActiveCall.ticket.name}
-                    </p>
-                  </div>
-
                   {/* Destination */}
                   <div className={`flex flex-col items-center justify-center border-[10px] px-10 py-10 rounded-2xl text-center min-w-[340px] lg:min-w-[480px] shadow-2xl ${
                     isTriadaChannel
@@ -1349,6 +1324,31 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                     <div className="h-1.5 w-36 bg-rose-600 my-4 rounded-full animate-pulse" />
                     <p className="text-xs md:text-sm lg:text-base text-slate-500 font-mono uppercase tracking-widest font-black">
                       📢 ATENDIDO POR AGENTE: <span className="text-slate-800">{displayedActiveCall.cubicle.agentName.toUpperCase()}</span>
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 text-center w-full flex flex-col items-center justify-center">
+                    <div>
+                      <span className="px-4 py-1.5 text-xs md:text-sm lg:text-base font-mono tracking-widest font-black uppercase bg-rose-600 text-white rounded-md animate-bounce shadow-md inline-block">
+                        🛎️ TURNO LLAMADO
+                      </span>
+                      {displayedActiveCall.ticket.priority && (
+                        <span className="ml-2 px-3.5 py-1.5 text-xs md:text-sm lg:text-base font-black bg-amber-500 text-white rounded-md uppercase inline-flex items-center gap-1 shadow-md animate-pulse">
+                          <ShieldAlert className="w-4 h-4" /> PRIORITARIO
+                        </span>
+                      )}
+                    </div>
+                    
+                    <h1 className={`text-8xl md:text-[10rem] lg:text-[12rem] xl:text-[14rem] font-black tracking-widest leading-none drop-shadow-md animate-pulse font-mono ${
+                      isTriadaChannel ? "text-[#003087]" : "text-white"
+                    }`}>
+                      {displayedActiveCall.ticket.numberCode}
+                    </h1>
+                    
+                    <p className={`text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-black uppercase tracking-widest italic truncate max-w-[650px] ${
+                      isTriadaChannel ? "text-slate-800" : "text-blue-200"
+                    }`}>
+                      {displayedActiveCall.ticket.name}
                     </p>
                   </div>
                 </div>
