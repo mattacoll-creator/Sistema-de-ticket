@@ -16,6 +16,7 @@ import AgentConsole from "./components/AgentConsole";
 import ControlDashboard from "./components/ControlDashboard";
 import SuperAdminConsole from "./components/SuperAdminConsole";
 import GatewayScreen from "./components/GatewayScreen";
+import CitasApp from "./components/CitasApp";
 
 import { 
   Tv, 
@@ -36,7 +37,8 @@ import {
   Laptop,
   Tablet,
   Maximize2,
-  Minimize2
+  Minimize2,
+  CalendarCheck2
 } from "lucide-react";
 
 export default function App() {
@@ -277,7 +279,15 @@ export default function App() {
   };
 
   if (gatewaySelection === "select") {
-    return <GatewayScreen onSelectOption={(option) => setGatewaySelection(option)} />;
+    return (
+      <GatewayScreen 
+        onSelectOption={(option) => setGatewaySelection(option)} 
+        onSelectCitas={() => {
+          setGatewaySelection("cedulacion");
+          setActiveTab("citas");
+        }} 
+      />
+    );
   }
 
   return (
@@ -473,7 +483,7 @@ export default function App() {
       )}
 
       {/* UPPER NATIONAL FLAG BAR */}
-      {!isHeaderHidden && (
+      {!isHeaderHidden && activeTab !== "citas" && (
         <div className="w-full h-1 flex select-none shrink-0 relative z-35 shadow-sm">
           <div className="bg-[#da121a] flex-1"></div>
           <div className="bg-[#003087] flex-1"></div>
@@ -481,78 +491,80 @@ export default function App() {
       )}
 
       {/* MASTER SIMULATOR & COMPATIBILITY BAR */}
-      <div className="w-full bg-[#0a1931] text-white py-2.5 px-4 md:px-8 border-b border-[#15305b] flex flex-wrap items-center justify-between gap-3 shadow-lg shrink-0 relative z-30 font-sans premium-glow-blue">
-        <div className="flex items-center gap-3.5 flex-wrap">
-          <div className="flex items-center gap-1.5 bg-blue-950/80 px-3 py-1 rounded-full border border-blue-800/60 text-[9px] font-black tracking-widest uppercase shrink-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
-            <span>Controles</span>
+      {activeTab !== "citas" && (
+        <div className="w-full bg-[#0a1931] text-white py-2.5 px-4 md:px-8 border-b border-[#15305b] flex flex-wrap items-center justify-between gap-3 shadow-lg shrink-0 relative z-30 font-sans premium-glow-blue">
+          <div className="flex items-center gap-3.5 flex-wrap">
+            <div className="flex items-center gap-1.5 bg-blue-950/80 px-3 py-1 rounded-full border border-blue-800/60 text-[9px] font-black tracking-widest uppercase shrink-0">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+              <span>Controles</span>
+            </div>
+            <div className="flex items-center gap-2 text-[11px] font-semibold text-blue-100">
+              <span>Departamento:</span>
+              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                gatewaySelection === "registro_civil" ? "bg-blue-600 text-white" : "bg-amber-500 text-slate-950"
+              }`}>
+                {gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"}
+              </span>
+              <button
+                onClick={() => setGatewaySelection("select")}
+                className="ml-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 hover:text-white border border-white/25 hover:border-white/50 text-blue-100 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer active:scale-95"
+                title="Volver a la selección inicial"
+              >
+                Cambiar Sede/Trámite
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2 text-[11px] font-semibold text-blue-100">
-            <span>Departamento:</span>
-            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
-              gatewaySelection === "registro_civil" ? "bg-blue-600 text-white" : "bg-amber-500 text-slate-950"
-            }`}>
-              {gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"}
-            </span>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Version Escritorio (Laptop) */}
             <button
-              onClick={() => setGatewaySelection("select")}
-              className="ml-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 hover:text-white border border-white/25 hover:border-white/50 text-blue-100 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer active:scale-95"
-              title="Volver a la selección inicial"
+              onClick={() => setViewType("desktop")}
+              className={`px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                viewType === "desktop"
+                  ? "bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-md font-sans border-none"
+                  : "bg-[#122e70] text-blue-200 border border-blue-800 hover:bg-blue-800/50"
+              }`}
+              title="Versión Escritorio: Ajusta la pantalla completa optimizada para ordenadores portátiles y Laptops"
             >
-              Cambiar Sede/Trámite
+              <Laptop className="w-3.5 h-3.5" />
+              <span>Versión Escritorio (Laptop)</span>
+            </button>
+
+            {/* Version Tablet */}
+            <button
+              onClick={() => setViewType("tablet")}
+              className={`px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                viewType === "tablet"
+                  ? "bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-md font-sans border-none"
+                  : "bg-[#122e70] text-blue-200 border border-blue-800 hover:bg-blue-800/50"
+              }`}
+              title="Versión Tablet: Optimiza y encuadra la pantalla simulando una tableta de atención"
+            >
+              <Tablet className="w-3.5 h-3.5" />
+              <span>Versión Tablet</span>
+            </button>
+
+            <div className="h-5 w-[1.5px] bg-blue-800/80 mx-1 hidden sm:block" />
+
+            {/* Toggle Fullscreen Action */}
+            <button
+              onClick={toggleFullscreen}
+              className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+                isFullscreen
+                  ? "bg-red-600 hover:bg-red-700 text-white border-none shadow-md"
+                  : "bg-emerald-600 hover:bg-emerald-700 text-white border-none shadow-md"
+              }`}
+              title="Pantalla Completa: Pone la aplicación en pantalla completa para ocultar las barras y menús del navegador"
+            >
+              {isFullscreen ? <Minimize2 className="w-3.5 h-3.5 animate-pulse" /> : <Maximize2 className="w-3.5 h-3.5" />}
+              <span>{isFullscreen ? "Salir Pantalla Completa" : "Pantalla Completa"}</span>
             </button>
           </div>
         </div>
-
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Version Escritorio (Laptop) */}
-          <button
-            onClick={() => setViewType("desktop")}
-            className={`px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-              viewType === "desktop"
-                ? "bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-md font-sans border-none"
-                : "bg-[#122e70] text-blue-200 border border-blue-800 hover:bg-blue-800/50"
-            }`}
-            title="Versión Escritorio: Ajusta la pantalla completa optimizada para ordenadores portátiles y Laptops"
-          >
-            <Laptop className="w-3.5 h-3.5" />
-            <span>Versión Escritorio (Laptop)</span>
-          </button>
-
-          {/* Version Tablet */}
-          <button
-            onClick={() => setViewType("tablet")}
-            className={`px-3.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-              viewType === "tablet"
-                ? "bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-md font-sans border-none"
-                : "bg-[#122e70] text-blue-200 border border-blue-800 hover:bg-blue-800/50"
-            }`}
-            title="Versión Tablet: Optimiza y encuadra la pantalla simulando una tableta de atención"
-          >
-            <Tablet className="w-3.5 h-3.5" />
-            <span>Versión Tablet</span>
-          </button>
-
-          <div className="h-5 w-[1.5px] bg-blue-800/80 mx-1 hidden sm:block" />
-
-          {/* Toggle Fullscreen Action */}
-          <button
-            onClick={toggleFullscreen}
-            className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-              isFullscreen
-                ? "bg-red-600 hover:bg-red-700 text-white border-none shadow-md"
-                : "bg-emerald-600 hover:bg-emerald-700 text-white border-none shadow-md"
-            }`}
-            title="Pantalla Completa: Pone la aplicación en pantalla completa para ocultar las barras y menús del navegador"
-          >
-            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5 animate-pulse" /> : <Maximize2 className="w-3.5 h-3.5" />}
-            <span>{isFullscreen ? "Salir Pantalla Completa" : "Pantalla Completa"}</span>
-          </button>
-        </div>
-      </div>
+      )}
 
       {/* HEADER SECTION */}
-      {!isHeaderHidden && (
+      {!isHeaderHidden && activeTab !== "citas" && (
         <header className="max-w-7xl mx-auto w-full px-4 md:px-8 pt-6 space-y-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
           
@@ -605,6 +617,19 @@ export default function App() {
 
         {/* VIEWPORT CONTROLLER TABS */}
         <div className="flex flex-wrap items-center justify-start gap-2.5 border-b border-slate-200/60 pb-3">
+          <button
+            id="tab-view-citas"
+            onClick={() => setActiveTab("citas")}
+            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+              activeTab === "citas"
+                ? "bg-gradient-to-r from-amber-600 to-amber-700 text-white border-transparent shadow-md shadow-amber-900/10"
+                : "bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100 shadow-sm"
+            }`}
+          >
+            <CalendarCheck2 className="w-4 h-4 text-amber-600 group-hover:text-amber-800" />
+            <span>Agendamiento Citas (CitasTE)</span>
+          </button>
+
           <button
             id="tab-view-kiosk"
             onClick={() => setActiveTab("kiosk")}
@@ -724,11 +749,23 @@ export default function App() {
           </>
         )}
         
-        <main className={viewType === "tablet" ? "w-full flex-grow transition-all duration-300" : `max-w-[1650px] 2xl:max-w-[95%] mx-auto w-full px-4 md:px-8 flex-grow transition-all duration-300 ${isHeaderHidden ? "pt-8" : ""}`}>
+        <main className={
+          viewType === "tablet" 
+            ? "w-full flex-grow transition-all duration-300" 
+            : activeTab === "citas"
+              ? "w-full max-w-none px-0 sm:px-2 flex-grow transition-all duration-300 pt-0"
+              : `max-w-[1650px] 2xl:max-w-[95%] mx-auto w-full px-4 md:px-8 flex-grow transition-all duration-300 ${isHeaderHidden ? "pt-8" : ""}`
+        }>
         {/* INDIVIDUAL MAXIMIZED VIEWPORTS */}
+        {activeTab === "citas" && (
+          <div className="w-full py-0">
+            <CitasApp onCreateTicket={createTicket} onNavigateToTurnos={() => setActiveTab("kiosk")} />
+          </div>
+        )}
+
         {activeTab === "kiosk" && (
           <div className="w-full py-4">
-            <WelcomeKiosk onCreateTicket={createTicket} currentOfficeId={currentOfficeId} gatewaySelection={gatewaySelection} />
+            <WelcomeKiosk onCreateTicket={createTicket} currentOfficeId={currentOfficeId} gatewaySelection={gatewaySelection} onNavigateToCitas={() => setActiveTab("citas")} />
           </div>
         )}
 
@@ -865,18 +902,20 @@ export default function App() {
       </div>
 
       {/* FOOTER BAR */}
-      <footer className="max-w-7xl mx-auto w-full py-6 border-t border-slate-200 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="uppercase tracking-widest font-extrabold text-[10px] text-slate-400">
-          SISTEMA CENTRALIZADO DE GESTIÓN DE TURNOS V2.4
-        </div>
-        <div className="flex gap-6 font-mono text-[10px] items-center">
-          <span className="flex items-center gap-1.5 font-bold text-slate-650">
-            <span className="w-2.5 h-2.5 bg-emerald-500"></span>
-            SERVIDOR ACTIVO
-          </span>
-          <span className="opacity-60 font-bold uppercase text-slate-400">TERMINAL 0014-B</span>
-        </div>
-      </footer>
+      {activeTab !== "citas" && (
+        <footer className="max-w-7xl mx-auto w-full py-6 border-t border-slate-200 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="uppercase tracking-widest font-extrabold text-[10px] text-slate-400">
+            SISTEMA CENTRALIZADO DE GESTIÓN DE TURNOS V2.4
+          </div>
+          <div className="flex gap-6 font-mono text-[10px] items-center">
+            <span className="flex items-center gap-1.5 font-bold text-slate-650">
+              <span className="w-2.5 h-2.5 bg-emerald-500"></span>
+              SERVIDOR ACTIVO
+            </span>
+            <span className="opacity-60 font-bold uppercase text-slate-400">TERMINAL 0014-B</span>
+          </div>
+        </footer>
+      )}
     </div>
   );
 }

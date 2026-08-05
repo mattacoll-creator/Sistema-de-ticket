@@ -1,6 +1,6 @@
 {
-  "name": "Sistema de Tickets y Turnos",
-  "description": "Sistema interactivo para la gestión de turnos, llamado de clientes por nombre y administración de cubículos de atención.",
+  "name": "Tribunal Electoral de Panamá - Citas",
+  "description": "Sistema oficial de citas del Tribunal Electoral de Panamá para trámites de Cedulación, Registro Civil, Extranjería y Organización Electoral.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1059,11 +1059,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     const orderNumber = sameProcedureTickets.length + 1;
     const formattedNumber = `${targetPrefix}-${orderNumber.toString().padStart(3, "0")}`;
 
-    // Priority rule: The first 15 tickets of Cedulación each day are reserved and tagged for appointments
     let finalIsAppointment = isAppointment;
-    if (serviceType === ServiceType.CEDULACION && orderNumber <= 15) {
-      finalIsAppointment = true;
-    }
 
     const initialPhase = serviceType === ServiceType.REGISTRO ? TicketPhase.TRIADA : TicketPhase.CAJA;
 

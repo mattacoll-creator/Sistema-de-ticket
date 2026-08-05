@@ -1,0 +1,71 @@
+{
+  "siteTitle": "Portal de Trámites",
+  "siteSubtitle": "Tribunal Electoral de Panamá",
+  "logoUrl": "https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/06/Logo-TE-aniversario-256x256px-blanco-02.png",
+  "primaryColor": "#0f172a",
+  "customTexts": {
+    "welcomeTitle": "Bienvenido al Portal de Trámites y Citas",
+    "welcomeSubtitle": "Agende y verifique sus citas oficiales de manera ágil y digital.",
+    "footerText": "© 2026 Tribunal Electoral de Panamá. Todos los derechos reservados.",
+    "helpContact": "Línea gratuita de atención: 311 o +507 507-8000",
+    "visitanosBadge": "Visítanos",
+    "visitanosTitle": "Visitas Guiadas al Tribunal Electoral",
+    "visitanosDescription": "Regístrese para conocer la historia, funciones y espacios institucionales de la Sede Principal.",
+    "renovacionMesesAnticipacion": "6",
+    "msgNoCumpleRenovacion": "No cumple. El trámite de renovación de cédula solo puede realizarse con un máximo de {meses} meses de anticipación a su vencimiento (o si está vencida)."
+  },
+  "sections": [
+    {
+      "id": "registro_civil",
+      "name": "Registro Civil",
+      "description": "Certificados de nacimiento, matrimonio, defunción y otros trámites del estado civil de las personas."
+    },
+    {
+      "id": "cedulacion",
+      "name": "Cedulación",
+      "description": "Trámites relacionados con la obtención, renovación, y duplicados de cédulas de identidad personal."
+    },
+    {
+      "id": "organizacion_electoral",
+      "name": "Organización Electoral",
+      "description": "Cambios de residencia electoral, inscripciones a partidos políticos, y más."
+    },
+    {
+      "id": "extranjeria",
+      "name": "Trámites de Extranjería",
+      "description": "Procesamiento de cédulas de identidad para ciudadanos extranjeros (PE) y certificaciones."
+    },
+    {
+      "id": "panamenos_extranjero",
+      "name": "Panameños en el Extranjero",
+      "description": "Inscripción de hechos vitales y trámites consulares de identidad para ciudadanos residentes en el exterior."
+    }
+  ],
+  "pages": [
+    {
+      "id": "home",
+      "title": "Inicio",
+      "slug": "inicio",
+      "content": "Página principal del Portal del Tribunal Electoral para el agendamiento de citas en línea."
+    },
+    {
+      "id": "requisitos",
+      "title": "Requisitos Generales",
+      "slug": "requisitos",
+      "content": "Detalles completos de los requisitos necesarios para cada uno de los trámites que ofrece la institución."
+    },
+    {
+      "id": "contacto",
+      "title": "Contacto y Oficinas",
+      "slug": "contacto",
+      "content": "Consulte nuestras sucursales y números de contacto en todas las provincias de la República."
+    }
+  ],
+  "images": [
+    {
+      "id": "logo",
+      "name": "Logo Principal",
+      "url": "https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/06/Logo-TE-aniversario-256x256px-blanco-02.png"
+    }
+  ]
+}
