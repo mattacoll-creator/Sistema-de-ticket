@@ -713,8 +713,8 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         
         lastSupabaseStateRef.current = currentState;
         setSupabaseSyncStatus("success");
-      } catch (err) {
-        console.error("Supabase sync issue:", err);
+      } catch (err: any) {
+        console.warn("Supabase sync issue:", err?.message || err);
         setSupabaseSyncStatus("error");
       }
     }, 1500);
@@ -735,7 +735,11 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         .eq("office_id", targetOfficeId)
         .maybeSingle();
 
-      if (error) throw error;
+      if (error) {
+        console.warn("Supabase pull table issue:", error.message);
+        setSupabaseSyncStatus("error");
+        return false;
+      }
 
       if (data) {
         const remoteTickets = (data.tickets || []) as Ticket[];
@@ -775,9 +779,13 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         
         setSupabaseSyncStatus("success");
         return true;
+      } else {
+        // Office row does not exist yet in table; treat as success (empty remote)
+        setSupabaseSyncStatus("success");
+        return true;
       }
-    } catch (err) {
-      console.error("Error pulling from Supabase:", err);
+    } catch (err: any) {
+      console.warn("Error pulling from Supabase:", err?.message || err);
       setSupabaseSyncStatus("error");
     }
     return false;
@@ -804,7 +812,11 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           updated_at: new Date().toISOString()
         }, { onConflict: "office_id" });
 
-      if (error) throw error;
+      if (error) {
+        console.warn("Supabase push table issue:", error.message);
+        setSupabaseSyncStatus("error");
+        return false;
+      }
 
       lastSupabaseStateRef.current = JSON.stringify({
         tickets: currentTickets,
@@ -814,8 +826,8 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
       setSupabaseSyncStatus("success");
       return true;
-    } catch (err) {
-      console.error("Error pushing to Supabase:", err);
+    } catch (err: any) {
+      console.warn("Error pushing to Supabase:", err?.message || err);
       setSupabaseSyncStatus("error");
       return false;
     }
