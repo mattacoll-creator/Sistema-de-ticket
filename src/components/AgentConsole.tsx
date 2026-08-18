@@ -430,7 +430,7 @@ export default function AgentConsole({
                 <div className="space-y-1">
                   <span className="text-base font-black text-slate-900 uppercase group-hover:text-[#003087]">Tríada / Fotografía</span>
                   <p className="text-xs text-slate-450 font-bold uppercase tracking-wider leading-relaxed">
-                    Atención, Trámite y Captura (Módulos 1 a 8)
+                    Atención, Trámite y Captura (Módulos 10 a 17)
                   </p>
                 </div>
               </button>
@@ -555,7 +555,7 @@ export default function AgentConsole({
     if (gatewaySelection !== "registro_civil") {
       // Find the cubicles that correspond to the activeRoleFilter (Caja vs Tríada)
       // Caja: IDs CUB-34 to CUB-42 (Caja 0 to Caja 8)
-      // Tríada: IDs CUB-24 to CUB-31 (Módulo 1 to Módulo 8)
+      // Tríada: IDs CUB-24 to CUB-31 (Módulo 10 to Módulo 17)
       const roleCubicles = cubicles.filter(c => {
         const num = parseInt(c.id.replace("CUB-", ""), 10);
         if (activeRoleFilter === TicketPhase.CAJA) {
@@ -592,7 +592,7 @@ export default function AgentConsole({
             <div className="space-y-4">
               <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 font-mono flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#122e70] animate-pulse"></span>
-                Módulos Disponibles ({activeRoleFilter === TicketPhase.CAJA ? "Caja 0 al 8" : "Tríada 1 al 8"})
+                Módulos Disponibles ({activeRoleFilter === TicketPhase.CAJA ? "Cajas 0 al 8" : "Módulos 10 al 17"})
               </span>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">

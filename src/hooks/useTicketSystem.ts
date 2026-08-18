@@ -260,7 +260,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
   },
   {
     id: "CUB-24",
-    name: "Módulo 1 (Tríada / Fotografía)",
+    name: "Módulo 10 (Tríada / Fotografía)",
     agentName: "Diana Morales",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
@@ -269,7 +269,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
   },
   {
     id: "CUB-25",
-    name: "Módulo 2 (Tríada / Fotografía)",
+    name: "Módulo 11 (Tríada / Fotografía)",
     agentName: "Esteban Castro",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
@@ -278,7 +278,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
   },
   {
     id: "CUB-26",
-    name: "Módulo 3 (Tríada / Fotografía)",
+    name: "Módulo 12 (Tríada / Fotografía)",
     agentName: "Lucía Navarro",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
@@ -287,7 +287,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
   },
   {
     id: "CUB-27",
-    name: "Módulo 4 (Tríada / Fotografía)",
+    name: "Módulo 13 (Tríada / Fotografía)",
     agentName: "Andrés Silva",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
@@ -296,7 +296,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
   },
   {
     id: "CUB-28",
-    name: "Módulo 5 (Tríada / Fotografía)",
+    name: "Módulo 14 (Tríada / Fotografía)",
     agentName: "Mariana Rojas",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
@@ -305,7 +305,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
   },
   {
     id: "CUB-29",
-    name: "Módulo 6 (Tríada / Fotografía)",
+    name: "Módulo 15 (Tríada / Fotografía)",
     agentName: "Javier Mendoza",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
@@ -314,7 +314,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
   },
   {
     id: "CUB-30",
-    name: "Módulo 7 (Tríada / Fotografía)",
+    name: "Módulo 16 (Preferencial - Tríada / Fotografía)",
     agentName: "Valeria Herrera",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
@@ -323,7 +323,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
   },
   {
     id: "CUB-31",
-    name: "Módulo 8 (Tríada / Fotografía)",
+    name: "Módulo 17 (Preferencial - Tríada / Fotografía)",
     agentName: "Roberto Paredes",
     status: CubicleStatus.ONLINE_AVAILABLE,
     supportedPhases: [TicketPhase.TRIADA],
@@ -425,6 +425,14 @@ export function migrateCubicleState(cubicle: Cubicle, officeId: string): Cubicle
   } else if (num >= 24 && num <= 31) {
     updated.supportedServices = [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA, ServiceType.REG_CERTIFICATION];
     updated.supportedPhases = [TicketPhase.TRIADA];
+    if (num === 24) updated.name = "Módulo 10 (Tríada / Fotografía)";
+    else if (num === 25) updated.name = "Módulo 11 (Tríada / Fotografía)";
+    else if (num === 26) updated.name = "Módulo 12 (Tríada / Fotografía)";
+    else if (num === 27) updated.name = "Módulo 13 (Tríada / Fotografía)";
+    else if (num === 28) updated.name = "Módulo 14 (Tríada / Fotografía)";
+    else if (num === 29) updated.name = "Módulo 15 (Tríada / Fotografía)";
+    else if (num === 30) updated.name = "Módulo 16 (Preferencial - Tríada / Fotografía)";
+    else if (num === 31) updated.name = "Módulo 17 (Preferencial - Tríada / Fotografía)";
   } else if (num >= 34 && num <= 42) {
     updated.supportedServices = [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA, ServiceType.REG_CERTIFICATION];
     updated.supportedPhases = [TicketPhase.CAJA];
@@ -1148,6 +1156,36 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         }
       }
 
+      // Tríada / Fotografía preferential attention routing rules:
+      // Preferential attention (priority) in TRIADA phase must go to Módulo 16 and Módulo 17 only.
+      // Other Módulos (10 to 15) must not attend priority tickets.
+      // Módulo 16 and 17 must prioritize priority tickets, and only take normal tickets if no priority tickets are waiting.
+      const isTriadaPhase = t.currentPhase === TicketPhase.TRIADA;
+      if (isTriadaPhase && t.serviceType !== ServiceType.REGISTRO) {
+        const isPrefModule = targetCubicle.id === "CUB-30" || 
+                             targetCubicle.id === "CUB-31" || 
+                             targetCubicle.name.includes("Módulo 16") || 
+                             targetCubicle.name.includes("Módulo 17");
+        
+        if (isPrefModule) {
+          const anyPriorityWaiting = tickets.some(otherT => 
+            otherT.status === TicketStatus.WAITING &&
+            otherT.currentPhase === TicketPhase.TRIADA &&
+            otherT.serviceType !== ServiceType.REGISTRO &&
+            otherT.priority &&
+            targetCubicle.supportedServices.includes(otherT.serviceType) &&
+            canCubicleServeProcedure(cubicleId, otherT.procedure)
+          );
+          if (anyPriorityWaiting && !t.priority) {
+            return false;
+          }
+        } else {
+          if (t.priority) {
+            return false;
+          }
+        }
+      }
+
       return canCubicleServeProcedure(cubicleId, t.procedure);
     });
 
@@ -1557,6 +1595,36 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
             const anyPriorityWaiting = updatedTickets.some(otherT => 
               otherT.status === TicketStatus.WAITING &&
               otherT.currentPhase === TicketPhase.CAJA &&
+              otherT.priority &&
+              cubicle.supportedServices.includes(otherT.serviceType) &&
+              canCubicleServeProcedure(cubicle.id, otherT.procedure)
+            );
+            if (anyPriorityWaiting && !t.priority) {
+              return false;
+            }
+          } else {
+            if (t.priority) {
+              return false;
+            }
+          }
+        }
+
+        // Tríada / Fotografía preferential attention routing rules:
+        // Preferential attention (priority) in TRIADA phase must go to Módulo 16 and Módulo 17 only.
+        // Other Módulos (10 to 15) must not attend priority tickets.
+        // Módulo 16 and 17 must prioritize priority tickets, and only take normal tickets if no priority tickets are waiting.
+        const isTriadaPhase = t.currentPhase === TicketPhase.TRIADA;
+        if (isTriadaPhase && t.serviceType !== ServiceType.REGISTRO) {
+          const isPrefModule = cubicle.id === "CUB-30" || 
+                               cubicle.id === "CUB-31" || 
+                               cubicle.name.includes("Módulo 16") || 
+                               cubicle.name.includes("Módulo 17");
+          
+          if (isPrefModule) {
+            const anyPriorityWaiting = updatedTickets.some(otherT => 
+              otherT.status === TicketStatus.WAITING &&
+              otherT.currentPhase === TicketPhase.TRIADA &&
+              otherT.serviceType !== ServiceType.REGISTRO &&
               otherT.priority &&
               cubicle.supportedServices.includes(otherT.serviceType) &&
               canCubicleServeProcedure(cubicle.id, otherT.procedure)

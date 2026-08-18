@@ -245,6 +245,7 @@ export interface SystemUser {
   role: UserRole;
   officeId: string; // Regional asignada
   password?: string; // Contraseña generada o asignada
+  mustChangePassword?: boolean; // Flag para obligar cambio de contraseña al primer ingreso
 }
 
 // ==========================================
@@ -334,6 +335,7 @@ export interface AdminUser {
   role: AdminRole;
   nombre: string;
   fechaCreacion: string;
+  mustChangePassword?: boolean;
 }
 
 export interface CmsConfig {

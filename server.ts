@@ -5,8 +5,108 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import dns from "dns";
 import fs from "fs";
+import http from "http";
+import https from "https";
 import { createClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
+import pg from "pg";
+
+const { Pool } = pg;
+
+// ==========================================
+// AZURE POSTGRESQL FLEXIBLE SERVER CONFIGS & INITIALIZER
+// ==========================================
+const pgConnectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+const isPgConfigured = !!(pgConnectionString || process.env.PGHOST);
+
+let pgPool: pg.Pool | null = null;
+if (isPgConfigured) {
+  const pgConfig: pg.PoolConfig = pgConnectionString
+    ? { connectionString: pgConnectionString }
+    : {
+        host: process.env.PGHOST,
+        user: process.env.PGUSER,
+        password: process.env.PGPASSWORD,
+        database: process.env.PGDATABASE || "postgres",
+        port: parseInt(process.env.PGPORT || "5432", 10),
+      };
+
+  // Azure PostgreSQL Flexible Server requires SSL by default
+  pgConfig.ssl = process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false };
+
+  pgPool = new Pool(pgConfig);
+  console.log(`[Azure PostgreSQL Flexible Server] Configured & Initialized`);
+}
+
+async function initPostgresSchema() {
+  if (!pgPool) return;
+  try {
+    const client = await pgPool.connect();
+    try {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS appointments (
+          id VARCHAR(100) PRIMARY KEY,
+          tipo VARCHAR(100),
+          tramite VARCHAR(255),
+          sub_tramite VARCHAR(255),
+          identificacion VARCHAR(100),
+          nombre VARCHAR(255),
+          correo VARCHAR(255),
+          telefono VARCHAR(100),
+          provincia VARCHAR(100),
+          distrito VARCHAR(100),
+          sucursal_id VARCHAR(100),
+          sucursal_nombre VARCHAR(255),
+          fecha VARCHAR(100),
+          hora VARCHAR(100),
+          estado VARCHAR(100),
+          data JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS usuarios (
+          username VARCHAR(100) PRIMARY KEY,
+          password VARCHAR(255) NOT NULL,
+          role VARCHAR(100) NOT NULL,
+          nombre VARCHAR(255),
+          must_change_password BOOLEAN DEFAULT FALSE,
+          fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS extranjeria_records (
+          id VARCHAR(100) PRIMARY KEY,
+          pasaporte VARCHAR(100),
+          nombre VARCHAR(255),
+          nacionalidad VARCHAR(100),
+          data JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `);
+
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS app_configs (
+          id VARCHAR(100) PRIMARY KEY,
+          config JSONB NOT NULL,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `);
+
+      console.log("[Azure PostgreSQL Flexible Server] Tablas e infraestructura verificadas correctamente.");
+    } finally {
+      client.release();
+    }
+  } catch (err: any) {
+    console.error("[Azure PostgreSQL Flexible Server] Error al inicializar tablas:", err.message);
+  }
+}
+
+if (isPgConfigured && pgPool) {
+  initPostgresSchema().catch(console.error);
+}
 
 // Fix Node warning about localhost dns resolution in some runtimes
 dns.setDefaultResultOrder("ipv4first");
@@ -89,117 +189,14 @@ async function sendOutlookEmail(to: string, subject: string, html: string) {
 }
 
 // ==========================================
-// DYNAMIC SUPABASE TABLE NAME DETECTORS (FALLBACKS)
 // ==========================================
-let resolvedAppointmentsTable: string | null = null;
-async function getAppointmentsTableName(): Promise<string> {
-  if (resolvedAppointmentsTable) return resolvedAppointmentsTable;
-  if (!isSupabaseConfigured || !supabase) {
-    resolvedAppointmentsTable = "otro";
-    return "otro";
-  }
-  const candidates = ["otro", "equipo", "citas", "appointments"];
-  for (const table of candidates) {
-    try {
-      const { error } = await supabase.from(table).select("identificacion").limit(1);
-      if (!error || (error.message && !error.message.includes("Could not find") && !error.message.includes("does not exist") && !error.message.includes("public." + table))) {
-        console.log(`[Supabase Detector] Detected appointments table name: '${table}'`);
-        resolvedAppointmentsTable = table;
-        return table;
-      }
-    } catch (e) {}
-  }
-  resolvedAppointmentsTable = "otro";
-  return "otro";
-}
-
-let resolvedUsersTable: string | null = null;
-async function getUsersTableName(): Promise<string> {
-  if (resolvedUsersTable) return resolvedUsersTable;
-  if (!isSupabaseConfigured || !supabase) {
-    resolvedUsersTable = "usuarios";
-    return "usuarios";
-  }
-  const candidates = ["usuarios", "usuario", "users", "usuarios_db"];
-  for (const table of candidates) {
-    try {
-      const { error } = await supabase.from(table).select("nombre_usuario").limit(1);
-      if (!error || (error.message && !error.message.includes("Could not find") && !error.message.includes("does not exist") && !error.message.includes("public." + table))) {
-        console.log(`[Supabase Detector] Detected users table name: '${table}'`);
-        resolvedUsersTable = table;
-        return table;
-      }
-    } catch (e) {}
-  }
-  resolvedUsersTable = "usuarios";
-  return "usuarios";
-}
-
-let resolvedSucursalesTable: string | null = null;
-async function getSucursalesTableName(): Promise<string> {
-  if (resolvedSucursalesTable) return resolvedSucursalesTable;
-  if (!isSupabaseConfigured || !supabase) {
-    resolvedSucursalesTable = "sucursales";
-    return "sucursales";
-  }
-  const candidates = ["sucursales", "sucursal", "offices"];
-  for (const table of candidates) {
-    try {
-      const { error } = await supabase.from(table).select("identificacion").limit(1);
-      if (!error || (error.message && !error.message.includes("Could not find") && !error.message.includes("does not exist") && !error.message.includes("public." + table))) {
-        console.log(`[Supabase Detector] Detected sucursales table name: '${table}'`);
-        resolvedSucursalesTable = table;
-        return table;
-      }
-    } catch (e) {}
-  }
-  resolvedSucursalesTable = "sucursales";
-  return "sucursales";
-}
-
-let resolvedServiciosTable: string | null = null;
-async function getServiciosTableName(): Promise<string> {
-  if (resolvedServiciosTable) return resolvedServiciosTable;
-  if (!isSupabaseConfigured || !supabase) {
-    resolvedServiciosTable = "servicios_subservicios";
-    return "servicios_subservicios";
-  }
-  const candidates = ["servicios_subservicios", "servicios", "subservicios", "services"];
-  for (const table of candidates) {
-    try {
-      const { error } = await supabase.from(table).select("identificacion").limit(1);
-      if (!error || (error.message && !error.message.includes("Could not find") && !error.message.includes("does not exist") && !error.message.includes("public." + table))) {
-        console.log(`[Supabase Detector] Detected servicios table name: '${table}'`);
-        resolvedServiciosTable = table;
-        return table;
-      }
-    } catch (e) {}
-  }
-  resolvedServiciosTable = "servicios_subservicios";
-  return "servicios_subservicios";
-}
-
-let resolvedExtranjeriaTable: string | null = null;
-async function getExtranjeriaTableName(): Promise<string> {
-  if (resolvedExtranjeriaTable) return resolvedExtranjeriaTable;
-  if (!isSupabaseConfigured || !supabase) {
-    resolvedExtranjeriaTable = "extranjeria_records";
-    return "extranjeria_records";
-  }
-  const candidates = ["extranjeria_records", "extranjeria", "records_extranjeria", "migracion"];
-  for (const table of candidates) {
-    try {
-      const { error } = await supabase.from(table).select("pasaporte").limit(1);
-      if (!error || (error.message && !error.message.includes("Could not find") && !error.message.includes("does not exist") && !error.message.includes("public." + table))) {
-        console.log(`[Supabase Detector] Detected extranjeria table name: '${table}'`);
-        resolvedExtranjeriaTable = table;
-        return table;
-      }
-    } catch (e) {}
-  }
-  resolvedExtranjeriaTable = "extranjeria_records";
-  return "extranjeria_records";
-}
+// DETERMINISTIC TABLE NAMES
+// ==========================================
+async function getAppointmentsTableName(): Promise<string> { return "appointments"; }
+async function getUsersTableName(): Promise<string> { return "usuarios"; }
+async function getSucursalesTableName(): Promise<string> { return "sucursales"; }
+async function getServiciosTableName(): Promise<string> { return "servicios_subservicios"; }
+async function getExtranjeriaTableName(): Promise<string> { return "extranjeria_records"; }
 
 interface ServerUser {
   username: string;
@@ -207,9 +204,18 @@ interface ServerUser {
   role: 'sencillo' | 'super' | 'extranjeria' | 'pasado_edad' | 'extranjeria_supervisor' | 'extranjeria_atencion' | 'extranjeria_cubiculo' | 'pasado_edad_supervisor' | 'pasado_edad_admin';
   nombre: string;
   fechaCreacion: string;
+  mustChangePassword?: boolean;
 }
 
 const DEFAULT_USERS: ServerUser[] = [
+  {
+    username: "login",
+    password: "login",
+    role: "super",
+    nombre: "Usuario Inicial (Cambio Requerido)",
+    fechaCreacion: "2026-08-07T08:00:00Z",
+    mustChangePassword: true
+  },
   {
     username: "oscargave3003",
     password: "Value1234",
@@ -365,6 +371,14 @@ function saveExtranjeriaConfig(config: ExtranjeriaConfig): void {
     console.error("Error writing extranjeria config DB:", error);
   }
 
+  if (isPgConfigured && pgPool) {
+    pgPool.query(
+      `INSERT INTO app_configs (id, config, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW()`,
+      ["extranjeria_settings", JSON.stringify(config)]
+    ).catch(err => console.error("Error saving Extranjería config to Azure PostgreSQL:", err.message));
+  }
+
   if (isSupabaseConfigured && supabase) {
     getCmsTableName().then(tbl => {
       supabase!.from(tbl).upsert({
@@ -415,6 +429,14 @@ function saveTardiaConfig(config: TardiaConfig): void {
     fs.writeFileSync(TARDIA_CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
   } catch (error) {
     console.error("Error writing tardia config DB:", error);
+  }
+
+  if (isPgConfigured && pgPool) {
+    pgPool.query(
+      `INSERT INTO app_configs (id, config, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW()`,
+      ["tardia_settings", JSON.stringify(config)]
+    ).catch(err => console.error("Error saving Tardía config to Azure PostgreSQL:", err.message));
   }
 
   if (isSupabaseConfigured && supabase) {
@@ -547,6 +569,18 @@ async function saveCmsConfig(config: CmsConfig): Promise<boolean> {
     fs.writeFileSync(CMS_CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
   } catch (error) {
     console.error("Error writing cms config file:", error);
+  }
+
+  if (isPgConfigured && pgPool) {
+    try {
+      await pgPool.query(
+        `INSERT INTO app_configs (id, config, updated_at) VALUES ($1, $2, NOW())
+         ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW()`,
+        ["site_settings", JSON.stringify(config)]
+      );
+    } catch (pgErr: any) {
+      console.error("[Azure PostgreSQL] Error saving CMS config:", pgErr.message);
+    }
   }
 
   if (isSupabaseConfigured && supabase) {
@@ -729,95 +763,106 @@ function mapDBRowToCita(row: any): ServerCita {
 
 async function safeUpsertSupabase(tbl: string, row: any) {
   if (!supabase) return;
-  const payload = { ...row };
-
-  // Common cross-mapping fallback properties
-  if (payload.tiempo !== undefined && payload.hora === undefined) {
-    payload.hora = payload.tiempo;
+  try {
+    const payload = { ...row };
+    if (payload.tiempo !== undefined && payload.hora === undefined) payload.hora = payload.tiempo;
+    if (payload.hora !== undefined && payload.tiempo === undefined) payload.tiempo = payload.hora;
+    await supabase.from(tbl).upsert(payload);
+  } catch (err: any) {
+    console.warn(`[Supabase Upsert Warning] Table '${tbl}':`, err.message || err);
   }
-  if (payload.hora !== undefined && payload.tiempo === undefined) {
-    payload.tiempo = payload.hora;
-  }
-
-  // Handle NOT NULL constraint on fecha_nacimiento
-  if (tbl === "citas" || tbl === "appointments" || tbl === "otro" || tbl === "equipo") {
-    if (!payload.fecha_nacimiento) {
-      payload.fecha_nacimiento = "2000-01-01";
-    }
-  }
-
-  const MAX_RETRIES = 15;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const { error } = await supabase.from(tbl).upsert(payload);
-    if (!error) {
-      return;
-    }
-
-    const errMsg = error.message || "";
-
-    // 1. Handle foreign key constraint violations on sub_servicio_id dynamically
-    if (errMsg.includes("violates foreign key constraint") && errMsg.includes("sub_servicio_id")) {
-      console.warn(`[Supabase Self-Healing] Foreign key violation on sub_servicio_id: "${payload.sub_servicio_id}". Attempting to fallback.`);
-      try {
-        const tblServs = await getServiciosTableName();
-        const { data: validServices } = await supabase.from(tblServs).select("*");
-        if (validServices && validServices.length > 0) {
-          const firstValidId = validServices[0].identificacion || validServices[0].id || validServices[0].identificacion_servicio;
-          if (firstValidId) {
-            console.log(`[Supabase Self-Healing] Falling back sub_servicio_id from "${payload.sub_servicio_id}" to "${firstValidId}"`);
-            payload.sub_servicio_id = firstValidId;
-            continue;
-          }
-        }
-      } catch (err) {
-        console.error("[Supabase Self-Healing] Error trying to retrieve valid sub-services:", err);
-      }
-    }
-
-    // 2. Handle foreign key constraint on sucursal_id
-    if (errMsg.includes("violates foreign key constraint") && errMsg.includes("sucursal_id")) {
-      console.warn(`[Supabase Self-Healing] Foreign key violation on sucursal_id: "${payload.sucursal_id}". Attempting to fallback.`);
-      try {
-        const tblSucs = await getSucursalesTableName();
-        const { data: validSucs } = await supabase.from(tblSucs).select("*");
-        if (validSucs && validSucs.length > 0) {
-          const firstValidSucId = validSucs[0].identificacion || validSucs[0].id;
-          if (firstValidSucId) {
-            console.log(`[Supabase Self-Healing] Falling back sucursal_id from "${payload.sucursal_id}" to "${firstValidSucId}"`);
-            payload.sucursal_id = firstValidSucId;
-            continue;
-          }
-        }
-      } catch (err) {
-        console.error("[Supabase Self-Healing] Error trying to retrieve valid sucursales:", err);
-      }
-    }
-
-    // 3. Handle non-existent columns (original pattern)
-    const matchSchemaCache = errMsg.match(/Could not find the '([^']+)' column/i);
-    const matchPostgresNotExist = errMsg.match(/column "([^"]+)" of relation "([^"]+)" does not exist/i);
-    const matchPostgresField = errMsg.match(/column "([^"]+)" does not exist/i);
-
-    const problematicColumn = matchSchemaCache?.[1] || matchPostgresNotExist?.[1] || matchPostgresField?.[1];
-
-    if (problematicColumn && payload.hasOwnProperty(problematicColumn)) {
-      console.log(`[Supabase Self-Healing] Table '${tbl}': Pruning non-existent column '${problematicColumn}' from payload.`);
-      delete payload[problematicColumn];
-    } else {
-      console.error(`[Supabase Upsert Fatal] Table '${tbl}' error:`, errMsg, "Payload:", payload);
-      throw error;
-    }
-  }
-  throw new Error(`Exceeded maximum retries (${MAX_RETRIES}) attempting to heal schema mismatch on table '${tbl}'`);
 }
 
 async function safeUpsertAppointment(row: any) {
-  const tbl = await getAppointmentsTableName();
-  await safeUpsertSupabase(tbl, row);
+  if (isPgConfigured && pgPool) {
+    try {
+      const apptId = row.codigo_transaccion || row.id || row.identificacion || `cita_${Date.now()}`;
+      await pgPool.query(
+        `INSERT INTO appointments (id, tipo, tramite, sub_tramite, identificacion, nombre, correo, telefono, provincia, distrito, sucursal_id, sucursal_nombre, fecha, hora, estado, data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         ON CONFLICT (id) DO UPDATE SET
+           tipo = EXCLUDED.tipo, tramite = EXCLUDED.tramite, sub_tramite = EXCLUDED.sub_tramite,
+           identificacion = EXCLUDED.identificacion, nombre = EXCLUDED.nombre, correo = EXCLUDED.correo,
+           telefono = EXCLUDED.telefono, provincia = EXCLUDED.provincia, distrito = EXCLUDED.distrito,
+           sucursal_id = EXCLUDED.sucursal_id, sucursal_nombre = EXCLUDED.sucursal_nombre,
+           fecha = EXCLUDED.fecha, hora = EXCLUDED.hora, estado = EXCLUDED.estado, data = EXCLUDED.data`,
+        [
+          apptId,
+          row.tipo_servicio || row.tipo || '',
+          row.categoria_nombre || row.tramite || '',
+          row.sub_servicio_nombre || row.sub_tramite || '',
+          row.ciudadano_identificacion || row.identificacion || '',
+          row.ciudadano_nombre || row.nombre || '',
+          row.ciudadano_correo || row.correo || '',
+          row.ciudadano_telefono || row.telefono || '',
+          row.provincia || '',
+          row.distrito || '',
+          row.sucursal_id || '',
+          row.sucursal_nombre || '',
+          row.fecha_cita || row.fecha || '',
+          row.hora_cita || row.hora || '',
+          row.estado_cita || row.estado || 'CONFIRMADA',
+          JSON.stringify(row)
+        ]
+      );
+    } catch (e: any) {
+      console.error("[Azure PostgreSQL] Error saving appointment:", e.message);
+    }
+  }
+
+  if (isSupabaseConfigured && supabase) {
+    const tbl = await getAppointmentsTableName();
+    await safeUpsertSupabase(tbl, row);
+  }
 }
 
 async function getDBUsers(): Promise<ServerUser[]> {
   const localUsers = getUsers();
+
+  if (isPgConfigured && pgPool) {
+    try {
+      const res = await pgPool.query(`SELECT username, password, role, nombre, must_change_password, fecha_creacion FROM usuarios`);
+      if (res.rows && res.rows.length > 0) {
+        const pgUsers: ServerUser[] = res.rows.map((row: any) => ({
+          username: row.username,
+          password: row.password,
+          role: row.role as any,
+          nombre: row.nombre,
+          fechaCreacion: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+          mustChangePassword: !!row.must_change_password
+        }));
+
+        const merged = [...localUsers];
+        pgUsers.forEach((pu: ServerUser) => {
+          if (pu.username) {
+            const idx = merged.findIndex(u => u.username.toLowerCase() === pu.username.toLowerCase());
+            if (idx >= 0) {
+              merged[idx] = pu;
+            } else {
+              merged.push(pu);
+            }
+          }
+        });
+        return merged;
+      } else {
+        for (const u of localUsers) {
+          try {
+            await pgPool.query(
+              `INSERT INTO usuarios (username, password, role, nombre, must_change_password)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (username) DO NOTHING`,
+              [u.username.toLowerCase(), u.password, u.role, u.nombre, !!u.mustChangePassword]
+            );
+          } catch (e: any) {
+            console.warn(`[Azure PostgreSQL Seeder Warning] Failed to seed user ${u.username}:`, e.message);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("Error reading users from Azure PostgreSQL:", err.message);
+    }
+  }
+
   if (isSupabaseConfigured && supabase) {
     try {
       const tbl = await getUsersTableName();
@@ -871,6 +916,40 @@ async function getDBUsers(): Promise<ServerUser[]> {
 }
 
 async function getDBAppointments(): Promise<ServerCita[]> {
+  if (isPgConfigured && pgPool) {
+    try {
+      const res = await pgPool.query(`SELECT * FROM appointments ORDER BY created_at DESC`);
+      if (res.rows && res.rows.length > 0) {
+        return res.rows.map((row: any) => {
+          let parsed: any = {};
+          if (row.data) {
+            parsed = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+          }
+          return {
+            ...parsed,
+            id: row.id || parsed.id,
+            codigoTransaccion: row.id || parsed.codigoTransaccion,
+            tipo: row.tipo || parsed.tipo,
+            tramite: row.tramite || parsed.tramite,
+            subTramite: row.sub_tramite || parsed.subTramite,
+            identificacion: row.identificacion || parsed.identificacion,
+            nombre: row.nombre || parsed.nombre,
+            correo: row.correo || parsed.correo,
+            telefono: row.telefono || parsed.telefono,
+            provincia: row.provincia || parsed.provincia,
+            distrito: row.distrito || parsed.distrito,
+            sucursalId: row.sucursal_id || parsed.sucursalId,
+            sucursalNombre: row.sucursal_nombre || parsed.sucursalNombre,
+            fecha: row.fecha || parsed.fecha,
+            hora: row.hora || parsed.hora,
+            estado: row.estado || parsed.estado
+          };
+        });
+      }
+    } catch (err: any) {
+      console.error("Error fetching appointments from Azure PostgreSQL:", err.message);
+    }
+  }
   if (isSupabaseConfigured && supabase) {
     try {
       const tbl = await getAppointmentsTableName();
@@ -1470,7 +1549,7 @@ async function verifyAdminSession(req: any, res: any, next: any) {
 
 async function startServer() {
   const app = express();
-  const PORT = parseInt(process.env.PORT || "3000", 10);
+  const PORT = process.env.PORT || "3000";
 
   // Configuración de Helmet para inyectar cabeceras de seguridad estándar de forma automática (CSP, XSS, etc.)
   app.use(
@@ -1578,13 +1657,15 @@ async function startServer() {
           user: {
             username: foundUser.username,
             role: foundUser.role,
-            nombre: foundUser.nombre
+            nombre: foundUser.nombre,
+            mustChangePassword: !!foundUser.mustChangePassword
           }
         });
       }
 
       // Hardcoded fallback accounts for backward-compatibility in case table/seeding isn't fully operational
       const fallbackAdmins = [
+        { u: "login", p: "login", r: "super", n: "Usuario Inicial", mcp: true },
         { u: "adminmini", p: "admin1234", r: "sencillo", n: "Administrador Mini" },
         { u: "adminte", p: "Value1234", r: "super", n: "Super Admin Tribal" },
         { u: "oscargave3003", p: "Value1234", r: "super", n: "Oscar Super Admin" },
@@ -1609,7 +1690,8 @@ async function startServer() {
           user: {
             username: fallbackMatch.u,
             role: fallbackMatch.r,
-            nombre: fallbackMatch.n
+            nombre: fallbackMatch.n,
+            mustChangePassword: !!fallbackMatch.mcp
           }
         });
       }
@@ -2278,14 +2360,27 @@ async function startServer() {
     }
   });
 
-  app.get("/api/supabase-status", async (req, res) => {
+  const getDbStatusHandler = async (req: express.Request, res: express.Response) => {
     try {
       const statusResponse: any = {
         isSupabaseConfigured,
         supabaseUrl: supabaseUrl ? supabaseUrl.replace(/^(https?:\/\/)[^.]+(\.supabase\.co)/, "$1***$2") : "",
         hasSupabaseKey: !!supabaseKey,
+        isAzurePostgresConfigured: isPgConfigured,
+        azurePostgresHost: process.env.PGHOST || (pgConnectionString ? "postgresql-flexible-server.postgres.database.azure.com" : ""),
         tables: {}
       };
+
+      if (isPgConfigured && pgPool) {
+        try {
+          const client = await pgPool.connect();
+          statusResponse.azurePostgresConnected = true;
+          client.release();
+        } catch (pgErr: any) {
+          statusResponse.azurePostgresConnected = false;
+          statusResponse.azurePostgresError = pgErr.message;
+        }
+      }
 
       if (isSupabaseConfigured && supabase) {
         // Test appointments table
@@ -2358,7 +2453,10 @@ async function startServer() {
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });
     }
-  });
+  };
+
+  app.get("/api/supabase-status", getDbStatusHandler);
+  app.get("/api/db-status", getDbStatusHandler);
 
   app.post("/api/cms/config", verifyAdminSession, async (req, res) => {
     try {
@@ -2658,29 +2756,38 @@ async function startServer() {
     }
   });
 
-  // API to get all appointments
+  // API to get all appointments (Secured: Requires Admin authorization)
   app.get("/api/appointments", async (req, res) => {
     try {
-      const appointments = await getDBAppointments();
       const isAdmin = await verifySession(req);
-      if (isAdmin) {
-        return res.json({ success: true, appointments });
-      } else {
-        // Scrub PII for public requests to ensure GDPR/privacy protection
-        const scrubbed = appointments.map(a => ({
-          id: a.id,
-          fecha: a.fecha,
-          hora: a.hora,
-          subServicioId: a.subServicioId,
-          categoriaNombre: a.categoriaNombre,
-          servicioCategoria: (a as any).servicioCategoria || a.categoriaNombre,
-          estado: a.estado
-        }));
-        return res.json({ success: true, appointments: scrubbed });
+      if (!isAdmin) {
+        return res.status(401).json({ 
+          success: false, 
+          error: "Acceso denegado. Se requiere autenticación de administrador para acceder a este recurso." 
+        });
       }
+      const appointments = await getDBAppointments();
+      return res.json({ success: true, appointments });
     } catch (e: any) {
       console.error("Error fetching all appointments:", e);
       res.status(500).json({ success: false, error: "Ocurrió un error interno en el servidor" });
+    }
+  });
+
+  // Public endpoint for availability checks without exposing appointment IDs or client details
+  app.get("/api/public/occupied-slots", async (req, res) => {
+    try {
+      const appointments = await getDBAppointments();
+      const occupied = appointments
+        .filter(a => a.estado !== "cancelada")
+        .map(a => ({
+          fecha: a.fecha,
+          hora: a.hora,
+          subServicioId: a.subServicioId
+        }));
+      return res.json({ success: true, appointments: occupied });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: "Error al obtener disponibilidad" });
     }
   });
 
@@ -3405,6 +3512,21 @@ async function startServer() {
       }
       saveUsers(localUsers);
 
+      // Save to Azure PostgreSQL if configured
+      if (isPgConfigured && pgPool) {
+        try {
+          await pgPool.query(
+            `INSERT INTO usuarios (username, password, role, nombre, must_change_password)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (username) DO UPDATE SET
+               password = EXCLUDED.password, role = EXCLUDED.role, nombre = EXCLUDED.nombre`,
+            [cleanUsername, String(password).trim(), role, String(nombre).trim(), false]
+          );
+        } catch (pgErr: any) {
+          console.error("[Azure PostgreSQL] Error saving user:", pgErr.message);
+        }
+      }
+
       // Save to Supabase as well if configured
       if (isSupabaseConfigured && supabase) {
         const newUserRow = {
@@ -3441,6 +3563,15 @@ async function startServer() {
       const filteredUsers = localUsers.filter(u => u.username.toLowerCase() !== usernameToDelete);
       saveUsers(filteredUsers);
 
+      // Delete from Azure PostgreSQL if configured
+      if (isPgConfigured && pgPool) {
+        try {
+          await pgPool.query(`DELETE FROM usuarios WHERE LOWER(username) = $1`, [usernameToDelete]);
+        } catch (pgErr: any) {
+          console.error("[Azure PostgreSQL] Error deleting user:", pgErr.message);
+        }
+      }
+
       // Also delete from Supabase if configured
       if (isSupabaseConfigured && supabase) {
         const tbl = await getUsersTableName();
@@ -3455,6 +3586,70 @@ async function startServer() {
     }
   });
 
+  // Endpoint público para cambio de contraseña (primer ingreso o reseteo obligado)
+  app.post("/api/change-password", async (req, res) => {
+    try {
+      const { username, currentPassword, newPassword } = req.body;
+      if (!username || !newPassword) {
+        return res.status(400).json({ success: false, error: "Nombre de usuario y nueva contraseña requeridos." });
+      }
+
+      const cleanNewPass = String(newPassword).trim();
+      if (cleanNewPass.length < 4) {
+        return res.status(400).json({ success: false, error: "La nueva contraseña debe tener al menos 4 caracteres." });
+      }
+
+      const cleanUsername = String(username).trim().toLowerCase();
+      const localUsers = getUsers();
+      const userIdx = localUsers.findIndex(u => u.username.toLowerCase() === cleanUsername);
+
+      if (userIdx >= 0) {
+        if (currentPassword && localUsers[userIdx].password && localUsers[userIdx].password !== currentPassword) {
+          return res.status(401).json({ success: false, error: "La contraseña actual ingresada es incorrecta." });
+        }
+        localUsers[userIdx].password = cleanNewPass;
+        localUsers[userIdx].mustChangePassword = false;
+        saveUsers(localUsers);
+
+        if (isPgConfigured && pgPool) {
+          try {
+            await pgPool.query(
+              `UPDATE usuarios SET password = $1, must_change_password = FALSE WHERE LOWER(username) = $2`,
+              [cleanNewPass, cleanUsername]
+            );
+          } catch (pgErr: any) {
+            console.error("[Azure PostgreSQL] Error updating password:", pgErr.message);
+          }
+        }
+
+        if (isSupabaseConfigured && supabase) {
+          const tbl = await getUsersTableName();
+          await supabase.from(tbl).update({
+            hash_contrasena: cleanNewPass,
+            must_change_password: false
+          }).eq("nombre_usuario", cleanUsername);
+        }
+
+        return res.json({ success: true, message: "Contraseña actualizada con éxito." });
+      } else {
+        const newUser: ServerUser = {
+          username: cleanUsername,
+          password: cleanNewPass,
+          role: "super",
+          nombre: cleanUsername,
+          fechaCreacion: new Date().toISOString(),
+          mustChangePassword: false
+        };
+        localUsers.push(newUser);
+        saveUsers(localUsers);
+        return res.json({ success: true, message: "Contraseña actualizada exitosamente." });
+      }
+    } catch (e: any) {
+      console.error("Error updating password:", e);
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
   // Vite middleware setup for assets and hot builds under development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -3463,17 +3658,58 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // In production, serve the static bundle from dist
-    const distPath = path.join(process.cwd(), "dist");
+    // In production, locate the static dist folder reliably
+    let distPath = path.join(process.cwd(), "dist");
+    if (!fs.existsSync(path.join(distPath, "index.html")) && fs.existsSync(path.join(__dirname, "index.html"))) {
+      distPath = __dirname;
+    } else if (!fs.existsSync(path.join(distPath, "index.html")) && fs.existsSync(path.join(__dirname, "..", "dist", "index.html"))) {
+      distPath = path.join(__dirname, "..", "dist");
+    }
+
+    console.log(`[Production Static Mode] Serving static files from: ${distPath}`);
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      const indexPath = path.join(distPath, "index.html");
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send("Application dist/index.html not found. Please run 'npm run build' before starting IIS.");
+      }
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server listening on public port ${PORT}`);
-  });
+  const isNamedPipe = typeof PORT === "string" && (PORT.startsWith("\\\\.\\pipe\\") || PORT.startsWith("//./pipe/") || PORT.includes("pipe"));
+
+  if (isNamedPipe) {
+    app.listen(PORT, () => {
+      console.log(`🚀 IIS (iisnode) worker started successfully on named pipe: ${PORT}`);
+    });
+  } else {
+    const numericPort = parseInt(String(PORT), 10) || 3000;
+    const sslKeyPath = process.env.SSL_KEY_PATH;
+    const sslCertPath = process.env.SSL_CERT_PATH;
+
+    if (sslKeyPath && sslCertPath && fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
+      try {
+        const options = {
+          key: fs.readFileSync(sslKeyPath),
+          cert: fs.readFileSync(sslCertPath)
+        };
+        https.createServer(options, app).listen(numericPort, "0.0.0.0", () => {
+          console.log(`🔒 HTTPS Server listening on https://0.0.0.0:${numericPort}`);
+        });
+      } catch (sslErr: any) {
+        console.error("❌ Error loading SSL certificates, falling back to HTTP:", sslErr.message);
+        app.listen(numericPort, "0.0.0.0", () => {
+          console.log(`⚡ Server listening on public port ${numericPort} (HTTP)`);
+        });
+      }
+    } else {
+      app.listen(numericPort, "0.0.0.0", () => {
+        console.log(`⚡ Server listening on public port ${numericPort} (HTTP)`);
+      });
+    }
+  }
 }
 
 startServer();

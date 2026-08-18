@@ -89,12 +89,17 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
   // Fetch appointments from API or fallback
   const fetchAppointments = async () => {
     try {
-      const res = await fetch('/api/appointments');
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || '';
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/appointments', { headers });
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setCitasList(data);
-          localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(data));
+        const list = Array.isArray(data) ? data : (data?.appointments || []);
+        if (Array.isArray(list) && list.length > 0) {
+          setCitasList(list);
+          localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(list));
           return;
         }
       }

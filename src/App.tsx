@@ -38,7 +38,12 @@ import {
   Tablet,
   Maximize2,
   Minimize2,
-  CalendarCheck2
+  CalendarCheck2,
+  Link as LinkIcon,
+  Copy,
+  Check,
+  ExternalLink,
+  Globe
 } from "lucide-react";
 
 export default function App() {
@@ -80,6 +85,15 @@ export default function App() {
 
   // --- INTEGRACIÓN GESTIÓN DE ROLES Y USUARIOS ---
   const DEFAULT_USERS: SystemUser[] = [
+    {
+      id: "user-login-generic",
+      username: "login",
+      fullName: "Usuario de Prueba Inicial",
+      role: UserRole.SUPERADMIN,
+      officeId: "OFF-1",
+      password: "login",
+      mustChangePassword: true
+    },
     {
       id: "user-super",
       username: "superadmin",
@@ -158,6 +172,71 @@ export default function App() {
 
   // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin" | "super-admin"
   const [activeTab, setActiveTab ] = useState<string>("kiosk");
+
+  // Direct Links Modal state
+  const [isDirectLinksModalOpen, setIsDirectLinksModalOpen] = useState<boolean>(false);
+  const [copiedDirectKey, setCopiedDirectKey] = useState<string | null>(null);
+
+  // Listen to URL search parameters for direct linking (?view=citas, ?view=ticket, ?view=unificado, etc.)
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const viewParam = params.get("view") || params.get("tab") || params.get("modo") || params.get("screen");
+    if (viewParam) {
+      const v = viewParam.toLowerCase();
+      if (v === "citas" || v === "cita" || v === "agendamiento") {
+        setGatewaySelection("cedulacion");
+        setActiveTab("citas");
+      } else if (v === "kiosk" || v === "ticket" || v === "tickets" || v === "turnos" || v === "kiosco") {
+        setGatewaySelection("cedulacion");
+        setActiveTab("kiosk");
+      } else if (v === "unificado" || v === "gateway" || v === "select" || v === "inicio" || v === "portal") {
+        setGatewaySelection("select");
+      } else if (v === "tv" || v === "monitor" || v === "sala") {
+        setGatewaySelection("cedulacion");
+        setActiveTab("tv");
+      } else if (v === "agent" || v === "agente" || v === "ventanilla") {
+        setGatewaySelection("cedulacion");
+        setActiveTab("agent");
+      } else if (v === "admin") {
+        setGatewaySelection("cedulacion");
+        setActiveTab("admin");
+      } else if (v === "super-admin" || v === "superadmin") {
+        setGatewaySelection("cedulacion");
+        setActiveTab("super-admin");
+      }
+    }
+  }, []);
+
+  // Update browser URL search query parameters dynamically
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const url = new URL(window.location.href);
+      let viewVal = "unificado";
+      if (gatewaySelection === "select") {
+        viewVal = "unificado";
+      } else {
+        viewVal = activeTab === "kiosk" ? "ticket" : activeTab;
+      }
+      url.searchParams.set("view", viewVal);
+      window.history.replaceState({}, "", url.toString());
+    } catch (e) {
+      // ignore
+    }
+  }, [gatewaySelection, activeTab]);
+
+  const handleCopyDirectLink = (key: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (typeof window === "undefined") return;
+    const origin = window.location.origin + window.location.pathname;
+    const fullUrl = `${origin}?view=${key}`;
+    navigator.clipboard.writeText(fullUrl);
+    setCopiedDirectKey(key);
+    setTimeout(() => {
+      setCopiedDirectKey(null);
+    }, 2000);
+  };
 
   // Track the tab requested during login redirection
   const [pendingAuthTab, setPendingAuthTab] = useState<string>("admin");
@@ -281,11 +360,18 @@ export default function App() {
   if (gatewaySelection === "select") {
     return (
       <GatewayScreen 
-        onSelectOption={(option) => setGatewaySelection(option)} 
+        onSelectOption={(option) => {
+          setGatewaySelection(option);
+          setActiveTab("kiosk");
+        }} 
         onSelectCitas={() => {
           setGatewaySelection("cedulacion");
           setActiveTab("citas");
         }} 
+        onSelectView={(viewKey) => {
+          setGatewaySelection("cedulacion");
+          setActiveTab(viewKey);
+        }}
       />
     );
   }
@@ -482,6 +568,150 @@ export default function App() {
         </div>
       )}
 
+      {/* DIRECT LINKS MODAL */}
+      {isDirectLinksModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/85 backdrop-blur-md z-[10000] flex items-center justify-center p-4">
+          <div className="bg-white border-2 border-[#122e70] p-6 rounded-3xl w-full max-w-xl shadow-2xl space-y-5 animate-fade-in text-slate-950 font-sans">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 bg-amber-100 text-amber-900 rounded-2xl border border-amber-200">
+                  <LinkIcon className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider font-sans">
+                    Enlaces Directos del Sistema
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-medium">
+                    Copie los enlaces o navegue directamente a cualquier módulo sin pasos intermedios.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsDirectLinksModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2.5 max-h-[60vh] overflow-y-auto pr-1">
+              {[
+                {
+                  key: "citas",
+                  name: "📅 Agendamiento de Citas (CitasTE)",
+                  desc: "Acceso directo al portal web de reservas de citas",
+                  action: () => {
+                    setGatewaySelection("cedulacion");
+                    setActiveTab("citas");
+                    setIsDirectLinksModalOpen(false);
+                  }
+                },
+                {
+                  key: "ticket",
+                  name: "🎟️ Kiosco de Tickets Presenciales",
+                  desc: "Emisión directa de turnos de cédula para clientes",
+                  action: () => {
+                    setGatewaySelection("cedulacion");
+                    setActiveTab("kiosk");
+                    setIsDirectLinksModalOpen(false);
+                  }
+                },
+                {
+                  key: "unificado",
+                  name: "🌐 Sistema Unificado (Portal Inicial)",
+                  desc: "Pantalla principal de bienvenida y selección",
+                  action: () => {
+                    setGatewaySelection("select");
+                    setIsDirectLinksModalOpen(false);
+                  }
+                },
+                {
+                  key: "tv",
+                  name: "📺 Monitor TV de Sala",
+                  desc: "Pantalla completa para llamado de turnos a clientes",
+                  action: () => {
+                    setGatewaySelection("cedulacion");
+                    setActiveTab("tv");
+                    setIsDirectLinksModalOpen(false);
+                  }
+                },
+                {
+                  key: "agent",
+                  name: "👨‍💻 Consola del Agente",
+                  desc: "Panel de atención de ventanillas y llamadas",
+                  action: () => {
+                    setGatewaySelection("cedulacion");
+                    setActiveTab("agent");
+                    setIsDirectLinksModalOpen(false);
+                  }
+                }
+              ].map((item) => {
+                const origin = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+                const fullUrl = `${origin}?view=${item.key}`;
+                const isCopied = copiedDirectKey === item.key;
+
+                return (
+                  <div 
+                    key={item.key}
+                    className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-blue-300 transition-all"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-slate-900">{item.name}</span>
+                        <span className="text-[8.5px] font-mono text-slate-500 font-bold bg-white px-2 py-0.5 rounded border border-slate-200">
+                          ?view={item.key}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 font-medium">{item.desc}</p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={item.action}
+                        className="py-1.5 px-3 bg-[#122e70] hover:bg-blue-800 text-white text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                      >
+                        <ExternalLink className="w-3 h-3 text-amber-400" />
+                        <span>Ir Ahora</span>
+                      </button>
+
+                      <button
+                        onClick={(e) => handleCopyDirectLink(item.key, e)}
+                        className={`py-1.5 px-3 text-[10px] font-black uppercase tracking-wider rounded-xl border transition-all cursor-pointer flex items-center gap-1 ${
+                          isCopied 
+                            ? "bg-emerald-600 text-white border-emerald-600" 
+                            : "bg-white hover:bg-slate-100 text-slate-700 border-slate-300"
+                        }`}
+                      >
+                        {isCopied ? (
+                          <>
+                            <Check className="w-3 h-3 text-white" />
+                            <span>¡Copiado!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3 text-slate-500" />
+                            <span>Copiar URL</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="pt-2 text-center">
+              <button
+                onClick={() => setIsDirectLinksModalOpen(false)}
+                className="w-full py-2.5 border border-slate-250 text-slate-650 hover:bg-slate-50 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* UPPER NATIONAL FLAG BAR */}
       {!isHeaderHidden && activeTab !== "citas" && (
         <div className="w-full h-1 flex select-none shrink-0 relative z-35 shadow-sm">
@@ -511,6 +741,14 @@ export default function App() {
                 title="Volver a la selección inicial"
               >
                 Cambiar Sede/Trámite
+              </button>
+              <button
+                onClick={() => setIsDirectLinksModalOpen(true)}
+                className="ml-1 px-2.5 py-1 bg-amber-400 hover:bg-amber-500 text-slate-950 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer active:scale-95 flex items-center gap-1 shadow-sm"
+                title="Ver y copiar enlaces directos para Citas, Tickets y Sistema Unificado"
+              >
+                <LinkIcon className="w-3 h-3 text-slate-950" />
+                <span>Enlaces Directos</span>
               </button>
             </div>
           </div>
@@ -901,21 +1139,7 @@ export default function App() {
         )}
       </div>
 
-      {/* FOOTER BAR */}
-      {activeTab !== "citas" && (
-        <footer className="max-w-7xl mx-auto w-full py-6 border-t border-slate-200 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="uppercase tracking-widest font-extrabold text-[10px] text-slate-400">
-            SISTEMA CENTRALIZADO DE GESTIÓN DE TURNOS V2.4
-          </div>
-          <div className="flex gap-6 font-mono text-[10px] items-center">
-            <span className="flex items-center gap-1.5 font-bold text-slate-650">
-              <span className="w-2.5 h-2.5 bg-emerald-500"></span>
-              SERVIDOR ACTIVO
-            </span>
-            <span className="opacity-60 font-bold uppercase text-slate-400">TERMINAL 0014-B</span>
-          </div>
-        </footer>
-      )}
+      {/* FOOTER BAR REMOVED */}
     </div>
   );
 }

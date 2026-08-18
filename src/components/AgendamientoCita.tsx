@@ -173,7 +173,7 @@ export default function AgendamientoCita({
   const [serverBookings, setServerBookings] = useState<any[]>([]);
 
   React.useEffect(() => {
-    fetch('/api/appointments')
+    fetch('/api/public/occupied-slots')
       .then((res) => res.json())
       .then((data) => {
         if (data && data.success && Array.isArray(data.appointments)) {

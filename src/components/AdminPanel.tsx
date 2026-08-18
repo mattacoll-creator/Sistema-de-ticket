@@ -13,6 +13,7 @@ import {
   BarChart3, 
   Settings, 
   Key, 
+  KeyRound,
   Briefcase, 
   Calendar, 
   Clock, 
@@ -56,6 +57,14 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
   });
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+
+  // Estados para cambio obligatorio de contraseña en primer ingreso
+  const [showForceChangePassModal, setShowForceChangePassModal] = useState(false);
+  const [pendingLoginData, setPendingLoginData] = useState<any>(null);
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [changePassError, setChangePassError] = useState('');
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
   
   const [currentRole, setCurrentRole] = useState<AdminRole>(() => {
     return typeof window !== 'undefined' ? (sessionStorage.getItem('admin_role') as AdminRole || 'sencillo') : 'sencillo';
@@ -265,7 +274,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
       const stored = localStorage.getItem('te_panama_pasado_edad_link_base');
       if (stored) return stored;
     } catch {}
-    return typeof window !== 'undefined' ? window.location.origin : 'https://citas.tribunal-electoral.gob.pa';
+    return typeof window !== 'undefined' ? window.location.origin : 'https://agendate.te.gob.pa';
   });
 
 
@@ -813,6 +822,20 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
       });
       const data = await res.json();
       if (res.ok && data.success) {
+        // Verificar si se requiere cambio obligatorio de contraseña (e.g. usuario/password initial 'login' o flag)
+        if (data.user.mustChangePassword || password === 'login' || username.trim().toLowerCase() === password.trim().toLowerCase()) {
+          setPendingLoginData({
+            username: data.user.username,
+            token: data.token,
+            role: data.user.role,
+            nombre: data.user.nombre,
+            oldPassword: password
+          });
+          setShowForceChangePassModal(true);
+          setLoginError('');
+          return;
+        }
+
         sessionStorage.setItem('admin_token', data.token);
         sessionStorage.setItem('admin_role', data.user.role);
         sessionStorage.setItem('admin_username', data.user.username);
@@ -834,6 +857,55 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     } catch (err) {
       console.error('Error logging in:', err);
       setLoginError('No se pudo establecer comunicación segura con el servidor de autenticación.');
+    }
+  };
+
+  const handleForceChangePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setChangePassError('');
+    if (!newPasswordInput.trim() || newPasswordInput.length < 4) {
+      setChangePassError('La nueva contraseña debe tener al menos 4 caracteres.');
+      return;
+    }
+    if (newPasswordInput !== confirmPasswordInput) {
+      setChangePassError('Las contraseñas ingresadas no coinciden. Verifique ambas casillas.');
+      return;
+    }
+    if (newPasswordInput === pendingLoginData?.oldPassword) {
+      setChangePassError('La nueva contraseña no puede ser idéntica a la contraseña inicial por defecto.');
+      return;
+    }
+
+    setIsUpdatingPassword(true);
+    try {
+      const res = await fetch('/api/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: pendingLoginData.username,
+          currentPassword: pendingLoginData.oldPassword,
+          newPassword: newPasswordInput.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        sessionStorage.setItem('admin_token', pendingLoginData.token);
+        sessionStorage.setItem('admin_role', pendingLoginData.role);
+        sessionStorage.setItem('admin_username', pendingLoginData.username);
+
+        setCurrentRole(pendingLoginData.role);
+        setIsAdminLoggedIn(true);
+        setShowForceChangePassModal(false);
+        setPendingLoginData(null);
+        setNewPasswordInput('');
+        setConfirmPasswordInput('');
+      } else {
+        setChangePassError(data.error || 'Error al actualizar la contraseña.');
+      }
+    } catch (err) {
+      setChangePassError('Error al conectar con el servidor para actualizar la contraseña.');
+    } finally {
+      setIsUpdatingPassword(false);
     }
   };
 
@@ -1812,52 +1884,120 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
       {!isAdminLoggedIn ? (
         /* LOGIN OR PROFILE SELECT PANEL */
         <div className="flex-1 flex flex-col items-center justify-center p-6 md:p-12 max-w-lg mx-auto w-full space-y-8">
-          <div className="text-center space-y-2">
-            <ShieldAlert className="w-14 h-14 text-blue-500 mx-auto" />
-            <h2 className="text-lg font-black uppercase tracking-wider text-slate-100">Acceso Restringido y Seguro</h2>
-            <p className="text-xs text-slate-450 leading-relaxed max-w-xs mx-auto">
-              Ingrese sus credenciales autorizadas de administración para acceder a la plataforma de gestión.
-            </p>
-          </div>
-
-          <form onSubmit={handleLoginSubmit} className="w-full bg-slate-950 p-6 rounded-lg border border-slate-800 space-y-4 shadow-xl">
-            {loginError && (
-              <div className="bg-red-950/80 border border-red-900 text-red-200 p-2.5 rounded text-[11px] font-semibold">
-                ⚠ {loginError}
+          {showForceChangePassModal ? (
+            <div className="w-full bg-slate-950 p-6 rounded-xl border border-amber-500/40 space-y-5 shadow-2xl animate-fade-in">
+              <div className="text-center space-y-2">
+                <div className="inline-flex p-3 bg-amber-500/10 rounded-full text-amber-400 border border-amber-500/30">
+                  <KeyRound className="w-8 h-8" />
+                </div>
+                <h2 className="text-base font-black uppercase tracking-wider text-amber-200">Cambio Obligatorio de Contraseña</h2>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Ha ingresado con credenciales iniciales por defecto (<strong className="text-white">@{pendingLoginData?.username}</strong>). Por seguridad institucional, debe actualizar su contraseña antes de ingresar.
+                </p>
               </div>
-            )}
-            
-            <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">Usuario</label>
-              <input
-                type="text"
-                placeholder="Ejemplo: AdminTE / AdminMini / adminPEdad / Migra26"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs px-3 focus:outline-none focus:ring-1 focus:ring-blue-600 font-medium"
-              />
+
+              <form onSubmit={handleForceChangePasswordSubmit} className="space-y-4 pt-2">
+                {changePassError && (
+                  <div className="bg-red-950/90 border border-red-800 text-red-200 p-2.5 rounded text-[11px] font-semibold">
+                    ⚠ {changePassError}
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-300 tracking-wider block">Nueva Contraseña</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={4}
+                    placeholder="Mínimo 4 caracteres"
+                    value={newPasswordInput}
+                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 text-white p-2.5 rounded-lg text-xs px-3 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-300 tracking-wider block">Confirmar Nueva Contraseña</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={4}
+                    placeholder="Repita la nueva contraseña"
+                    value={confirmPasswordInput}
+                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 text-white p-2.5 rounded-lg text-xs px-3 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                  />
+                </div>
+
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForceChangePassModal(false);
+                      setPendingLoginData(null);
+                    }}
+                    className="w-1/3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs uppercase tracking-wider py-2.5 rounded-lg transition cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isUpdatingPassword}
+                    className="w-2/3 bg-amber-600 hover:bg-amber-500 text-slate-950 font-black text-xs uppercase tracking-wider py-2.5 rounded-lg transition shadow-md cursor-pointer disabled:opacity-50"
+                  >
+                    {isUpdatingPassword ? "Actualizando..." : "Guardar y Continuar"}
+                  </button>
+                </div>
+              </form>
             </div>
+          ) : (
+            <>
+              <div className="text-center space-y-2">
+                <ShieldAlert className="w-14 h-14 text-blue-500 mx-auto" />
+                <h2 className="text-lg font-black uppercase tracking-wider text-slate-100">Acceso Restringido y Seguro</h2>
+                <p className="text-xs text-slate-450 leading-relaxed max-w-xs mx-auto">
+                  Ingrese sus credenciales autorizadas de administración para acceder a la plataforma de gestión.
+                </p>
+              </div>
 
-            <div className="space-y-1">
-              <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">Contraseña</label>
-              <input
-                type="password"
-                placeholder="Contraseña institucional segura"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs px-3 focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
-            </div>
+              <form onSubmit={handleLoginSubmit} className="w-full bg-slate-950 p-6 rounded-lg border border-slate-800 space-y-4 shadow-xl">
+                {loginError && (
+                  <div className="bg-red-950/80 border border-red-900 text-red-200 p-2.5 rounded text-[11px] font-semibold">
+                    ⚠ {loginError}
+                  </div>
+                )}
+                
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">Usuario</label>
+                  <input
+                    type="text"
+                    placeholder="Ejemplo: login / AdminTE / AdminMini / Migra26"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs px-3 focus:outline-none focus:ring-1 focus:ring-blue-600 font-medium"
+                  />
+                </div>
 
-            <button
-              type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs uppercase tracking-wider py-2 rounded transition shadow-md cursor-pointer"
-            >
-              Iniciar sesión institucional
-            </button>
-          </form>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">Contraseña</label>
+                  <input
+                    type="password"
+                    placeholder="Contraseña institucional segura"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs px-3 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  />
+                </div>
 
-
+                <button
+                  type="submit"
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs uppercase tracking-wider py-2 rounded transition shadow-md cursor-pointer"
+                >
+                  Iniciar sesión institucional
+                </button>
+              </form>
+            </>
+          )}
         </div>
       ) : (
         /* MAIN ADMIN INTERFACE */
@@ -3233,7 +3373,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                           disabled={currentRole !== 'super'}
                           value={pasadoEdadLinkBase}
                           onChange={(e) => setPasadoEdadLinkBase(e.target.value)}
-                          placeholder="Ej: https://citas.tribunal.gob.pa"
+                          placeholder="Ej: https://agendate.te.gob.pa"
                           className="flex-1 bg-slate-950 border border-slate-800 text-slate-200 p-2 rounded text-xs px-3 focus:outline-none focus:border-blue-650 font-mono disabled:opacity-50"
                         />
                         {currentRole === 'super' && (

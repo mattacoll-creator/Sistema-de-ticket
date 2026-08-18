@@ -1,21 +1,14 @@
 import React from "react";
 import { 
   CreditCard, 
-  FileText, 
-  ShieldCheck, 
-  Globe, 
   Info,
-  Building,
-  CheckCircle2,
-  Lock,
-  ExternalLink,
-  CalendarCheck2,
-  Calendar
+  CalendarCheck2
 } from "lucide-react";
 
 interface GatewayScreenProps {
   onSelectOption: (option: "cedulacion" | "registro_civil") => void;
   onSelectCitas?: () => void;
+  onSelectView?: (view: string) => void;
 }
 
 export default function GatewayScreen({ onSelectOption, onSelectCitas }: GatewayScreenProps) {
@@ -157,18 +150,7 @@ export default function GatewayScreen({ onSelectOption, onSelectCitas }: Gateway
         </div>
 
       </div>
-
-      {/* Corporate Panama Footer */}
-      <div className="border-t border-slate-200 bg-white py-4.5 px-6 flex flex-col md:flex-row items-center justify-between gap-4 text-[10px] text-slate-400 font-medium shrink-0 relative z-10 shadow-md">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-600 animate-pulse" />
-          <span className="font-extrabold uppercase tracking-wider text-slate-500">Sistema Validado • Tribunal Electoral de Panamá</span>
-        </div>
-        <div className="flex items-center gap-1.5 font-sans">
-          <span>Servidores Locales de Sincronización Supabase Cloud DB</span>
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.7)]"></span>
-        </div>
-      </div>
     </div>
   );
 }
+

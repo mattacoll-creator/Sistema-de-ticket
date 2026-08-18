@@ -85,7 +85,7 @@ export default function TardiaController({
   const [pasadoEdadLinkBase, setPasadoEdadLinkBase] = useState(() => {
     const stored = localStorage.getItem('te_panama_pasado_edad_link_base');
     if (stored) return stored;
-    return typeof window !== 'undefined' ? window.location.origin : 'https://citas.tribunal-electoral.gob.pa';
+    return typeof window !== 'undefined' ? window.location.origin : 'https://agendate.te.gob.pa';
   });
 
   const [generatedExp, setGeneratedExp] = useState<{
