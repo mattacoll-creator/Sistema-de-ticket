@@ -761,7 +761,7 @@ export default function WelcomeKiosk({
               📱 Siga su turno en vivo con vibración en:
             </p>
             <p className="text-[7.5px] text-center font-mono font-black">
-              agendate.te.gob.pa/?ticket={printedTicket.numberCode}
+              agendate.te.gob.pa/?ticket={printedTicket.numberCode}&office={currentOfficeId}
             </p>
             
             <p className="text-[8px] text-center font-serif font-black italic mt-2">

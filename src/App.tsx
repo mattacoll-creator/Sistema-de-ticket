@@ -418,6 +418,9 @@ export default function App() {
             cubicles={cubicles}
             initialTicketCode={trackingTicketCode}
             currentOfficeId={currentOfficeId}
+            officeTickets={officeTickets}
+            officeCubicles={officeCubicles}
+            onSelectOffice={setCurrentOfficeId}
           />
         </main>
 

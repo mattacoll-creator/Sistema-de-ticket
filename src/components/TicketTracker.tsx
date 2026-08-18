@@ -24,9 +24,12 @@ import {
   Layers,
   DollarSign,
   Camera,
-  ExternalLink
+  ExternalLink,
+  ChevronDown,
+  X,
+  Trash2
 } from "lucide-react";
-import { Ticket, Cubicle, TicketStatus, TicketPhase, ServiceType, SERVICES_CONFIG } from "../types";
+import { Ticket, Cubicle, TicketStatus, TicketPhase, ServiceType, SERVICES_CONFIG, OFFICES_CONFIG, Office } from "../types";
 import { triggerHapticVibration, isVibrationSupported, playCallingChime } from "../utils/audio";
 import { getProcedureName } from "./WelcomeKiosk";
 
@@ -36,6 +39,9 @@ interface TicketTrackerProps {
   initialTicketCode?: string;
   onNavigateToKiosk?: () => void;
   currentOfficeId?: string;
+  officeTickets?: Record<string, Ticket[]>;
+  officeCubicles?: Record<string, Cubicle[]>;
+  onSelectOffice?: (officeId: string) => void;
 }
 
 export default function TicketTracker({
@@ -43,8 +49,32 @@ export default function TicketTracker({
   cubicles,
   initialTicketCode = "",
   onNavigateToKiosk,
-  currentOfficeId = "OFF-1"
+  currentOfficeId = "OFF-1",
+  officeTickets = {},
+  officeCubicles = {},
+  onSelectOffice
 }: TicketTrackerProps) {
+  // Active regional office state
+  const [activeOfficeId, setActiveOfficeId] = useState<string>(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const officeParam = urlParams.get("office");
+      if (officeParam && OFFICES_CONFIG.some((o) => o.id === officeParam)) {
+        return officeParam;
+      }
+      const savedOffice = localStorage.getItem("tracker_selected_office");
+      if (savedOffice && OFFICES_CONFIG.some((o) => o.id === savedOffice)) {
+        return savedOffice;
+      }
+    } catch (e) {
+      console.warn("Error reading office parameter:", e);
+    }
+    return currentOfficeId || "OFF-1";
+  });
+
+  const [isOfficeSelectorOpen, setIsOfficeSelectorOpen] = useState(false);
+  const [crossOfficeFoundMsg, setCrossOfficeFoundMsg] = useState<string | null>(null);
+
   const [searchInput, setSearchInput] = useState(initialTicketCode);
   const [selectedTicketCode, setSelectedTicketCode] = useState<string>(() => {
     if (initialTicketCode) return initialTicketCode.trim().toUpperCase();
@@ -61,17 +91,59 @@ export default function TicketTracker({
   const prevTicketStatusRef = useRef<TicketStatus | null>(null);
   const prevAssignedCubicleRef = useRef<string | null>(null);
 
-  // Check URL query parameters for ?ticket=C-01
+  // Sync active office if parent prop changes and user hasn't explicitly overridden
+  useEffect(() => {
+    if (currentOfficeId && !localStorage.getItem("tracker_selected_office")) {
+      setActiveOfficeId(currentOfficeId);
+    }
+  }, [currentOfficeId]);
+
+  // Save selected office in localStorage
+  const handleOfficeChange = (officeId: string) => {
+    setActiveOfficeId(officeId);
+    localStorage.setItem("tracker_selected_office", officeId);
+    setIsOfficeSelectorOpen(false);
+    if (onSelectOffice) {
+      onSelectOffice(officeId);
+    }
+  };
+
+  // Get active office configuration
+  const activeOffice = useMemo(() => {
+    return OFFICES_CONFIG.find((o) => o.id === activeOfficeId) || OFFICES_CONFIG[0];
+  }, [activeOfficeId]);
+
+  // Derived effective tickets and cubicles for the active regional office
+  const effectiveTickets = useMemo(() => {
+    if (officeTickets && officeTickets[activeOfficeId]) {
+      return officeTickets[activeOfficeId];
+    }
+    return tickets;
+  }, [officeTickets, activeOfficeId, tickets]);
+
+  const effectiveCubicles = useMemo(() => {
+    if (officeCubicles && officeCubicles[activeOfficeId]) {
+      return officeCubicles[activeOfficeId];
+    }
+    return cubicles;
+  }, [officeCubicles, activeOfficeId, cubicles]);
+
+  // Check URL query parameters for ?ticket=C-01&office=OFF-5
   useEffect(() => {
     try {
       const urlParams = new URLSearchParams(window.location.search);
       const ticketParam = urlParams.get("ticket");
+      const officeParam = urlParams.get("office");
+
+      if (officeParam && OFFICES_CONFIG.some((o) => o.id === officeParam)) {
+        setActiveOfficeId(officeParam);
+      }
       if (ticketParam) {
         setSelectedTicketCode(ticketParam.trim().toUpperCase());
         setSearchInput(ticketParam.trim().toUpperCase());
       }
     } catch (e) {
-      console.warn("No se pudo leer query param ticket:", e);
+      console.warn("No se pudo leer query params:", e);
     }
   }, []);
 
@@ -83,23 +155,53 @@ export default function TicketTracker({
   }, [selectedTicketCode]);
 
   // Find the tracked ticket matching either numberCode or ID
+  // If not found in current regional office, search across ALL regional offices!
   const trackedTicket = useMemo(() => {
     if (!selectedTicketCode) return null;
     const cleanCode = selectedTicketCode.trim().toUpperCase();
-    return tickets.find(
-      (t) =>
-        t.numberCode.toUpperCase() === cleanCode ||
-        t.id.toUpperCase() === cleanCode ||
-        t.id.toUpperCase().includes(cleanCode) ||
-        t.numberCode.toUpperCase().replace("-", "") === cleanCode.replace("-", "")
-    );
-  }, [tickets, selectedTicketCode]);
+    const cleanNormalized = cleanCode.replace(/[-\s]/g, "");
+
+    const matchFn = (t: Ticket) =>
+      t.numberCode.toUpperCase() === cleanCode ||
+      t.id.toUpperCase() === cleanCode ||
+      t.id.toUpperCase().includes(cleanCode) ||
+      t.numberCode.toUpperCase().replace(/[-\s]/g, "") === cleanNormalized ||
+      ((t as any).citizenId && (t as any).citizenId.trim().toUpperCase() === cleanCode) ||
+      ((t as any).cedula && (t as any).cedula.trim().toUpperCase() === cleanCode);
+
+    // 1. Search in current regional office
+    const foundInCurrent = effectiveTickets.find(matchFn);
+    if (foundInCurrent) {
+      return foundInCurrent;
+    }
+
+    // 2. Cross-office search across all other regional offices
+    if (officeTickets) {
+      for (const [officeKey, ticketList] of Object.entries(officeTickets)) {
+        if (officeKey !== activeOfficeId && Array.isArray(ticketList)) {
+          const crossMatch = ticketList.find(matchFn);
+          if (crossMatch) {
+            const targetOffice = OFFICES_CONFIG.find((o) => o.id === officeKey);
+            if (targetOffice) {
+              // Auto-switch to the found office
+              setActiveOfficeId(officeKey);
+              setCrossOfficeFoundMsg(`Turno localizado en: ${targetOffice.name}`);
+              setTimeout(() => setCrossOfficeFoundMsg(null), 5000);
+            }
+            return crossMatch;
+          }
+        }
+      }
+    }
+
+    return null;
+  }, [effectiveTickets, selectedTicketCode, officeTickets, activeOfficeId]);
 
   // Find the assigned cubicle if ticket is currently called or attended
   const assignedCubicle = useMemo(() => {
     if (!trackedTicket || !trackedTicket.assignedCubicleId) return null;
-    return cubicles.find((c) => c.id === trackedTicket.assignedCubicleId) || null;
-  }, [trackedTicket, cubicles]);
+    return effectiveCubicles.find((c) => c.id === trackedTicket.assignedCubicleId) || null;
+  }, [trackedTicket, effectiveCubicles]);
 
   // Calculate position in queue and estimated wait time
   const queueStats = useMemo(() => {
@@ -108,7 +210,7 @@ export default function TicketTracker({
     }
 
     // Tickets in the same phase and service waiting ahead
-    const aheadTickets = tickets.filter(
+    const aheadTickets = effectiveTickets.filter(
       (t) =>
         t.status === TicketStatus.WAITING &&
         t.currentPhase === trackedTicket.currentPhase &&
@@ -124,7 +226,14 @@ export default function TicketTracker({
       peopleAhead,
       waitTimeMin
     };
-  }, [trackedTicket, tickets]);
+  }, [trackedTicket, effectiveTickets]);
+
+  // Regional queue overview count
+  const regionalQueueCounts = useMemo(() => {
+    const waiting = effectiveTickets.filter((t) => t.status === TicketStatus.WAITING).length;
+    const attending = effectiveTickets.filter((t) => t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING).length;
+    return { waiting, attending };
+  }, [effectiveTickets]);
 
   // Trigger vibration & audio alert when ticket enters CALLING status
   useEffect(() => {
@@ -167,8 +276,8 @@ export default function TicketTracker({
     }
 
     setTimeout(() => {
-      setIsVibratingNow(false);
-    }, 2000);
+      setIsVibratingNow(false), 2000;
+    });
   };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -178,9 +287,24 @@ export default function TicketTracker({
     }
   };
 
+  const handleClearTrackedTicket = () => {
+    setSelectedTicketCode("");
+    setSearchInput("");
+    localStorage.removeItem("last_tracked_ticket_code");
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("ticket");
+      const newQuery = url.searchParams.toString();
+      window.history.replaceState({}, "", url.pathname + (newQuery ? `?${newQuery}` : ""));
+    } catch (e) {
+      console.warn("No se pudo limpiar URL:", e);
+    }
+  };
+
   const handleShareTicket = () => {
     if (!trackedTicket) return;
-    const shareUrl = `${window.location.origin}${window.location.pathname}?ticket=${trackedTicket.numberCode}`;
+    const origin = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+    const shareUrl = `${origin}?ticket=${trackedTicket.numberCode}&office=${activeOfficeId}`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(shareUrl);
       setCopiedLink(true);
@@ -190,10 +314,10 @@ export default function TicketTracker({
 
   // Recent active tickets in queue for quick selection
   const recentQueueTickets = useMemo(() => {
-    return tickets
+    return effectiveTickets
       .filter((t) => t.status === TicketStatus.WAITING || t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING)
       .slice(0, 8);
-  }, [tickets]);
+  }, [effectiveTickets]);
 
   return (
     <div id="ticket-tracker-screen" className="max-w-4xl mx-auto space-y-6 animate-fadeIn pb-12 font-sans">
@@ -260,6 +384,110 @@ export default function TicketTracker({
               {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
               <span>Timbre: {soundEnabled ? "Activado" : "Silenciado"}</span>
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Cross-office notification toast */}
+      {crossOfficeFoundMsg && (
+        <div className="bg-amber-50 border-2 border-amber-300 text-amber-950 p-4 rounded-2xl flex items-center gap-3 shadow-md animate-bounce">
+          <Sparkles className="w-5 h-5 text-amber-600 shrink-0" />
+          <div className="text-xs font-black uppercase tracking-wider">
+            {crossOfficeFoundMsg}
+          </div>
+        </div>
+      )}
+
+      {/* REGIONAL OFFICE SELECTOR BAR */}
+      <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200/80 shadow-sm relative z-20 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-[#003087] shrink-0">
+              <Building2 className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                Sede / Dirección Regional Seleccionada
+              </span>
+              <div className="text-sm sm:text-base font-black text-slate-900 flex items-center gap-2">
+                <span>{activeOffice.name}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Regional Office Switcher Dropdown Button */}
+          <div className="relative">
+            <button
+              id="btn-toggle-office-selector"
+              type="button"
+              onClick={() => setIsOfficeSelectorOpen(!isOfficeSelectorOpen)}
+              className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-black text-xs uppercase tracking-wider rounded-2xl transition-all flex items-center justify-between sm:justify-center gap-2 cursor-pointer border border-slate-200"
+            >
+              <MapPin className="w-3.5 h-3.5 text-[#003087]" />
+              <span>Cambiar Sede Regional</span>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOfficeSelectorOpen ? "rotate-180" : ""}`} />
+            </button>
+
+            {/* Dropdown list of all regional offices */}
+            {isOfficeSelectorOpen && (
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 max-h-80 overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-2xl p-2 z-50 divide-y divide-slate-100">
+                <div className="px-3 py-2 text-[10px] font-black uppercase tracking-wider text-slate-400 bg-slate-50 rounded-xl mb-1">
+                  Seleccione su Dirección Regional:
+                </div>
+                {OFFICES_CONFIG.map((office) => {
+                  const isCurrent = office.id === activeOfficeId;
+                  const officeWaiting = officeTickets[office.id]?.filter((t) => t.status === TicketStatus.WAITING).length || 0;
+                  return (
+                    <button
+                      key={office.id}
+                      type="button"
+                      onClick={() => handleOfficeChange(office.id)}
+                      className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all flex items-start justify-between gap-2 cursor-pointer ${
+                        isCurrent
+                          ? "bg-[#003087] text-white font-black shadow-xs"
+                          : "text-slate-800 hover:bg-slate-100"
+                      }`}
+                    >
+                      <div>
+                        <p className={`text-xs ${isCurrent ? "text-white font-black" : "text-slate-900 font-bold"}`}>
+                          {office.name}
+                        </p>
+                        <p className={`text-[10px] ${isCurrent ? "text-blue-200" : "text-slate-500"}`}>
+                          {office.address}
+                        </p>
+                      </div>
+                      {officeWaiting > 0 && (
+                        <span
+                          className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full shrink-0 ${
+                            isCurrent ? "bg-amber-400 text-slate-950" : "bg-blue-100 text-[#003087]"
+                          }`}
+                        >
+                          {officeWaiting} en espera
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Live Regional Stats Badge */}
+        <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 text-slate-600">
+            <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span className="text-[11px] font-medium text-slate-500 truncate max-w-xs">{activeOffice.address}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-[11px] font-bold">
+              <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <span>{regionalQueueCounts.waiting} en espera</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-[11px] font-bold">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>{regionalQueueCounts.attending} en atención</span>
+            </span>
           </div>
         </div>
       </div>
@@ -370,11 +598,22 @@ export default function TicketTracker({
                 <button
                   type="button"
                   onClick={handleShareTicket}
-                  className="px-3 py-1 bg-black/10 hover:bg-black/20 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition cursor-pointer"
+                  className="px-3 py-1.5 bg-black/10 hover:bg-black/20 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition cursor-pointer"
                   title="Copiar enlace para seguir este ticket"
                 >
                   <Share2 className="w-3 h-3" />
-                  <span>{copiedLink ? "¡Enlace Copiado!" : "Compartir Turno"}</span>
+                  <span>{copiedLink ? "¡Enlace Copiado!" : "Compartir"}</span>
+                </button>
+
+                <button
+                  id="btn-clear-tracked-ticket"
+                  type="button"
+                  onClick={handleClearTrackedTicket}
+                  className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-950 border border-red-400/40 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition cursor-pointer shadow-2xs"
+                  title="Dejar de seguir este turno y limpiar pantalla"
+                >
+                  <X className="w-3.5 h-3.5 text-red-700" />
+                  <span>Limpiar / Otro Turno</span>
                 </button>
               </div>
             </div>

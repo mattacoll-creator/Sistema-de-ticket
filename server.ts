@@ -155,31 +155,31 @@ async function sendOutlookEmail(to: string, subject: string, html: string) {
     throw new Error("Outlook no está configurado (falta OUTLOOK_USER o OUTLOOK_PASS)");
   }
 
-  const host = process.env.OUTLOOK_HOST || "smtp.office365.com";
-  const port = parseInt(process.env.OUTLOOK_PORT || "587");
-  const isSecure = port === 465;
+  const host = process.env.OUTLOOK_HOST || process.env.SMTP_HOST || "smtp.office365.com";
+  const port = parseInt(process.env.OUTLOOK_PORT || process.env.SMTP_PORT || "587");
+  const isSecure = port === 465 || port === 8465;
+  const user = process.env.OUTLOOK_USER || process.env.SMTP_USER || "";
+  const pass = process.env.OUTLOOK_PASS || process.env.SMTP_PASS || "";
+  const fromEmail = process.env.SMTP_FROM || process.env.OUTLOOK_FROM || user;
 
   const transporter = nodemailer.createTransport({
     host: host,
     port: port,
-    secure: isSecure, // true only for port 465, false for 587/all others
+    secure: isSecure, // true for 465 / 8465 (SSL), false for 2525, 587, 8025, 25 (STARTTLS)
     auth: {
-      user: outlookUser,
-      pass: outlookPass
+      user: user,
+      pass: pass
     },
-    connectionTimeout: 10000, // 10s connection timeout for fast failover diagnostics on port blocks
+    connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 15000,
-    requireTLS: port === 587, // enforce STARTTLS upgrades for standard Outlook TLS ports
     tls: {
-      // Modern Node.js versions (such as 18/20 on Vercel) deprecate and disable SSLv3 entirely inside OpenSSL.
-      // Removing 'ciphers: "SSLv3"' ensures modern TLS protocol negotiation (TLS 1.2/1.3) works seamlessly.
       rejectUnauthorized: false
     }
   });
 
   const mailOptions = {
-    from: `"Tribunal Electoral de Panamá" <${outlookUser}>`,
+    from: `"Tribunal Electoral de Panamá" <${fromEmail}>`,
     to: to,
     subject: subject,
     html: html
