@@ -370,6 +370,65 @@ export default function App() {
     createTicket(randomName, randomService, randomPriority);
   };
 
+  if (activeTab === "tracker") {
+    return (
+      <div id="tracker-isolated-root" className="min-h-screen bg-slate-100 font-sans text-slate-900 flex flex-col justify-between relative selection:bg-[#003087] selection:text-white">
+        {/* Panama Ribbon */}
+        <div className="w-full h-1.5 flex shrink-0">
+          <div className="flex-1 bg-[#da121a]" />
+          <div className="flex-1 bg-white" />
+          <div className="flex-1 bg-[#003087]" />
+        </div>
+
+        {/* Dedicated Citizen Header (Isolated - No navigation to other screens) */}
+        <header className="bg-white border-b border-slate-200/80 shadow-xs px-4 py-3.5 sm:px-6 sticky top-0 z-30">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <img
+                src="https://sede.tribunal-electoral.gob.pa/assets/images/logo_te.png"
+                alt="Tribunal Electoral de Panamá"
+                className="h-10 sm:h-12 w-auto object-contain"
+                onError={(e) => {
+                  (e.currentTarget as HTMLElement).style.display = "none";
+                }}
+              />
+              <div>
+                <h1 className="text-xs sm:text-sm font-black text-[#003087] tracking-tight uppercase">
+                  Tribunal Electoral de Panamá
+                </h1>
+                <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  Dirección Nacional de Cedulación • Consulta de Turno Móvil
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-black uppercase tracking-wider rounded-full shadow-2xs">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>En Vivo</span>
+              </span>
+            </div>
+          </div>
+        </header>
+
+        {/* Isolated Tracker Content */}
+        <main className="max-w-4xl mx-auto w-full px-3 sm:px-6 py-6 flex-grow">
+          <TicketTracker
+            tickets={tickets}
+            cubicles={cubicles}
+            initialTicketCode={trackingTicketCode}
+            currentOfficeId={currentOfficeId}
+          />
+        </main>
+
+        {/* Dedicated Citizen Footer */}
+        <footer className="bg-white border-t border-slate-200/80 py-4 px-4 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          República de Panamá • Tribunal Electoral • "La Patria la hacemos contigo"
+        </footer>
+      </div>
+    );
+  }
+
   if (gatewaySelection === "select") {
     return (
       <GatewayScreen 
@@ -931,19 +990,6 @@ export default function App() {
           </button>
 
           <button
-            id="tab-view-tracker"
-            onClick={() => setActiveTab("tracker")}
-            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
-              activeTab === "tracker"
-                ? "bg-gradient-to-r from-cyan-700 to-[#122e70] text-white border-transparent shadow-md shadow-cyan-900/10"
-                : "bg-cyan-50 text-cyan-900 border-cyan-200 hover:bg-cyan-100 shadow-sm"
-            }`}
-          >
-            <Smartphone className="w-4 h-4 text-cyan-600" />
-            <span>Seguimiento Móvil</span>
-          </button>
-
-          <button
             id="tab-view-admin"
             onClick={() => {
               if (isAdminAuthenticated) {
@@ -1048,18 +1094,6 @@ export default function App() {
                 if (code) setTrackingTicketCode(code);
                 setActiveTab("tracker");
               }}
-            />
-          </div>
-        )}
-
-        {activeTab === "tracker" && (
-          <div className="w-full py-4">
-            <TicketTracker
-              tickets={tickets}
-              cubicles={cubicles}
-              initialTicketCode={trackingTicketCode}
-              currentOfficeId={currentOfficeId}
-              onNavigateToKiosk={() => setActiveTab("kiosk")}
             />
           </div>
         )}
