@@ -161,11 +161,32 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string)
 }
 
 /**
+ * Dispara la vibración háptica en dispositivos móviles compatibles (Smartphones).
+ * @param pattern Patrón de vibración en milisegundos [vibrar, pausa, vibrar...]
+ */
+export function triggerHapticVibration(pattern: number | number[] = [600, 250, 600, 250, 1000, 300, 800]): boolean {
+  try {
+    if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+      return navigator.vibrate(pattern);
+    }
+  } catch (e) {
+    console.warn("Vibration API no permitida o no disponible:", e);
+  }
+  return false;
+}
+
+export function isVibrationSupported(): boolean {
+  return typeof navigator !== "undefined" && "vibrate" in navigator;
+}
+
+/**
  * Llama al timbre y luego hace la lectura de voz del turno consecutivamente.
  */
 export async function announceAndCall(ticketCode: string, name: string, cubicleName: string) {
+  triggerHapticVibration([400, 200, 400]);
   await playCallingChime();
   // Breve pausa para que el eco del timbre termine
   await new Promise(r => setTimeout(r, 450));
   await speakCall(ticketCode, name, cubicleName);
 }
+

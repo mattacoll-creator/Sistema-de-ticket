@@ -7,7 +7,7 @@ import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { ServiceType, SERVICES_CONFIG, Ticket, OFFICES_CONFIG } from "../types";
 import { motion } from "motion/react";
-import { User, Accessibility, Printer, CheckCircle2, Ticket as TicketIcon, HelpCircle, Calendar, AlertTriangle, Play } from "lucide-react";
+import { User, Accessibility, Printer, CheckCircle2, Ticket as TicketIcon, HelpCircle, Calendar, AlertTriangle, Play, Smartphone } from "lucide-react";
 import { isOfficeOpenNow, getOfficeSchedule, OfficeSchedule } from "../utils/scheduleStorage";
 
 interface WelcomeKioskProps {
@@ -15,6 +15,7 @@ interface WelcomeKioskProps {
   currentOfficeId?: string;
   gatewaySelection?: "cedulacion" | "registro_civil";
   onNavigateToCitas?: () => void;
+  onNavigateToTracker?: (ticketCode: string) => void;
 }
 
 export const REGISTRO_PROCEDURES = [
@@ -48,7 +49,13 @@ export const getProcedureName = (procId: string): string => {
   return procId;
 };
 
-export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion", onNavigateToCitas }: WelcomeKioskProps) {
+export default function WelcomeKiosk({ 
+  onCreateTicket, 
+  currentOfficeId = "OFF-1", 
+  gatewaySelection = "cedulacion", 
+  onNavigateToCitas,
+  onNavigateToTracker
+}: WelcomeKioskProps) {
   const [name, setName] = useState("");
   const [priority, setPriority] = useState(false);
   const [selectedService, setSelectedService] = useState<ServiceType | null>(null);
@@ -241,7 +248,17 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
             </div>
           </div>
           
-          <div className="flex items-center gap-2 self-end sm:self-auto">
+          <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+            {onNavigateToTracker && (
+              <button
+                type="button"
+                onClick={() => onNavigateToTracker("")}
+                className="px-3.5 py-1.5 bg-cyan-700 hover:bg-cyan-800 text-white font-black text-[10px] uppercase tracking-wider rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer hover:scale-105 active:scale-95"
+              >
+                <Smartphone className="w-3.5 h-3.5 text-cyan-200" />
+                <span>📱 Seguimiento en Celular</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -607,29 +624,46 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
                 </div>
               )}
               
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    try {
-                      window.print();
-                    } catch (e) {
-                      console.error("No se pudo iniciar el diálogo de impresión manual:", e);
-                    }
-                  }}
-                  className="py-3 px-3 w-full bg-blue-700 hover:bg-blue-800 text-white font-sans text-xs font-bold uppercase tracking-wider rounded-xl shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
-                  title="Mandar orden a la impresora física de tickets (Abre selección de impresora)"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Imprimir de Nuevo</span>
-                </button>
-                <button
-                  id="btn-confirm-printed"
-                  onClick={() => setPrintedTicket(null)}
-                  className="py-3 px-3 w-full bg-slate-900 hover:bg-slate-800 text-white font-sans text-xs font-bold uppercase tracking-wider rounded-xl shadow-sm cursor-pointer border border-slate-900 text-center"
-                >
-                  Confirmar
-                </button>
+              <div className="space-y-2">
+                {onNavigateToTracker && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const code = printedTicket.numberCode;
+                      setPrintedTicket(null);
+                      onNavigateToTracker(code);
+                    }}
+                    className="py-3 px-4 w-full bg-gradient-to-r from-cyan-700 to-[#122e70] hover:from-cyan-800 hover:to-[#0a194e] text-white font-sans text-xs font-black uppercase tracking-wider rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 border border-cyan-500/30 active:scale-95 transition-all"
+                  >
+                    <Smartphone className="w-4 h-4 text-cyan-300 animate-pulse" />
+                    <span>📱 Seguir mi Turno en Celular (Con Vibración)</span>
+                  </button>
+                )}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        window.print();
+                      } catch (e) {
+                        console.error("No se pudo iniciar el diálogo de impresión manual:", e);
+                      }
+                    }}
+                    className="py-3 px-3 w-full bg-blue-700 hover:bg-blue-800 text-white font-sans text-xs font-bold uppercase tracking-wider rounded-xl shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                    title="Mandar orden a la impresora física de tickets (Abre selección de impresora)"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Imprimir de Nuevo</span>
+                  </button>
+                  <button
+                    id="btn-confirm-printed"
+                    onClick={() => setPrintedTicket(null)}
+                    className="py-3 px-3 w-full bg-slate-900 hover:bg-slate-800 text-white font-sans text-xs font-bold uppercase tracking-wider rounded-xl shadow-sm cursor-pointer border border-slate-900 text-center"
+                  >
+                    Confirmar
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -722,11 +756,19 @@ export default function WelcomeKiosk({ onCreateTicket, currentOfficeId = "OFF-1"
               TE-{printedTicket.id.substring(0, 8).toUpperCase()}
             </p>
             
-            <p className="text-[8px] text-center font-serif font-black italic mt-3">
+            <div style={{ borderBottom: "1px dotted #000000", margin: "6px 0" }}></div>
+            <p className="text-[7px] text-center font-bold uppercase">
+              📱 Siga su turno en vivo con vibración en:
+            </p>
+            <p className="text-[7.5px] text-center font-mono font-black">
+              agendate.te.gob.pa/?ticket={printedTicket.numberCode}
+            </p>
+            
+            <p className="text-[8px] text-center font-serif font-black italic mt-2">
               "La Patria la hacemos contigo"
             </p>
-            <p className="text-[7.5px] text-center font-sans mt-1">
-              Por favor espere su turno en los monitores de sala
+            <p className="text-[7.5px] text-center font-sans mt-0.5">
+              Por favor espere su llamado en los monitores de sala
             </p>
           </div>
         </>,

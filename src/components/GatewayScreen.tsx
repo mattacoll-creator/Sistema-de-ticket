@@ -2,7 +2,8 @@ import React from "react";
 import { 
   CreditCard, 
   Info,
-  CalendarCheck2
+  CalendarCheck2,
+  Smartphone
 } from "lucide-react";
 
 interface GatewayScreenProps {
@@ -11,7 +12,7 @@ interface GatewayScreenProps {
   onSelectView?: (view: string) => void;
 }
 
-export default function GatewayScreen({ onSelectOption, onSelectCitas }: GatewayScreenProps) {
+export default function GatewayScreen({ onSelectOption, onSelectCitas, onSelectView }: GatewayScreenProps) {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-between font-sans relative overflow-hidden">
       {/* Upper Panama Flag Ribbon */}
@@ -141,11 +142,43 @@ export default function GatewayScreen({ onSelectOption, onSelectCitas }: Gateway
           </button>
         </div>
 
+        {/* OPTION 3: SEGUIMIENTO MÓVIL DE TURNO */}
+        {onSelectView && (
+          <div className="max-w-3xl mx-auto w-full">
+            <button
+              type="button"
+              id="gateway-opt-seguimiento"
+              onClick={() => onSelectView("tracker")}
+              className="w-full bg-gradient-to-r from-[#003087] via-[#122e70] to-[#003087] text-white border-2 border-blue-700/60 rounded-3xl p-5 sm:p-6 hover:border-amber-400 hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col sm:flex-row items-center justify-between gap-4 text-left group"
+            >
+              <div className="flex items-center gap-4">
+                <div className="p-3.5 bg-amber-400 text-slate-950 rounded-2xl group-hover:scale-105 transition-transform shrink-0 shadow-md">
+                  <Smartphone className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-amber-400/20 text-amber-300 text-[9px] font-black uppercase tracking-wider rounded-full mb-1 border border-amber-400/30">
+                    <span>Vibración en Celular</span>
+                  </div>
+                  <h3 className="text-base sm:text-lg font-black uppercase text-white tracking-wide group-hover:text-amber-300 transition-colors">
+                    ¿Ya tiene su Ticket Impreso? Seguimiento Móvil
+                  </h3>
+                  <p className="text-xs text-blue-100/90 font-medium">
+                    Consulte el avance de su turno en tiempo real y haga vibrar su celular cuando sea llamado.
+                  </p>
+                </div>
+              </div>
+              <span className="px-4 py-2 bg-amber-400 group-hover:bg-amber-300 text-slate-950 text-xs font-black uppercase tracking-wider rounded-xl whitespace-nowrap shadow-sm shrink-0">
+                Consultar Turno →
+              </span>
+            </button>
+          </div>
+        )}
+
         {/* Informative bottom card */}
         <div className="bg-blue-50/60 border border-blue-100/80 rounded-2xl p-4.5 max-w-lg mx-auto flex items-start gap-3 shadow-xs">
           <Info className="w-4 h-4 text-[#003087] shrink-0 mt-0.5" />
           <p className="text-[10.5px] text-blue-900 font-semibold leading-relaxed">
-            <strong>Instrucciones:</strong> Si ya tiene una cita agendada en línea o desea agendar una nueva, utilice el botón <strong>Agendamiento de Citas</strong>. Para atención en kiosco físico presencial, seleccione <strong>Cedulación</strong>.
+            <strong>Instrucciones:</strong> Si ya tiene una cita agendada en línea o desea agendar una nueva, utilice el botón <strong>Agendamiento de Citas</strong>. Para emitir un nuevo ticket presencial, seleccione <strong>Ticket de Cedulación</strong>. Para rastrear su turno existente con alerta de vibración, seleccione <strong>Seguimiento Móvil</strong>.
           </p>
         </div>
 

@@ -17,6 +17,7 @@ import ControlDashboard from "./components/ControlDashboard";
 import SuperAdminConsole from "./components/SuperAdminConsole";
 import GatewayScreen from "./components/GatewayScreen";
 import CitasApp from "./components/CitasApp";
+import TicketTracker from "./components/TicketTracker";
 
 import { 
   Tv, 
@@ -43,7 +44,8 @@ import {
   Copy,
   Check,
   ExternalLink,
-  Globe
+  Globe,
+  Smartphone
 } from "lucide-react";
 
 export default function App() {
@@ -170,8 +172,9 @@ export default function App() {
     }
   }, [currentActiveUserId, users, setCurrentOfficeId]);
 
-  // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin" | "super-admin"
+  // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin" | "super-admin" | "tracker"
   const [activeTab, setActiveTab ] = useState<string>("kiosk");
+  const [trackingTicketCode, setTrackingTicketCode] = useState<string>("");
 
   // Direct Links Modal state
   const [isDirectLinksModalOpen, setIsDirectLinksModalOpen] = useState<boolean>(false);
@@ -182,6 +185,13 @@ export default function App() {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get("view") || params.get("tab") || params.get("modo") || params.get("screen");
+    const ticketParam = params.get("ticket");
+    if (ticketParam) {
+      setTrackingTicketCode(ticketParam.trim().toUpperCase());
+      setGatewaySelection("cedulacion");
+      setActiveTab("tracker");
+      return;
+    }
     if (viewParam) {
       const v = viewParam.toLowerCase();
       if (v === "citas" || v === "cita" || v === "agendamiento") {
@@ -190,6 +200,9 @@ export default function App() {
       } else if (v === "kiosk" || v === "ticket" || v === "tickets" || v === "turnos" || v === "kiosco") {
         setGatewaySelection("cedulacion");
         setActiveTab("kiosk");
+      } else if (v === "seguimiento" || v === "tracker" || v === "tracking" || v === "consultar" || v === "movil") {
+        setGatewaySelection("cedulacion");
+        setActiveTab("tracker");
       } else if (v === "unificado" || v === "gateway" || v === "select" || v === "inicio" || v === "portal") {
         setGatewaySelection("select");
       } else if (v === "tv" || v === "monitor" || v === "sala") {
@@ -644,6 +657,16 @@ export default function App() {
                     setActiveTab("agent");
                     setIsDirectLinksModalOpen(false);
                   }
+                },
+                {
+                  key: "seguimiento",
+                  name: "📱 Seguimiento Móvil de Turno",
+                  desc: "Consulta tu turno en vivo con vibración y sonido en celular",
+                  action: () => {
+                    setGatewaySelection("cedulacion");
+                    setActiveTab("tracker");
+                    setIsDirectLinksModalOpen(false);
+                  }
                 }
               ].map((item) => {
                 const origin = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
@@ -908,6 +931,19 @@ export default function App() {
           </button>
 
           <button
+            id="tab-view-tracker"
+            onClick={() => setActiveTab("tracker")}
+            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+              activeTab === "tracker"
+                ? "bg-gradient-to-r from-cyan-700 to-[#122e70] text-white border-transparent shadow-md shadow-cyan-900/10"
+                : "bg-cyan-50 text-cyan-900 border-cyan-200 hover:bg-cyan-100 shadow-sm"
+            }`}
+          >
+            <Smartphone className="w-4 h-4 text-cyan-600" />
+            <span>Seguimiento Móvil</span>
+          </button>
+
+          <button
             id="tab-view-admin"
             onClick={() => {
               if (isAdminAuthenticated) {
@@ -1003,7 +1039,28 @@ export default function App() {
 
         {activeTab === "kiosk" && (
           <div className="w-full py-4">
-            <WelcomeKiosk onCreateTicket={createTicket} currentOfficeId={currentOfficeId} gatewaySelection={gatewaySelection} onNavigateToCitas={() => setActiveTab("citas")} />
+            <WelcomeKiosk 
+              onCreateTicket={createTicket} 
+              currentOfficeId={currentOfficeId} 
+              gatewaySelection={gatewaySelection} 
+              onNavigateToCitas={() => setActiveTab("citas")}
+              onNavigateToTracker={(code) => {
+                if (code) setTrackingTicketCode(code);
+                setActiveTab("tracker");
+              }}
+            />
+          </div>
+        )}
+
+        {activeTab === "tracker" && (
+          <div className="w-full py-4">
+            <TicketTracker
+              tickets={tickets}
+              cubicles={cubicles}
+              initialTicketCode={trackingTicketCode}
+              currentOfficeId={currentOfficeId}
+              onNavigateToKiosk={() => setActiveTab("kiosk")}
+            />
           </div>
         )}
 
