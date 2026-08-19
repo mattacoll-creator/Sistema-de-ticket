@@ -203,19 +203,30 @@ export default function TicketTracker({
     return effectiveCubicles.find((c) => c.id === trackedTicket.assignedCubicleId) || null;
   }, [trackedTicket, effectiveCubicles]);
 
-  // Calculate position in queue and estimated wait time
+  // Calculate position in queue and estimated wait time considering priority and appointment hierarchy
   const queueStats = useMemo(() => {
     if (!trackedTicket || trackedTicket.status !== TicketStatus.WAITING) {
       return { position: 0, waitTimeMin: 0, peopleAhead: 0 };
     }
 
-    // Tickets in the same phase and service waiting ahead
-    const aheadTickets = effectiveTickets.filter(
-      (t) =>
-        t.status === TicketStatus.WAITING &&
-        t.currentPhase === trackedTicket.currentPhase &&
-        t.createdAt < trackedTicket.createdAt
-    );
+    const myScore = (trackedTicket.priority ? 4 : 0) + (trackedTicket.isAppointment ? 2 : 0);
+
+    // Tickets in the same phase and ecosystem waiting ahead
+    const aheadTickets = effectiveTickets.filter((t) => {
+      if (t.status !== TicketStatus.WAITING) return false;
+      if (t.currentPhase !== trackedTicket.currentPhase) return false;
+      if (t.id === trackedTicket.id) return false;
+
+      // Filter by ecosystem (Registro Civil vs Cedulación/Electoral/Extranjería)
+      const isMyReg = trackedTicket.serviceType === ServiceType.REGISTRO;
+      const isOtherReg = t.serviceType === ServiceType.REGISTRO;
+      if (isMyReg !== isOtherReg) return false;
+
+      const otherScore = (t.priority ? 4 : 0) + (t.isAppointment ? 2 : 0);
+      if (otherScore > myScore) return true;
+      if (otherScore === myScore && t.createdAt < trackedTicket.createdAt) return true;
+      return false;
+    });
 
     const peopleAhead = aheadTickets.length;
     const avgMinutesPerPerson = trackedTicket.currentPhase === TicketPhase.CAJA ? 3 : 5;
@@ -227,6 +238,45 @@ export default function TicketTracker({
       waitTimeMin
     };
   }, [trackedTicket, effectiveTickets]);
+
+  // Derived regional office module breakdown
+  const regionalModuleBreakdown = useMemo(() => {
+    // Exclude Registro Civil specialty backoffice desks (Cubículos 1 a 23 of Sede Principal) from Cedulación Tríada & Caja overview
+    const validCubicles = effectiveCubicles.filter((c) => {
+      if (activeOfficeId === "OFF-1") {
+        const num = parseInt(c.id.replace("CUB-", ""), 10);
+        // In OFF-1, CUB-1 to CUB-23 are RC desks, CUB-24 to CUB-31 are Tríada Foto (Módulos 10 a 17), CUB-34 to CUB-42 are Cajas (Cajas 0 a 8)
+        if (!isNaN(num) && num >= 1 && num <= 23) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const cajaCubicles = validCubicles.filter((c) => c.supportedPhases.includes(TicketPhase.CAJA));
+    const cajaPref = cajaCubicles.filter((c) => c.isPreferential || c.name.toLowerCase().includes("preferencial"));
+    const cajaReg = cajaCubicles.filter((c) => !c.isPreferential && !c.name.toLowerCase().includes("preferencial"));
+
+    const triadaCubicles = validCubicles.filter((c) => c.supportedPhases.includes(TicketPhase.TRIADA));
+    const triadaPref = triadaCubicles.filter((c) => c.isPreferential || c.name.toLowerCase().includes("preferencial"));
+    const triadaReg = triadaCubicles.filter((c) => !c.isPreferential && !c.name.toLowerCase().includes("preferencial"));
+
+    const formatNames = (list: Cubicle[]) => {
+      if (list.length === 0) return "Ninguno";
+      return list.map((c) => c.name).join(", ");
+    };
+
+    return {
+      cajaCount: cajaCubicles.length,
+      cajaPrefNames: formatNames(cajaPref),
+      cajaRegNames: formatNames(cajaReg),
+      cajaAllNames: formatNames(cajaCubicles),
+      triadaCount: triadaCubicles.length,
+      triadaPrefNames: formatNames(triadaPref),
+      triadaRegNames: formatNames(triadaReg),
+      triadaAllNames: formatNames(triadaCubicles)
+    };
+  }, [effectiveCubicles, activeOfficeId]);
 
   // Regional queue overview count
   const regionalQueueCounts = useMemo(() => {
@@ -683,16 +733,27 @@ export default function TicketTracker({
                       <h3 className="text-2xl sm:text-3xl font-black text-[#003087] uppercase leading-tight">
                         {assignedCubicle.name}
                       </h3>
-                      <p className="text-xs font-bold text-slate-600 mt-0.5">
-                        Operador Responsable: <strong>{assignedCubicle.agentName}</strong>
-                      </p>
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider ${
+                          assignedCubicle.isPreferential || assignedCubicle.name.toLowerCase().includes("preferencial")
+                            ? "bg-purple-100 text-purple-900 border border-purple-300"
+                            : "bg-blue-100 text-blue-900 border border-blue-300"
+                        }`}>
+                          {assignedCubicle.isPreferential || assignedCubicle.name.toLowerCase().includes("preferencial")
+                            ? "♿ Módulo Preferencial"
+                            : "📋 Módulo Regular"}
+                        </span>
+                        <p className="text-xs font-bold text-slate-600">
+                          Operador: <strong>{assignedCubicle.agentName}</strong>
+                        </p>
+                      </div>
                     </div>
                   ) : (
                     <div>
                       <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase leading-tight">
                         {trackedTicket.currentPhase === TicketPhase.CAJA
-                          ? "Área de Cajas (Cajas 0 a 8)"
-                          : "Área de Tríada y Fotografía (Módulos 10 a 17)"}
+                          ? `Área de Cajas (${regionalModuleBreakdown.cajaAllNames})`
+                          : `Área de Tríada y Fotografía (${regionalModuleBreakdown.triadaAllNames})`}
                       </h3>
                       <p className="text-xs font-medium text-slate-600 mt-1">
                         {trackedTicket.currentPhase === TicketPhase.CAJA
@@ -708,16 +769,45 @@ export default function TicketTracker({
               <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl text-xs space-y-2 font-medium text-slate-700">
                 <div className="flex items-center gap-2 font-bold text-[#003087] uppercase text-[11px]">
                   <Navigation className="w-4 h-4 text-amber-500" />
-                  <span>Instrucciones de Orientación en Sala:</span>
+                  <span>Instrucciones de Orientación ({activeOffice.name}):</span>
                 </div>
                 {trackedTicket.currentPhase === TicketPhase.CAJA ? (
-                  <p className="leading-relaxed">
-                    💵 <strong>Cajas 0 a 8:</strong> Ubicadas a la derecha de la entrada principal. Si tiene atención preferencial, será atendido en las <strong>Cajas 0 u 8</strong>. Tenga a mano su documentación y método de pago (tarjeta o efectivo).
-                  </p>
+                  <div className="space-y-1.5 leading-relaxed">
+                    <p>
+                      💵 <strong>Ventanillas de Caja:</strong> {regionalModuleBreakdown.cajaAllNames}.
+                    </p>
+                    {regionalModuleBreakdown.cajaPrefNames !== "Ninguno" && (
+                      <p className="text-purple-900 font-bold">
+                        ♿ <strong>Módulos Preferenciales:</strong> {regionalModuleBreakdown.cajaPrefNames}.
+                      </p>
+                    )}
+                    {regionalModuleBreakdown.cajaRegNames !== "Ninguno" && (
+                      <p className="text-slate-600">
+                        📋 <strong>Módulos Regulares:</strong> {regionalModuleBreakdown.cajaRegNames}.
+                      </p>
+                    )}
+                    {trackedTicket.isAppointment && (
+                      <p className="text-blue-800 font-bold">
+                        📅 <strong>Atención de Citas:</strong> Su turno agendado es priorizado en sala.
+                      </p>
+                    )}
+                  </div>
                 ) : (
-                  <p className="leading-relaxed">
-                    📷 <strong>Módulos 10 a 17 (Tríada y Fotografía):</strong> Ubicados en el salón central. Los <strong>Módulos 16 y 17</strong> están reservados para atención preferencial. Los <strong>Módulos 10 al 15</strong> atienden la fila general.
-                  </p>
+                  <div className="space-y-1.5 leading-relaxed">
+                    <p>
+                      📷 <strong>Módulos de Tríada y Fotografía:</strong> {regionalModuleBreakdown.triadaAllNames}.
+                    </p>
+                    {regionalModuleBreakdown.triadaPrefNames !== "Ninguno" && (
+                      <p className="text-purple-900 font-bold">
+                        ♿ <strong>Módulos Preferenciales:</strong> {regionalModuleBreakdown.triadaPrefNames}.
+                      </p>
+                    )}
+                    {regionalModuleBreakdown.triadaRegNames !== "Ninguno" && (
+                      <p className="text-slate-600">
+                        📋 <strong>Módulos Regulares:</strong> {regionalModuleBreakdown.triadaRegNames}.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -756,7 +846,7 @@ export default function TicketTracker({
           <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm space-y-4">
             <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-2">
               <Layers className="w-4 h-4 text-[#003087]" />
-              <span>Progreso del Flujo de Atención</span>
+              <span>Progreso del Flujo de Atención — {activeOffice.name}</span>
             </h4>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -767,7 +857,7 @@ export default function TicketTracker({
                 </div>
                 <div>
                   <h5 className="text-xs font-black uppercase text-emerald-950">1. Emisión de Turno</h5>
-                  <p className="text-[11px] text-emerald-800 font-medium">Turno emitido en Kiosco</p>
+                  <p className="text-[11px] text-emerald-800 font-medium">Turno emitido en Kiosco / Cita Web</p>
                 </div>
               </div>
 
@@ -793,8 +883,8 @@ export default function TicketTracker({
                   {trackedTicket.currentPhase === TicketPhase.TRIADA || trackedTicket.status === TicketStatus.COMPLETED ? "✓" : "2"}
                 </div>
                 <div>
-                  <h5 className="text-xs font-black uppercase text-slate-900">2. Caja y Revisión</h5>
-                  <p className="text-[11px] text-slate-600 font-medium">Cajas 0 a 8 (Pago/Validación)</p>
+                  <h5 className="text-xs font-black uppercase text-slate-900">2. Caja y Cobro</h5>
+                  <p className="text-[11px] text-slate-600 font-medium">{regionalModuleBreakdown.cajaAllNames}</p>
                 </div>
               </div>
 
@@ -821,7 +911,7 @@ export default function TicketTracker({
                 </div>
                 <div>
                   <h5 className="text-xs font-black uppercase text-slate-900">3. Tríada y Foto</h5>
-                  <p className="text-[11px] text-slate-600 font-medium">Módulos 10 al 17 (Foto y Firma)</p>
+                  <p className="text-[11px] text-slate-600 font-medium">{regionalModuleBreakdown.triadaAllNames}</p>
                 </div>
               </div>
             </div>
@@ -857,39 +947,82 @@ export default function TicketTracker({
       {/* DIRECTORY & CUBICLE REFERENCE MAP */}
       <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm space-y-5">
         <div className="space-y-1 border-b border-slate-100 pb-3">
-          <h3 className="text-sm font-black uppercase tracking-wider text-slate-900 flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-[#003087]" />
-            <span>Guía de Ventanillas y Módulos de Atención (Sede)</span>
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-black uppercase tracking-wider text-slate-900 flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-[#003087]" />
+              <span>Guía de Ventanillas y Módulos — {activeOffice.name}</span>
+            </h3>
+            <span className="px-2.5 py-1 bg-blue-50 text-[#003087] border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-wider">
+              {regionalModuleBreakdown.cajaCount + regionalModuleBreakdown.triadaCount} Módulos Habilitados
+            </span>
+          </div>
           <p className="text-xs text-slate-500 font-medium">
-            Conozca la distribución de módulos de la Dirección Nacional de Cedulación y Registro Civil.
+            Distribución oficial de módulos y ventanillas activas de atención.
+          </p>
+        </div>
+
+        {/* Priority & Appointment Banner */}
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-2 text-xs text-amber-900">
+          <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <p className="font-medium">
+            <strong>Política de Prioridad:</strong> Las citas agendadas desde el portal web y los turnos de atención preferencial (embarazadas, personas de la tercera edad y personas con discapacidad) tienen prioridad en la cola de atención.
           </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
           {/* Box 1: Cajas */}
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
-            <div className="flex items-center gap-2 font-black text-[#003087] uppercase text-xs">
-              <DollarSign className="w-4 h-4 text-emerald-600" />
-              <span>Área de Cajas (Cajas 0 a 8)</span>
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-black text-[#003087] uppercase text-xs">
+                <DollarSign className="w-4 h-4 text-emerald-600" />
+                <span>Área de Cajas</span>
+              </div>
+              <span className="text-[10px] font-bold text-slate-500">
+                {regionalModuleBreakdown.cajaCount} Módulos
+              </span>
             </div>
-            <ul className="space-y-1 text-slate-600 font-medium pl-1">
-              <li>• <strong>Cajas 0 y 8:</strong> Módulos Preferenciales de Cobro.</li>
-              <li>• <strong>Cajas 1 a 7:</strong> Módulos de Cobro General.</li>
-              <li>• Pago de cédulas por primera vez, duplicados y certificaciones.</li>
+            <ul className="space-y-1.5 text-slate-600 font-medium pl-1">
+              {regionalModuleBreakdown.cajaPrefNames !== "Ninguno" && (
+                <li>
+                  • <strong className="text-purple-900">Preferenciales:</strong> {regionalModuleBreakdown.cajaPrefNames}.
+                </li>
+              )}
+              {regionalModuleBreakdown.cajaRegNames !== "Ninguno" && (
+                <li>
+                  • <strong className="text-slate-800">Regulares:</strong> {regionalModuleBreakdown.cajaRegNames}.
+                </li>
+              )}
+              <li className="text-[11px] text-slate-500 pt-1">
+                Pago de cédulas por primera vez, duplicados, certificaciones y validación previa.
+              </li>
             </ul>
           </div>
 
           {/* Box 2: Tríada y Fotografía */}
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
-            <div className="flex items-center gap-2 font-black text-[#003087] uppercase text-xs">
-              <Camera className="w-4 h-4 text-cyan-600" />
-              <span>Tríada y Fotografía (Módulos 10 a 17)</span>
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-black text-[#003087] uppercase text-xs">
+                <Camera className="w-4 h-4 text-cyan-600" />
+                <span>Tríada y Fotografía</span>
+              </div>
+              <span className="text-[10px] font-bold text-slate-500">
+                {regionalModuleBreakdown.triadaCount} Módulos
+              </span>
             </div>
-            <ul className="space-y-1 text-slate-600 font-medium pl-1">
-              <li>• <strong>Módulos 10 al 15:</strong> Atención y Captura General.</li>
-              <li>• <strong>Módulos 16 y 17:</strong> Módulos Preferenciales de Tríada y Foto.</li>
-              <li>• Toma de fotografía oficial, huellas dactilares y firma digital.</li>
+            <ul className="space-y-1.5 text-slate-600 font-medium pl-1">
+              {regionalModuleBreakdown.triadaPrefNames !== "Ninguno" && (
+                <li>
+                  • <strong className="text-purple-900">Preferenciales:</strong> {regionalModuleBreakdown.triadaPrefNames}.
+                </li>
+              )}
+              {regionalModuleBreakdown.triadaRegNames !== "Ninguno" && (
+                <li>
+                  • <strong className="text-slate-800">Regulares:</strong> {regionalModuleBreakdown.triadaRegNames}.
+                </li>
+              )}
+              <li className="text-[11px] text-slate-500 pt-1">
+                Toma de fotografía oficial, captura biométrica de huellas y firma digital.
+              </li>
             </ul>
           </div>
         </div>

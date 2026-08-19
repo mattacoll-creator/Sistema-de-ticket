@@ -133,13 +133,15 @@ export enum CubicleStatus {
 
 export interface Cubicle {
   id: string;
-  name: string; // e.g. "Cubículo 1"
+  name: string; // e.g. "Módulo 1", "Módulo 6 (Preferencial)"
   agentName: string; // e.g. "Dra. María González"
   status: CubicleStatus;
   currentTicketId?: string; // Currently attending ticket ID
   supportedServices: ServiceType[]; // Services handled by this cubicle during TRAMITE phase
   supportedPhases: TicketPhase[]; // Phases handled by this cubicle (Caja, Triada, Fotografía, Trámite)
   totalAttendedCount: number;
+  isPreferential?: boolean; // True for modules specifically designated for preferenciales (embarazadas, tercera edad, discapacidad)
+  area?: string; // e.g. "Caja", "Triada / Fotografía"
 }
 
 export interface Office {
@@ -191,8 +193,8 @@ export const OFFICES_CONFIG: Office[] = [
   },
   {
     id: "OFF-9",
-    name: "Dirección Regional de Panamá Centro",
-    address: "Panamá Centro"
+    name: "Oficina Especial de Panamá Centro (Plaza Cohete)",
+    address: "Plaza Cohete, Vía España, Panamá Centro"
   },
   {
     id: "OFF-10",
@@ -206,8 +208,8 @@ export const OFFICES_CONFIG: Office[] = [
   },
   {
     id: "OFF-12",
-    name: "Dirección Regional de Panamá Oeste",
-    address: "Panamá Oeste"
+    name: "Dirección Regional de Panamá Oeste (La Chorrera)",
+    address: "La Chorrera, Panamá Oeste"
   },
   {
     id: "OFF-13",
@@ -216,8 +218,8 @@ export const OFFICES_CONFIG: Office[] = [
   },
   {
     id: "OFF-14",
-    name: "Dirección Regional de Veraguas",
-    address: "Veraguas"
+    name: "Dirección Regional de Veraguas (Santiago)",
+    address: "Santiago, Veraguas"
   },
   {
     id: "OFF-15",

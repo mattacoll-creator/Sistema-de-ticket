@@ -14,7 +14,7 @@ const STORAGE_KEYS = {
   AUTO_ASSIGN: "ticket_system_auto_assign_v1",
   CURRENT_OFFICE: "ticket_system_current_office_v1",
   OFFICE_TICKETS: "ticket_system_office_tickets_v1",
-  OFFICE_CUBICLES: "ticket_system_office_cubicles_v1",
+  OFFICE_CUBICLES: "ticket_system_office_cubicles_v3",
   OFFICE_AUTO_ASSIGN: "ticket_system_office_auto_assign_v1",
   ACTIVE_CALL: "ticket_system_active_call_v1"
 };
@@ -413,6 +413,112 @@ const INITIAL_CUBICLES: Cubicle[] = [
   }
 ];
 
+export interface OfficeModuleSpec {
+  moduleNumber: number;
+  area: "Caja" | "Triada / Fotografía";
+  isPreferential: boolean;
+  phase: TicketPhase;
+}
+
+export const REGIONAL_OFFICES_MODULES_SPEC: Record<string, OfficeModuleSpec[]> = {
+  // Regional de Veraguas (Santiago)
+  "OFF-14": [
+    { moduleNumber: 1, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 2, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 3, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 4, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 5, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 6, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA },
+    { moduleNumber: 7, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA }
+  ],
+  // Regional de Colón
+  "OFF-4": [
+    { moduleNumber: 1, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 2, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 3, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 4, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 5, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA },
+    { moduleNumber: 6, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA },
+    { moduleNumber: 7, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 8, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 9, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA }
+  ],
+  // Regional de Panamá Oeste (La Chorrera)
+  "OFF-12": [
+    { moduleNumber: 1, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 2, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 3, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 4, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 5, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 6, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 8, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA },
+    { moduleNumber: 9, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 10, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 11, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA }
+  ],
+  // Regional de San Miguelito
+  "OFF-13": [
+    { moduleNumber: 1, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 2, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 3, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 4, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 5, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 6, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 7, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 8, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA },
+    { moduleNumber: 9, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA },
+    { moduleNumber: 10, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 11, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 12, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA }
+  ],
+  // Regional de Panamá Este
+  "OFF-11": [
+    { moduleNumber: 1, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 2, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 3, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 4, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 5, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 6, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 7, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA },
+    { moduleNumber: 8, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 9, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 10, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA }
+  ],
+  // Regional de Panamá Norte
+  "OFF-10": [
+    { moduleNumber: 1, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 2, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 3, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 4, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 5, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 6, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 7, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA }
+  ],
+  // Regional de Arraiján
+  "OFF-16": [
+    { moduleNumber: 1, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 2, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 3, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 4, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 5, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 6, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA },
+    { moduleNumber: 7, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 8, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 9, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA }
+  ],
+  // Oficina Especial de Panamá Centro (Plaza Cohete)
+  "OFF-9": [
+    { moduleNumber: 1, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 2, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 3, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 4, area: "Caja", isPreferential: false, phase: TicketPhase.CAJA },
+    { moduleNumber: 5, area: "Caja", isPreferential: true, phase: TicketPhase.CAJA },
+    { moduleNumber: 7, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 8, area: "Triada / Fotografía", isPreferential: false, phase: TicketPhase.TRIADA },
+    { moduleNumber: 9, area: "Triada / Fotografía", isPreferential: true, phase: TicketPhase.TRIADA }
+  ]
+};
+
 // Ensure any cubicle supporting CEDULACION also supports REG_CERTIFICATION
 export function migrateCubicleState(cubicle: Cubicle, officeId: string): Cubicle {
   const num = parseInt(cubicle.id.replace("CUB-", ""), 10);
@@ -431,13 +537,24 @@ export function migrateCubicleState(cubicle: Cubicle, officeId: string): Cubicle
     else if (num === 27) updated.name = "Módulo 13 (Tríada / Fotografía)";
     else if (num === 28) updated.name = "Módulo 14 (Tríada / Fotografía)";
     else if (num === 29) updated.name = "Módulo 15 (Tríada / Fotografía)";
-    else if (num === 30) updated.name = "Módulo 16 (Preferencial - Tríada / Fotografía)";
-    else if (num === 31) updated.name = "Módulo 17 (Preferencial - Tríada / Fotografía)";
+    else if (num === 30) {
+      updated.name = "Módulo 16 (Preferencial - Tríada / Fotografía)";
+      updated.isPreferential = true;
+    } else if (num === 31) {
+      updated.name = "Módulo 17 (Preferencial - Tríada / Fotografía)";
+      updated.isPreferential = true;
+    }
   } else if (num >= 34 && num <= 42) {
     updated.supportedServices = [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA, ServiceType.REG_CERTIFICATION];
     updated.supportedPhases = [TicketPhase.CAJA];
     const index = num - 34; // 34 is Caja 0, 35 is Caja 1, etc.
-    updated.name = `Caja ${index} (Cedulación)`;
+    if (index === 0 || index === 8) {
+      updated.name = `Caja ${index} (Preferencial • Cedulación)`;
+      updated.isPreferential = true;
+    } else {
+      updated.name = `Caja ${index} (Cedulación)`;
+      updated.isPreferential = false;
+    }
   }
 
   if (officeId !== "OFF-1") {
@@ -454,7 +571,41 @@ INITIAL_CUBICLES.forEach((c, idx) => {
 const EMPTY_TICKETS: Ticket[] = [];
 const DEFAULT_CUBICLES_CACHE: Record<string, Cubicle[]> = {};
 
-function getDefaultCubiclesForOffice(officeId: string): Cubicle[] {
+export function getDefaultCubiclesForOffice(officeId: string): Cubicle[] {
+  const specList = REGIONAL_OFFICES_MODULES_SPEC[officeId];
+  if (specList) {
+    return specList.map(spec => {
+      const isPref = spec.isPreferential;
+      const areaLabel = spec.area;
+      const typeLabel = isPref ? "Preferencial" : "Regular";
+      const name = isPref
+        ? `Módulo ${spec.moduleNumber} (${areaLabel} • ${typeLabel})`
+        : `Módulo ${spec.moduleNumber} (${areaLabel})`;
+      const agentName = `Agente M${spec.moduleNumber} (${typeLabel})`;
+      
+      const supportedServices = [
+        ServiceType.CEDULACION,
+        ServiceType.ELECTORAL,
+        ServiceType.REG_CERTIFICATION
+      ];
+      if (officeId === "OFF-1") {
+        supportedServices.push(ServiceType.EXTRANJERIA);
+      }
+
+      return {
+        id: `CUB-${officeId.replace("OFF-", "")}-${spec.moduleNumber}`,
+        name,
+        agentName,
+        status: CubicleStatus.ONLINE_AVAILABLE,
+        supportedPhases: [spec.phase],
+        supportedServices,
+        totalAttendedCount: 0,
+        isPreferential: isPref,
+        area: spec.area
+      };
+    });
+  }
+
   if (!DEFAULT_CUBICLES_CACHE[officeId]) {
     DEFAULT_CUBICLES_CACHE[officeId] = INITIAL_CUBICLES.map(c => migrateCubicleState(c, officeId));
   }
@@ -583,16 +734,21 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         loadedCubicles = JSON.parse(storedOfficeCubicles);
         // Migrate or replace if cubicle list has changed
         Object.keys(loadedCubicles).forEach(officeId => {
-          // Normalize supportedServices and phases for loaded cubicles, filtering out obsolete CUB-32 and CUB-33
-          loadedCubicles[officeId] = loadedCubicles[officeId]
-            .filter(c => {
-              const num = parseInt(c.id.replace("CUB-", ""), 10);
-              return !isNaN(num) && (num < 32 || num > 33);
-            })
-            .map(c => migrateCubicleState(c, officeId));
+          if (REGIONAL_OFFICES_MODULES_SPEC[officeId]) {
+            // Ensure configured regional offices match the exact module specifications
+            loadedCubicles[officeId] = getDefaultCubiclesForOffice(officeId);
+          } else {
+            // Normalize supportedServices and phases for loaded cubicles, filtering out obsolete CUB-32 and CUB-33
+            loadedCubicles[officeId] = loadedCubicles[officeId]
+              .filter(c => {
+                const num = parseInt(c.id.replace("CUB-", ""), 10);
+                return !isNaN(num) && (num < 32 || num > 33);
+              })
+              .map(c => migrateCubicleState(c, officeId));
 
-          if (loadedCubicles[officeId].length !== INITIAL_CUBICLES.length) {
-            loadedCubicles[officeId] = INITIAL_CUBICLES.map(c => migrateCubicleState(c, officeId));
+            if (loadedCubicles[officeId].length !== INITIAL_CUBICLES.length) {
+              loadedCubicles[officeId] = INITIAL_CUBICLES.map(c => migrateCubicleState(c, officeId));
+            }
           }
         });
       } else {
@@ -1127,62 +1283,54 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         if (t.currentPhase !== TicketPhase.TRIADA) return false;
       }
 
-      // Caja preferential attention routing rules:
-      // Preferential attention (priority) in CAJA phase must go to Caja 0 and Caja 8 only.
-      // Other Cajas (1 to 7) must not attend priority tickets.
-      // Caja 0 and 8 must prioritize priority tickets, and only take normal tickets if no priority tickets are waiting.
-      const isCajaPhase = t.currentPhase === TicketPhase.CAJA;
-      if (isCajaPhase) {
-        const isCaja0Or8 = targetCubicle.id === "CUB-34" || 
-                           targetCubicle.id === "CUB-42" || 
-                           targetCubicle.name.startsWith("Caja 0") || 
-                           targetCubicle.name.startsWith("Caja 8");
-        
-        if (isCaja0Or8) {
-          const anyPriorityWaiting = tickets.some(otherT => 
-            otherT.status === TicketStatus.WAITING &&
-            otherT.currentPhase === TicketPhase.CAJA &&
-            otherT.priority &&
-            targetCubicle.supportedServices.includes(otherT.serviceType) &&
-            canCubicleServeProcedure(cubicleId, otherT.procedure)
-          );
-          if (anyPriorityWaiting && !t.priority) {
-            return false;
-          }
-        } else {
-          if (t.priority) {
-            return false;
-          }
-        }
-      }
+      // Preferential attention (priority & citas agendadas) vs Regular attention routing rules:
+      const isTargetPreferential = targetCubicle.isPreferential === true ||
+        targetCubicle.name.toLowerCase().includes("preferencial") ||
+        targetCubicle.id === "CUB-30" ||
+        targetCubicle.id === "CUB-31" ||
+        targetCubicle.id === "CUB-34" ||
+        targetCubicle.id === "CUB-42";
 
-      // Tríada / Fotografía preferential attention routing rules:
-      // Preferential attention (priority) in TRIADA phase must go to Módulo 16 and Módulo 17 only.
-      // Other Módulos (10 to 15) must not attend priority tickets.
-      // Módulo 16 and 17 must prioritize priority tickets, and only take normal tickets if no priority tickets are waiting.
-      const isTriadaPhase = t.currentPhase === TicketPhase.TRIADA;
-      if (isTriadaPhase && t.serviceType !== ServiceType.REGISTRO) {
-        const isPrefModule = targetCubicle.id === "CUB-30" || 
-                             targetCubicle.id === "CUB-31" || 
-                             targetCubicle.name.includes("Módulo 16") || 
-                             targetCubicle.name.includes("Módulo 17");
-        
-        if (isPrefModule) {
-          const anyPriorityWaiting = tickets.some(otherT => 
-            otherT.status === TicketStatus.WAITING &&
-            otherT.currentPhase === TicketPhase.TRIADA &&
-            otherT.serviceType !== ServiceType.REGISTRO &&
-            otherT.priority &&
-            targetCubicle.supportedServices.includes(otherT.serviceType) &&
-            canCubicleServeProcedure(cubicleId, otherT.procedure)
-          );
-          if (anyPriorityWaiting && !t.priority) {
-            return false;
-          }
-        } else {
-          if (t.priority) {
-            return false;
-          }
+      if (isTargetPreferential) {
+        // Módulo Preferencial: Da prioridad inmediata a turnos preferenciales (embarazadas, tercera edad, discapacidad)
+        // y a citas agendadas desde el portal web.
+        // Si hay turnos preferenciales o con cita en espera, no toma turnos regulares sin cita previa.
+        const anyPreferredWaiting = tickets.some(otherT =>
+          otherT.status === TicketStatus.WAITING &&
+          otherT.currentPhase === t.currentPhase &&
+          (t.serviceType === ServiceType.REGISTRO ? otherT.serviceType === ServiceType.REGISTRO : otherT.serviceType !== ServiceType.REGISTRO) &&
+          (otherT.priority || otherT.isAppointment) &&
+          targetCubicle.supportedServices.includes(otherT.serviceType) &&
+          canCubicleServeProcedure(cubicleId, otherT.procedure)
+        );
+        if (anyPreferredWaiting && !t.priority && !t.isAppointment) {
+          return false;
+        }
+      } else {
+        // Módulo Regular:
+        // Si en la oficina hay módulos preferenciales habilitados para esta fase,
+        // los módulos regulares no toman preferenciales por condición para no saturar la fila regular.
+        const hasOfficePrefForPhase = cubicles.some(c =>
+          (c.isPreferential === true || c.name.toLowerCase().includes("preferencial")) &&
+          c.supportedPhases.includes(t.currentPhase)
+        );
+        if (hasOfficePrefForPhase && t.priority) {
+          return false;
+        }
+
+        // Si hay turnos regulares CON CITA previa del portal en espera, el módulo regular les da preferencia
+        // frente a turnos regulares espontáneos (walk-in).
+        const anyAppointmentWaiting = tickets.some(otherT =>
+          otherT.status === TicketStatus.WAITING &&
+          otherT.currentPhase === t.currentPhase &&
+          (t.serviceType === ServiceType.REGISTRO ? otherT.serviceType === ServiceType.REGISTRO : otherT.serviceType !== ServiceType.REGISTRO) &&
+          !otherT.priority &&
+          otherT.isAppointment &&
+          targetCubicle.supportedServices.includes(otherT.serviceType) &&
+          canCubicleServeProcedure(cubicleId, otherT.procedure)
+        );
+        if (anyAppointmentWaiting && !t.isAppointment) {
+          return false;
         }
       }
 
@@ -1191,7 +1339,12 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
     if (candidates.length === 0) return;
 
-    // Sorting: Priority High (score 4) gets absolute top, then prior appointments (score 2) get second, then walk-ins (score 0), then oldest first
+    // Sorting:
+    // 1. Preferencial con Cita (Puntaje 6)
+    // 2. Preferencial (Puntaje 4)
+    // 3. Regular con Cita Agendada (Puntaje 2)
+    // 4. Regular espontáneo (Puntaje 0)
+    // Dentro del mismo nivel, por orden de llegada (createdAt más antiguo primero)
     candidates.sort((a, b) => {
       const valA = (a.priority ? 4 : 0) + (a.isAppointment ? 2 : 0);
       const valB = (b.priority ? 4 : 0) + (b.isAppointment ? 2 : 0);
@@ -1580,62 +1733,47 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         if (!cubicle.supportedPhases.includes(t.currentPhase)) return false;
         if (cubicle.supportedServices && !cubicle.supportedServices.includes(t.serviceType)) return false;
 
-        // Caja preferential attention routing rules:
-        // Preferential attention (priority) in CAJA phase must go to Caja 0 and Caja 8 only.
-        // Other Cajas (1 to 7) must not attend priority tickets.
-        // Caja 0 and 8 must prioritize priority tickets, and only take normal tickets if no priority tickets are waiting.
-        const isCajaPhase = t.currentPhase === TicketPhase.CAJA;
-        if (isCajaPhase) {
-          const isCaja0Or8 = cubicle.id === "CUB-34" || 
-                             cubicle.id === "CUB-42" || 
-                             cubicle.name.startsWith("Caja 0") || 
-                             cubicle.name.startsWith("Caja 8");
-          
-          if (isCaja0Or8) {
-            const anyPriorityWaiting = updatedTickets.some(otherT => 
-              otherT.status === TicketStatus.WAITING &&
-              otherT.currentPhase === TicketPhase.CAJA &&
-              otherT.priority &&
-              cubicle.supportedServices.includes(otherT.serviceType) &&
-              canCubicleServeProcedure(cubicle.id, otherT.procedure)
-            );
-            if (anyPriorityWaiting && !t.priority) {
-              return false;
-            }
-          } else {
-            if (t.priority) {
-              return false;
-            }
-          }
-        }
+        // Preferential attention (priority & citas agendadas) vs Regular attention routing rules:
+        const isCubiclePreferential = cubicle.isPreferential === true ||
+          cubicle.name.toLowerCase().includes("preferencial") ||
+          cubicle.id === "CUB-30" ||
+          cubicle.id === "CUB-31" ||
+          cubicle.id === "CUB-34" ||
+          cubicle.id === "CUB-42";
 
-        // Tríada / Fotografía preferential attention routing rules:
-        // Preferential attention (priority) in TRIADA phase must go to Módulo 16 and Módulo 17 only.
-        // Other Módulos (10 to 15) must not attend priority tickets.
-        // Módulo 16 and 17 must prioritize priority tickets, and only take normal tickets if no priority tickets are waiting.
-        const isTriadaPhase = t.currentPhase === TicketPhase.TRIADA;
-        if (isTriadaPhase && t.serviceType !== ServiceType.REGISTRO) {
-          const isPrefModule = cubicle.id === "CUB-30" || 
-                               cubicle.id === "CUB-31" || 
-                               cubicle.name.includes("Módulo 16") || 
-                               cubicle.name.includes("Módulo 17");
-          
-          if (isPrefModule) {
-            const anyPriorityWaiting = updatedTickets.some(otherT => 
-              otherT.status === TicketStatus.WAITING &&
-              otherT.currentPhase === TicketPhase.TRIADA &&
-              otherT.serviceType !== ServiceType.REGISTRO &&
-              otherT.priority &&
-              cubicle.supportedServices.includes(otherT.serviceType) &&
-              canCubicleServeProcedure(cubicle.id, otherT.procedure)
-            );
-            if (anyPriorityWaiting && !t.priority) {
-              return false;
-            }
-          } else {
-            if (t.priority) {
-              return false;
-            }
+        if (isCubiclePreferential) {
+          const anyPreferredWaiting = updatedTickets.some(otherT =>
+            otherT.status === TicketStatus.WAITING &&
+            otherT.currentPhase === t.currentPhase &&
+            (t.serviceType === ServiceType.REGISTRO ? otherT.serviceType === ServiceType.REGISTRO : otherT.serviceType !== ServiceType.REGISTRO) &&
+            (otherT.priority || otherT.isAppointment) &&
+            cubicle.supportedServices.includes(otherT.serviceType) &&
+            canCubicleServeProcedure(cubicle.id, otherT.procedure)
+          );
+          if (anyPreferredWaiting && !t.priority && !t.isAppointment) {
+            return false;
+          }
+        } else {
+          const hasOfficePrefForPhase = currentCubicles.some(c =>
+            (c.isPreferential === true || c.name.toLowerCase().includes("preferencial")) &&
+            c.supportedPhases.includes(t.currentPhase)
+          );
+          if (hasOfficePrefForPhase && t.priority) {
+            return false;
+          }
+
+          // En módulo regular, citas agendadas tienen preferencia sobre turnos espontáneos
+          const anyAppointmentWaiting = updatedTickets.some(otherT =>
+            otherT.status === TicketStatus.WAITING &&
+            otherT.currentPhase === t.currentPhase &&
+            (t.serviceType === ServiceType.REGISTRO ? otherT.serviceType === ServiceType.REGISTRO : otherT.serviceType !== ServiceType.REGISTRO) &&
+            !otherT.priority &&
+            otherT.isAppointment &&
+            cubicle.supportedServices.includes(otherT.serviceType) &&
+            canCubicleServeProcedure(cubicle.id, otherT.procedure)
+          );
+          if (anyAppointmentWaiting && !t.isAppointment) {
+            return false;
           }
         }
 
@@ -1644,10 +1782,18 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
       if (candidates.length === 0) continue;
 
-      // Sort candidates: priority (true first), then oldest (createdAt smaller first)
+      // Sort candidates:
+      // 1. Preferencial con Cita (Score 6)
+      // 2. Preferencial (Score 4)
+      // 3. Regular con Cita Agendada (Score 2)
+      // 4. Regular espontáneo (Score 0)
+      // Dentro del mismo nivel, por orden de llegada (createdAt)
       candidates.sort((a, b) => {
-        if (a.priority && !b.priority) return -1;
-        if (!a.priority && b.priority) return 1;
+        const valA = (a.priority ? 4 : 0) + (a.isAppointment ? 2 : 0);
+        const valB = (b.priority ? 4 : 0) + (b.isAppointment ? 2 : 0);
+        if (valA !== valB) {
+          return valB - valA;
+        }
         return a.createdAt - b.createdAt;
       });
 
