@@ -305,9 +305,9 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               {/* TE Logo styled precisely for Light Theme */}
               <div className="flex items-center gap-3 select-none">
                 <img 
-                  src="/images/agendate-logo.png" 
+                  src="/images/agendate-logo-1.png" 
                   onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).src = "/images/agendate-logo.svg";
+                    (e.currentTarget as HTMLImageElement).src = "/images/agendate-logo-1.png";
                   }}
                   referrerPolicy="no-referrer"
                   alt="AgéndaTE" 
@@ -398,8 +398,8 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               <div className="flex items-center gap-3 select-none">
                 <img 
                   src={selectedChannel === TicketPhase.CAJA
-                    ? "/images/logo-te-aniversario.png"
-                    : "/images/agendate-logo.png"
+                    ? "/images/logo-te-aniversario-1.png"
+                    : "/images/agendate-logo-1.png"
                   }
                   referrerPolicy="no-referrer"
                   alt="Tribunal Electoral" 

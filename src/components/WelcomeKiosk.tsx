@@ -518,7 +518,7 @@ export default function WelcomeKiosk({
               
               <div className="text-center pb-3 border-b-2 border-dashed border-slate-200 mt-4 flex flex-col items-center justify-center">
                 <img 
-                  src="/images/agendate-logo.png" 
+                  src="/images/agendate-logo-1.png" 
                   referrerPolicy="no-referrer" 
                   alt="Tribunal Electoral de Panamá Logo" 
                   className="h-12 w-auto object-contain mb-2.5" 
@@ -685,7 +685,7 @@ export default function WelcomeKiosk({
           }} />
           <div id="thermal-receipt-print-area" className={`print-only ${paperSize === "58mm" ? "paper-58mm" : "paper-80mm"}`}>
             <img 
-              src="/images/agendate-logo.png" 
+              src="/images/agendate-logo-1.png" 
               referrerPolicy="no-referrer" 
               alt="TE Logo"
               className="h-12 mx-auto object-contain mb-2 ticket-header-logo"

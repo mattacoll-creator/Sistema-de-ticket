@@ -256,7 +256,7 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       {/* Hero Header Banner */}
       <section className="bg-gradient-to-r from-blue-950 via-blue-900 to-slate-900 text-white py-8 px-4 text-center space-y-3 print:hidden flex flex-col items-center justify-center transition-all duration-300 border-b border-blue-800/50">
         <img
-          src={cmsConfig?.logoUrl || "/images/logo-te-aniversario.png"}
+          src={cmsConfig?.logoUrl || "/images/logo-te-aniversario-1.png"}
           alt={cmsConfig?.siteTitle || "Tribunal Electoral de Panamá"}
           className="h-20 sm:h-24 md:h-28 w-auto object-contain mx-auto"
           referrerPolicy="no-referrer"

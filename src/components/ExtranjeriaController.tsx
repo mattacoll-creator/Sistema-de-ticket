@@ -2727,7 +2727,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole }: Ext
                 <div className="relative shrink-0">
                   <div className="absolute -inset-1 bg-amber-500/10 rounded-xl blur" />
                   <img
-                    src="/images/logo-sede-te.png"
+                    src="/images/logo-sede-te-1.png"
                     alt="Tribunal Electoral Logo"
                     className="w-16 h-16 object-contain rounded-xl bg-white p-1.5 border border-amber-500/30 relative z-10"
                     referrerPolicy="no-referrer"

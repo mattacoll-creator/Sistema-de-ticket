@@ -358,7 +358,7 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
             {/* Logo Oficial */}
             <div className="p-1 px-2 shrink-0 flex items-center justify-center">
               <img
-                src="/images/logo-te-aniversario.png"
+                src="/images/logo-te-aniversario-1.png"
                 alt="Tribunal Electoral de Panamá"
                 className="h-12 md:h-14 w-auto object-contain"
                 referrerPolicy="no-referrer"

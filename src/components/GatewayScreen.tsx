@@ -32,7 +32,7 @@ export default function GatewayScreen({ onSelectOption, onSelectCitas, onSelectV
         <div className="text-center space-y-4">
           <div className="flex justify-center items-center gap-3">
             <img 
-              src="/images/agendate-logo.png" 
+              src="/images/agendate-logo-1.png" 
               referrerPolicy="no-referrer" 
               alt="Tribunal Electoral de Panamá" 
               className="h-16 md:h-20 w-auto object-contain drop-shadow-md select-none hover:scale-[1.02] transition-transform duration-500" 

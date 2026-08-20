@@ -562,7 +562,7 @@ interface CmsConfig {
 const DEFAULT_CMS_CONFIG: CmsConfig = {
   siteTitle: "Portal de Trámites",
   siteSubtitle: "Tribunal Electoral de Panamá",
-  logoUrl: "/images/logo-te-aniversario.png",
+  logoUrl: "/images/logo-te-aniversario-1.png",
   primaryColor: "#0f172a",
   customTexts: {
     welcomeTitle: "Bienvenido al Portal de Trámites y Citas",
@@ -588,7 +588,7 @@ const DEFAULT_CMS_CONFIG: CmsConfig = {
     { id: "contacto", title: "Contacto y Oficinas", slug: "contacto", content: "Consulte nuestras sucursales y números de contacto en todas las provincias de la República." }
   ],
   images: [
-    { id: "logo", name: "Logo Principal", url: "/images/logo-te-aniversario.png" }
+    { id: "logo", name: "Logo Principal", url: "/images/logo-te-aniversario-1.png" }
   ]
 };
 
@@ -1161,7 +1161,7 @@ async function startServer() {
   // Official logo endpoint (serves local high-res asset with immediate response)
   app.get("/api/logo", async (req, res) => {
     try {
-      const localLogoPath = path.join(process.cwd(), "public", "images", "logo-te-aniversario.png");
+      const localLogoPath = path.join(process.cwd(), "public", "images", "logo-te-aniversario-1.png");
       const localSvgPath = path.join(process.cwd(), "public", "images", "logo-te-aniversario.svg");
       
       if (fs.existsSync(localLogoPath)) {

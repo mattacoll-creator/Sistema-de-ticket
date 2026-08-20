@@ -382,7 +382,7 @@ export default function App() {
           <div className="max-w-4xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-3">
               <img
-                src="/images/logo-te-aniversario.png"
+                src="/images/logo-te-aniversario-1.png"
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).src = "https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/06/Logo-TE-aniversario-256x256px-blanco-02.png";
                 }}
@@ -890,7 +890,7 @@ export default function App() {
           
           <div className="flex flex-col md:flex-row md:items-center gap-4 pl-1">
             <img 
-              src="/images/agendate-logo.png" 
+              src="/images/agendate-logo-1.png" 
               referrerPolicy="no-referrer" 
               alt="Tribunal Electoral de Panamá" 
               className="h-14 md:h-16 w-auto object-contain self-start md:self-center" 
