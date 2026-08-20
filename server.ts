@@ -42,50 +42,171 @@ async function initPostgresSchema() {
   try {
     const client = await pgPool.connect();
     try {
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS appointments (
-          id VARCHAR(100) PRIMARY KEY,
-          tipo VARCHAR(100),
-          tramite VARCHAR(255),
-          sub_tramite VARCHAR(255),
-          identificacion VARCHAR(100),
-          nombre VARCHAR(255),
-          correo VARCHAR(255),
-          telefono VARCHAR(100),
-          provincia VARCHAR(100),
-          distrito VARCHAR(100),
-          sucursal_id VARCHAR(100),
-          sucursal_nombre VARCHAR(255),
-          fecha VARCHAR(100),
-          hora VARCHAR(100),
-          estado VARCHAR(100),
-          data JSONB,
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-      `);
-
+      // 1. USUARIOS Y AUTENTICACIÓN
       await client.query(`
         CREATE TABLE IF NOT EXISTS usuarios (
           username VARCHAR(100) PRIMARY KEY,
           password VARCHAR(255) NOT NULL,
           role VARCHAR(100) NOT NULL,
-          nombre VARCHAR(255),
+          nombre VARCHAR(255) NOT NULL,
+          sucursal_id VARCHAR(100),
           must_change_password BOOLEAN DEFAULT FALSE,
+          activo BOOLEAN DEFAULT TRUE,
           fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
       `);
 
+      // 2. CITAS WEB (AGENDAMIENTO CIUDADANO)
       await client.query(`
-        CREATE TABLE IF NOT EXISTS extranjeria_records (
+        CREATE TABLE IF NOT EXISTS appointments (
           id VARCHAR(100) PRIMARY KEY,
-          pasaporte VARCHAR(100),
-          nombre VARCHAR(255),
-          nacionalidad VARCHAR(100),
+          codigo_transaccion VARCHAR(100),
+          tipo VARCHAR(100),
+          tramite VARCHAR(255),
+          sub_tramite VARCHAR(255),
+          identificacion VARCHAR(100) NOT NULL,
+          nombre VARCHAR(255) NOT NULL,
+          correo VARCHAR(255),
+          telefono VARCHAR(100),
+          provincia VARCHAR(100),
+          distrito VARCHAR(100),
+          sucursal_id VARCHAR(100) NOT NULL,
+          sucursal_nombre VARCHAR(255),
+          fecha VARCHAR(50) NOT NULL,
+          hora VARCHAR(50) NOT NULL,
+          estado VARCHAR(50) DEFAULT 'confirmada',
           data JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_appts_fecha_hora ON appointments (fecha, hora);
+        CREATE INDEX IF NOT EXISTS idx_appts_identificacion ON appointments (identificacion);
+        CREATE INDEX IF NOT EXISTS idx_appts_sucursal ON appointments (sucursal_id);
+        CREATE INDEX IF NOT EXISTS idx_appts_estado ON appointments (estado);
+      `);
+
+      // 3. TICKETS DE TURNO (KIOSKO Y SALA DE ESPERA)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tickets (
+          id VARCHAR(100) PRIMARY KEY,
+          numero_ticket VARCHAR(20) NOT NULL,
+          tipo_tramite VARCHAR(100) NOT NULL,
+          sub_tramite VARCHAR(255),
+          identificacion VARCHAR(50),
+          nombre VARCHAR(255),
+          es_prioritario BOOLEAN DEFAULT FALSE,
+          sucursal_id VARCHAR(100) NOT NULL,
+          estado VARCHAR(50) DEFAULT 'espera',
+          modulo_asignado VARCHAR(50),
+          agente_asignado VARCHAR(100),
+          hora_emision TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          hora_llamado TIMESTAMP WITH TIME ZONE,
+          hora_inicio_atencion TIMESTAMP WITH TIME ZONE,
+          hora_fin_atencion TIMESTAMP WITH TIME ZONE,
+          tiempo_espera_segundos INTEGER,
+          tiempo_atencion_segundos INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_tickets_estado ON tickets (estado);
+        CREATE INDEX IF NOT EXISTS idx_tickets_sucursal_fecha ON tickets (sucursal_id, hora_emision);
+        CREATE INDEX IF NOT EXISTS idx_tickets_numero ON tickets (numero_ticket);
+      `);
+
+      // 4. MÓDULOS / VENTANILLAS DE ATENCIÓN (ESTADO EN VIVO)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS modulos_atencion (
+          id VARCHAR(100) PRIMARY KEY,
+          nombre VARCHAR(100) NOT NULL,
+          sucursal_id VARCHAR(100) NOT NULL,
+          tipo_servicio VARCHAR(100) NOT NULL,
+          agente_actual VARCHAR(100),
+          ticket_actual_id VARCHAR(100),
+          estado VARCHAR(50) DEFAULT 'disponible',
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `);
+
+      // 5. SESIONES DE SEGUIMIENTO MÓVIL (QR & TRACKER)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tracking_sesiones_moviles (
+          id VARCHAR(100) PRIMARY KEY,
+          token_acceso VARCHAR(255) UNIQUE NOT NULL,
+          ticket_id VARCHAR(100),
+          cita_id VARCHAR(100),
+          dispositivo_info VARCHAR(255),
+          ip_origen VARCHAR(100),
+          ultimo_acceso TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          notificaciones_activas BOOLEAN DEFAULT TRUE,
+          sonido_alerta_activo BOOLEAN DEFAULT TRUE,
+          vibracion_activa BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_tracking_token ON tracking_sesiones_moviles (token_acceso);
+        CREATE INDEX IF NOT EXISTS idx_tracking_ticket ON tracking_sesiones_moviles (ticket_id);
+      `);
+
+      // 6. NOTIFICACIONES Y ALERTAS MÓVILES
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS notificaciones_moviles (
+          id SERIAL PRIMARY KEY,
+          ticket_id VARCHAR(100),
+          telefono_destino VARCHAR(50),
+          canal_notificacion VARCHAR(50) DEFAULT 'web_push',
+          tipo_evento VARCHAR(50) NOT NULL,
+          titulo VARCHAR(150) NOT NULL,
+          mensaje TEXT NOT NULL,
+          estado_envio VARCHAR(50) DEFAULT 'enviado',
+          leido_en_movil BOOLEAN DEFAULT FALSE,
+          fecha_envio TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_notif_ticket ON notificaciones_moviles (ticket_id);
+        CREATE INDEX IF NOT EXISTS idx_notif_fecha ON notificaciones_moviles (fecha_envio);
+      `);
+
+      // 7. SUSCRIPCIONES PUSH WEB (Web Push API)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS push_subscriptions_movil (
+          id SERIAL PRIMARY KEY,
+          token_acceso VARCHAR(255) NOT NULL,
+          endpoint TEXT NOT NULL,
+          p256dh_key TEXT NOT NULL,
+          auth_key TEXT NOT NULL,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
       `);
 
+      // 8. EXPEDIENTES DE EXTRANJERÍA
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS extranjeria_records (
+          id VARCHAR(100) PRIMARY KEY,
+          pasaporte VARCHAR(100) NOT NULL,
+          nombre VARCHAR(255) NOT NULL,
+          nacionalidad VARCHAR(100),
+          estatus_migratorio VARCHAR(100),
+          data JSONB,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_extranjeria_pasaporte ON extranjeria_records (pasaporte);
+      `);
+
+      // 9. EXPEDIENTES DE INSCRIPCIÓN TARDÍA (PASADOS DE EDAD)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tardia_records (
+          id VARCHAR(100) PRIMARY KEY,
+          numero_seguimiento VARCHAR(100) NOT NULL,
+          identificacion VARCHAR(100) NOT NULL,
+          nombre_completo VARCHAR(255) NOT NULL,
+          sucursal_id VARCHAR(100),
+          fecha_cita VARCHAR(50),
+          hora_cita VARCHAR(50),
+          estado_tramite VARCHAR(100) DEFAULT 'en_revision',
+          documentos_presentados JSONB,
+          notas TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_tardia_seguimiento ON tardia_records (numero_seguimiento);
+        CREATE INDEX IF NOT EXISTS idx_tardia_identificacion ON tardia_records (identificacion);
+      `);
+
+      // 10. CONFIGURACIONES DEL SISTEMA (CMS, CUPOS Y HORARIOS)
       await client.query(`
         CREATE TABLE IF NOT EXISTS app_configs (
           id VARCHAR(100) PRIMARY KEY,
@@ -94,12 +215,26 @@ async function initPostgresSchema() {
         );
       `);
 
-      console.log("[Azure PostgreSQL Flexible Server] Tablas e infraestructura verificadas correctamente.");
+      // 11. AUDITORÍA Y TRAZABILIDAD (LOGS)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS logs_auditoria (
+          id SERIAL PRIMARY KEY,
+          usuario VARCHAR(100),
+          accion VARCHAR(255) NOT NULL,
+          detalles JSONB,
+          ip_origen VARCHAR(100),
+          fecha TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_logs_fecha ON logs_auditoria (fecha);
+        CREATE INDEX IF NOT EXISTS idx_logs_usuario ON logs_auditoria (usuario);
+      `);
+
+      console.log("[Azure PostgreSQL Flexible Server] Las 11 tablas e infraestructura verificadas correctamente.");
     } finally {
       client.release();
     }
   } catch (err: any) {
-    console.error("[Azure PostgreSQL Flexible Server] Error al inicializar tablas:", err.message);
+    console.error("[Azure PostgreSQL Flexible Server] Error al inicializar las 11 tablas:", err.message);
   }
 }
 
@@ -169,13 +304,19 @@ async function sendOutlookEmail(to: string, subject: string, html: string) {
 
 // ==========================================
 // ==========================================
-// DETERMINISTIC TABLE NAMES
+// DETERMINISTIC TABLE NAMES (11 TABLAS)
 // ==========================================
-async function getAppointmentsTableName(): Promise<string> { return "appointments"; }
 async function getUsersTableName(): Promise<string> { return "usuarios"; }
-async function getSucursalesTableName(): Promise<string> { return "sucursales"; }
-async function getServiciosTableName(): Promise<string> { return "servicios_subservicios"; }
+async function getAppointmentsTableName(): Promise<string> { return "appointments"; }
+async function getTicketsTableName(): Promise<string> { return "tickets"; }
+async function getModulosTableName(): Promise<string> { return "modulos_atencion"; }
+async function getTrackingSessionsTableName(): Promise<string> { return "tracking_sesiones_moviles"; }
+async function getMobileNotificationsTableName(): Promise<string> { return "notificaciones_moviles"; }
+async function getPushSubscriptionsTableName(): Promise<string> { return "push_subscriptions_movil"; }
 async function getExtranjeriaTableName(): Promise<string> { return "extranjeria_records"; }
+async function getTardiaTableName(): Promise<string> { return "tardia_records"; }
+async function getAppConfigsTableName(): Promise<string> { return "app_configs"; }
+async function getAuditLogsTableName(): Promise<string> { return "logs_auditoria"; }
 
 interface ServerUser {
   username: string;
