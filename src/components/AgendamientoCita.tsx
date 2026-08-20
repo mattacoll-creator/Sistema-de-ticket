@@ -28,10 +28,22 @@ function timeToMinutes(timeStr: string): number {
   return hours * 60 + minutes;
 }
 
+function getTodayDateString(): string {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getCurrentMinutes(): number {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
 function formatMinutes(totalMinutes: number): string {
   const norm = totalMinutes % 1440;
   let hours24 = Math.floor(norm / 60);
-  const minutes = norm % 65; // supports modulo correctly for minutes
   const trueMin = norm % 60;
   
   const ampm = hours24 >= 12 ? 'PM' : 'AM';
@@ -310,11 +322,8 @@ export default function AgendamientoCita({
     todaySimulated.setHours(0, 0, 0, 0);
     const isTuesdayToSaturday = selectedSucursal.horario.toLowerCase().includes('martes a sábado');
 
-    const sysDateObj = new Date();
-    const sysYear = sysDateObj.getFullYear();
-    const sysMonth = sysDateObj.getMonth();
-    const sysDay = sysDateObj.getDate();
-    const todayFormattedString = `${sysYear}-${String(sysMonth + 1).padStart(2, '0')}-${String(sysDay).padStart(2, '0')}`;
+    const todayFormattedString = getTodayDateString();
+    const currentMinutes = getCurrentMinutes();
 
     for (let day = 1; day <= daysInMonth; day++) {
       const yyyy = currentYear;
@@ -344,10 +353,16 @@ export default function AgendamientoCita({
         }
       }
 
-      // Avoid booking for today if past 15:00
-      if (isToday) {
-        const hObj = new Date();
-        if (hObj.getHours() >= 15) {
+      // If today is a valid working day, verify if there are any remaining future time slots
+      if (isToday && isValidWorkingDay) {
+        const rawDaySlots = isExtranjeria 
+          ? generateExtranjeriaSlots(extranjeriaConfig.start, extranjeriaConfig.end, extranjeriaConfig.interval)
+          : isPastAgeTrámiteSelected 
+            ? ['08:00 AM', '09:00 AM', '10:30 AM', '11:30 AM'] 
+            : HORAS_DISPONIBLES;
+
+        const futureAvailableSlots = rawDaySlots.filter(s => timeToMinutes(s) > currentMinutes);
+        if (futureAvailableSlots.length === 0) {
           isValidWorkingDay = false;
         }
       }
@@ -393,7 +408,7 @@ export default function AgendamientoCita({
     }
 
     return cells;
-  }, [currentMonth, currentYear, selectedSucursal, isExtranjeria, isPastAgeTrámiteSelected, mergedBookings, tardiaConfig]);
+  }, [currentMonth, currentYear, selectedSucursal, isExtranjeria, isPastAgeTrámiteSelected, mergedBookings, tardiaConfig, extranjeriaConfig]);
 
   const handlePrevMonth = () => {
     const sysDate = new Date();
@@ -437,6 +452,16 @@ export default function AgendamientoCita({
       setHora('');
     }
   }, [sucursalId, selectedSucursal]);
+
+  // Reset selected hour if it has already passed for today
+  React.useEffect(() => {
+    if (hora && fecha === getTodayDateString()) {
+      const curMin = getCurrentMinutes();
+      if (timeToMinutes(hora) <= curMin) {
+        setHora('');
+      }
+    }
+  }, [fecha, hora]);
 
   const formatFechaEs = (fechaStr: string) => {
     if (!fechaStr) return '';
@@ -757,7 +782,19 @@ export default function AgendamientoCita({
                       </p>
 
                       {(() => {
+                        const todayStr = getTodayDateString();
+                        const isDateToday = fecha === todayStr;
+                        const curMin = getCurrentMinutes();
+
                         const filteredSlots = availableSlots.filter((slot) => {
+                          // Filter out hours that have already passed if booking for today
+                          if (isDateToday) {
+                            const slotMin = timeToMinutes(slot);
+                            if (slotMin <= curMin) {
+                              return false;
+                            }
+                          }
+
                           if (isExtranjeria) {
                             const bookedCount = mergedBookings.filter(c => 
                               c.fecha === fecha && 
@@ -789,12 +826,18 @@ export default function AgendamientoCita({
                           return (
                             <div className="bg-amber-50 border border-amber-200 text-amber-950 p-4 rounded text-center space-y-2 shadow-sm">
                               <p className="font-extrabold text-xs uppercase text-amber-800 tracking-wide">
-                                {isPastAgeTrámiteSelected ? '⚠️ Horarios de Pasado de Edad Agotados' : '⚠️ Horarios de Extranjería Agotados'}
+                                {isDateToday
+                                  ? '⚠️ Horarios de Hoy Concluidos'
+                                  : isPastAgeTrámiteSelected 
+                                    ? '⚠️ Horarios de Pasado de Edad Agotados' 
+                                    : '⚠️ Horarios de Extranjería Agotados'}
                               </p>
                               <p className="text-[11px] font-semibold text-slate-650 max-w-sm mx-auto leading-relaxed">
-                                {isPastAgeTrámiteSelected 
-                                  ? 'Todos los cupos de pasados de edad para este día han sido reservados (máximo 1 persona por cada horario: 8:00 AM, 9:00 AM, 10:30 AM y 11:30 AM). Por favor, seleccione otra fecha en el calendario.'
-                                  : `Todos los cupos horarios de extranjería para este día han sido completados (máximo ${extranjeriaConfig.capacity} personas por intervalo). Por favor, seleccione otra fecha en el calendario.`
+                                {isDateToday
+                                  ? 'Los horarios de atención para el día de hoy ya han transcurrido o no cuentan con cupos futuros disponibles. Por favor, seleccione el siguiente día hábil en el calendario superior.'
+                                  : isPastAgeTrámiteSelected 
+                                    ? 'Todos los cupos de pasados de edad para este día han sido reservados (máximo 1 persona por cada horario: 8:00 AM, 9:00 AM, 10:30 AM y 11:30 AM). Por favor, seleccione otra fecha en el calendario.'
+                                    : `Todos los cupos horarios de extranjería para este día han sido completados (máximo ${extranjeriaConfig.capacity} personas por intervalo). Por favor, seleccione otra fecha en el calendario.`
                                 }
                               </p>
                             </div>
