@@ -5,7 +5,6 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Ticket, TicketStatus, TicketPhase, Cubicle, CubicleStatus, ServiceType, SERVICES_CONFIG } from "../types";
-import { getSupabaseClient } from "../utils/supabaseClient";
 
 const STORAGE_KEYS = {
   TICKETS: "ticket_system_tickets_v1",
@@ -664,8 +663,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
   const isAutoAssignActive = officeAutoAssign[currentOfficeId] !== false;
 
-  // Evitar loops infinitos y colisiones de sincronización con Supabase
-  const lastSupabaseStateRef = useRef<string>("");
+  // Evitar loops innecesarios en serialización de estado
   const currentStateRef = useRef<string>("");
   currentStateRef.current = JSON.stringify({
     tickets: officeTickets[currentOfficeId] || [],
@@ -835,247 +833,6 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     }
   }, [currentOfficeId]);
 
-  // --- INTEGRACIÓN REAL CON SUPABASE ---
-  const [supabaseSyncStatus, setSupabaseSyncStatus] = useState<"idle" | "offline" | "syncing" | "success" | "error">("idle");
-
-  // Sync to Supabase reactively with a 1.5s debounce to cluster fast UI sequential actions
-  useEffect(() => {
-    const supabase = getSupabaseClient();
-    if (!supabase) {
-      setSupabaseSyncStatus("offline");
-      return;
-    }
-
-    const currentState = JSON.stringify({
-      tickets: officeTickets[currentOfficeId] || [],
-      cubicles: officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
-      auto_assign: officeAutoAssign[currentOfficeId] !== false
-    });
-
-    // Si el estado local ya coincide exactamente con lo último que se recibió/envió a Supabase, no hacemos nada
-    if (currentState === lastSupabaseStateRef.current) {
-      setSupabaseSyncStatus("success");
-      return;
-    }
-
-    setSupabaseSyncStatus("syncing");
-    const timeoutId = setTimeout(async () => {
-      try {
-        const { error } = await supabase
-          .from("office_state")
-          .upsert({
-            office_id: currentOfficeId,
-            tickets: officeTickets[currentOfficeId] || [],
-            cubicles: officeCubicles[currentOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c })),
-            auto_assign: officeAutoAssign[currentOfficeId] !== false,
-            updated_at: new Date().toISOString()
-          }, { onConflict: "office_id" });
-
-        if (error) {
-          throw error;
-        }
-        
-        lastSupabaseStateRef.current = currentState;
-        setSupabaseSyncStatus("success");
-      } catch (err: any) {
-        console.warn("Supabase sync issue:", err?.message || err);
-        setSupabaseSyncStatus("error");
-      }
-    }, 1500);
-
-    return () => clearTimeout(timeoutId);
-  }, [officeTickets, officeCubicles, officeAutoAssign, currentOfficeId]);
-
-  // Load initial office data from Supabase
-  const pullOfficeFromSupabase = useCallback(async (targetOfficeId: string = currentOfficeId) => {
-    const supabase = getSupabaseClient();
-    if (!supabase) return false;
-
-    setSupabaseSyncStatus("syncing");
-    try {
-      const { data, error } = await supabase
-        .from("office_state")
-        .select("*")
-        .eq("office_id", targetOfficeId)
-        .maybeSingle();
-
-      if (error) {
-        console.warn("Supabase pull table issue:", error.message);
-        setSupabaseSyncStatus("error");
-        return false;
-      }
-
-      if (data) {
-        const remoteTickets = (data.tickets || []) as Ticket[];
-        let remoteCubicles = (data.cubicles || []) as Cubicle[];
-        // Filter out obsolete cubicles CUB-32 and CUB-33 from remote
-        remoteCubicles = remoteCubicles.filter(c => {
-          const num = parseInt(c.id.replace("CUB-", ""), 10);
-          return !isNaN(num) && (num < 32 || num > 33);
-        });
-        if (remoteCubicles.length !== INITIAL_CUBICLES.length) {
-          remoteCubicles = INITIAL_CUBICLES.map(c => {
-            const cubicle = { ...c };
-            if (targetOfficeId !== "OFF-1") {
-              cubicle.supportedServices = (cubicle.supportedServices || []).filter(s => s !== ServiceType.EXTRANJERIA);
-            }
-            return cubicle;
-          });
-        } else {
-          // Normalize and apply migrateCubicleState to remote loaded cubicles
-          remoteCubicles = remoteCubicles.map(c => migrateCubicleState(c, targetOfficeId));
-        }
-        const remoteAutoAssign = data.auto_assign as boolean;
-
-        const remoteStateStr = JSON.stringify({
-          tickets: remoteTickets,
-          cubicles: remoteCubicles,
-          auto_assign: remoteAutoAssign
-        });
-
-        if (remoteStateStr !== currentStateRef.current) {
-          lastSupabaseStateRef.current = remoteStateStr;
-
-          setOfficeTickets(prev => ({ ...prev, [targetOfficeId]: remoteTickets }));
-          setOfficeCubicles(prev => ({ ...prev, [targetOfficeId]: remoteCubicles }));
-          setOfficeAutoAssign(prev => ({ ...prev, [targetOfficeId]: remoteAutoAssign }));
-        }
-        
-        setSupabaseSyncStatus("success");
-        return true;
-      } else {
-        // Office row does not exist yet in table; treat as success (empty remote)
-        setSupabaseSyncStatus("success");
-        return true;
-      }
-    } catch (err: any) {
-      console.warn("Error pulling from Supabase:", err?.message || err);
-      setSupabaseSyncStatus("error");
-    }
-    return false;
-  }, [currentOfficeId]);
-
-  // Push immediate manual trigger
-  const pushOfficeToSupabase = useCallback(async (targetOfficeId: string = currentOfficeId) => {
-    const supabase = getSupabaseClient();
-    if (!supabase) return false;
-
-    const currentTickets = officeTickets[targetOfficeId] || [];
-    const currentCubicles = officeCubicles[targetOfficeId] || INITIAL_CUBICLES.map(c => ({ ...c }));
-    const currentAutoAssign = officeAutoAssign[targetOfficeId] !== false;
-
-    setSupabaseSyncStatus("syncing");
-    try {
-      const { error } = await supabase
-        .from("office_state")
-        .upsert({
-          office_id: targetOfficeId,
-          tickets: currentTickets,
-          cubicles: currentCubicles,
-          auto_assign: currentAutoAssign,
-          updated_at: new Date().toISOString()
-        }, { onConflict: "office_id" });
-
-      if (error) {
-        console.warn("Supabase push table issue:", error.message);
-        setSupabaseSyncStatus("error");
-        return false;
-      }
-
-      lastSupabaseStateRef.current = JSON.stringify({
-        tickets: currentTickets,
-        cubicles: currentCubicles,
-        auto_assign: currentAutoAssign
-      });
-
-      setSupabaseSyncStatus("success");
-      return true;
-    } catch (err: any) {
-      console.warn("Error pushing to Supabase:", err?.message || err);
-      setSupabaseSyncStatus("error");
-      return false;
-    }
-  }, [officeTickets, officeCubicles, officeAutoAssign]);
-
-  // Realtime subscription to keep other devices/browsers perfectly synchronized in real-time
-  useEffect(() => {
-    const supabase = getSupabaseClient();
-    if (!supabase) return;
-
-    const channelName = `realtime-office-${currentOfficeId}`;
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "office_state",
-          filter: `office_id=eq.${currentOfficeId}`
-        },
-        (payload: any) => {
-          if (payload.new) {
-            const remoteTickets = (payload.new.tickets || []) as Ticket[];
-            let remoteCubicles = (payload.new.cubicles || []) as Cubicle[];
-            // Filter out obsolete cubicles CUB-32 and CUB-33 from remote subscription
-            remoteCubicles = remoteCubicles.filter(c => {
-              const num = parseInt(c.id.replace("CUB-", ""), 10);
-              return !isNaN(num) && (num < 32 || num > 33);
-            });
-            if (remoteCubicles.length !== INITIAL_CUBICLES.length) {
-              remoteCubicles = INITIAL_CUBICLES.map(c => {
-                const cubicle = { ...c };
-                if (currentOfficeId !== "OFF-1") {
-                  cubicle.supportedServices = (cubicle.supportedServices || []).filter(s => s !== ServiceType.EXTRANJERIA);
-                }
-                return cubicle;
-              });
-            } else {
-              // Normalize and apply migrateCubicleState to remote realtime cubicles
-              remoteCubicles = remoteCubicles.map(c => migrateCubicleState(c, currentOfficeId));
-            }
-            const remoteAutoAssign = payload.new.auto_assign !== false;
-
-            const incomingStateStr = JSON.stringify({
-              tickets: remoteTickets,
-              cubicles: remoteCubicles,
-              auto_assign: remoteAutoAssign
-            });
-
-            // Solo aplicamos si el estado recibido difiere del estado local actual
-            if (incomingStateStr !== currentStateRef.current) {
-              lastSupabaseStateRef.current = incomingStateStr;
-              
-              setOfficeTickets(prev => ({ ...prev, [currentOfficeId]: remoteTickets }));
-              setOfficeCubicles(prev => ({ ...prev, [currentOfficeId]: remoteCubicles }));
-              setOfficeAutoAssign(prev => ({ ...prev, [currentOfficeId]: remoteAutoAssign }));
-              setSupabaseSyncStatus("success");
-            }
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [currentOfficeId]);
-
-  // Robust periodic polling fallback from Supabase to guarantee synchronization on separate physical TV screens
-  useEffect(() => {
-    const supabase = getSupabaseClient();
-    if (!supabase) return;
-
-    const interval = setInterval(() => {
-      // Only poll if the tab is active and visible to prevent backend spam
-      if (document.visibilityState === "visible") {
-        pullOfficeFromSupabase(currentOfficeId);
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [currentOfficeId, pullOfficeFromSupabase]);
-
   // Listen to standard storage events to keep multiple tabs on the same computer synchronized in real-time
   useEffect(() => {
     const handleStorageChange = (e: Event) => {
@@ -1171,14 +928,6 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       window.removeEventListener("storage", handleStorageChange);
     };
   }, [currentOfficeId, officeTickets, officeCubicles, officeAutoAssign]);
-
-  // Initial pull trigger for active office if Supabase keys exist
-  useEffect(() => {
-    const config = getSupabaseClient();
-    if (config) {
-      pullOfficeFromSupabase(currentOfficeId);
-    }
-  }, [currentOfficeId, pullOfficeFromSupabase]);
 
   // Clean / Reset the whole system
   const resetSystem = useCallback(() => {
@@ -1935,9 +1684,6 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     officeTickets,
     setOfficeTickets,
     officeCubicles,
-    setOfficeCubicles,
-    supabaseSyncStatus,
-    pullOfficeFromSupabase,
-    pushOfficeToSupabase
+    setOfficeCubicles
   };
 }

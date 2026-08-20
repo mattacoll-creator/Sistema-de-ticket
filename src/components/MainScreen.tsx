@@ -18,10 +18,9 @@ interface MainScreenProps {
   onTestSpeaker: () => void;
   currentOfficeId?: string;
   gatewaySelection?: "select" | "cedulacion" | "registro_civil";
-  supabaseSyncStatus?: "idle" | "offline" | "syncing" | "success" | "error";
 }
 
-export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion", supabaseSyncStatus = "offline" }: MainScreenProps) {
+export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: MainScreenProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV" | "RC_OTROS">("general");
@@ -306,9 +305,12 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               {/* TE Logo styled precisely for Light Theme */}
               <div className="flex items-center gap-3 select-none">
                 <img 
-                  src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/AGENDATE-01.png" 
+                  src="/images/agendate-logo.png" 
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = "/images/agendate-logo.svg";
+                  }}
                   referrerPolicy="no-referrer"
-                  alt="TE" 
+                  alt="AgéndaTE" 
                   className="h-12 w-auto object-contain pr-1" 
                 />
                 <div className="flex flex-col text-left border-l border-slate-300 pl-3">
@@ -333,17 +335,10 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               </span>
 
               {/* Sync Status Badge */}
-              {supabaseSyncStatus === "offline" ? (
-                <span className="text-[9.5px] bg-amber-50 border border-amber-200 text-amber-700 font-mono px-3 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Sincronización fuera de línea: La información se guarda y actualiza de manera local en este navegador. Para usar varias pantallas/dispositivos por separado, configure Supabase en el panel de control.">
-                  <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse"></span>
-                  <span>Modo Local / Sin Servidor</span>
-                </span>
-              ) : (
-                <span className="text-[9.5px] bg-emerald-50 border border-emerald-200 text-emerald-700 font-mono px-3 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Conexión en tiempo real activa: Esta pantalla está sincronizada con el servidor central.">
-                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
-                  <span>Conectado (Nube TE)</span>
-                </span>
-              )}
+              <span className="text-[9.5px] bg-emerald-50 border border-emerald-200 text-emerald-700 font-mono px-3 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Conexión en tiempo real activa">
+                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
+                <span>Sistema en Línea (TE)</span>
+              </span>
 
               {/* Speaker Control & Test (styled as glassy settings badge) */}
               <div className="flex items-center gap-2.5 bg-slate-100 border border-slate-205 px-3.5 py-1.5 rounded-xl font-mono text-[10px] tracking-wider text-slate-805 select-none shadow-sm">
@@ -403,11 +398,11 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               <div className="flex items-center gap-3 select-none">
                 <img 
                   src={selectedChannel === TicketPhase.CAJA
-                    ? "https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/Logo-TE-aniversario-256x256px-blanco-02.png"
-                    : "https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/AGENDATE-01.png"
+                    ? "/images/logo-te-aniversario.png"
+                    : "/images/agendate-logo.png"
                   }
                   referrerPolicy="no-referrer"
-                  alt="TE" 
+                  alt="Tribunal Electoral" 
                   className={selectedChannel === TicketPhase.CAJA
                     ? "h-20 md:h-24 w-auto object-contain pr-1 transition-all"
                     : "h-12 w-auto object-contain pr-1 bg-white/10 p-1 rounded-lg transition-all"
@@ -433,17 +428,10 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               </span>
 
               {/* Sync Status Badge */}
-              {supabaseSyncStatus === "offline" ? (
-                <span className="text-[9px] bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono px-2.5 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Sincronización fuera de línea: La información se guarda de manera local en este navegador. Para usar varias pantallas por separado, configure Supabase en el panel de control.">
-                  <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
-                  <span>Modo Local / Sin Servidor</span>
-                </span>
-              ) : (
-                <span className="text-[9px] bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 font-mono px-2.5 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Conexión en tiempo real activa: Esta pantalla está sincronizada con el servidor central.">
-                  <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
-                  <span>Conectado (Nube TE)</span>
-                </span>
-              )}
+              <span className="text-[9px] bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 font-mono px-2.5 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Conexión en tiempo real activa">
+                <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+                <span>Sistema en Línea (TE)</span>
+              </span>
             </div>
 
             <div className="flex items-center justify-between md:justify-end gap-5">

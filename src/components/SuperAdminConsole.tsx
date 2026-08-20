@@ -32,7 +32,6 @@ import {
 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES } from "./WelcomeKiosk";
-import { resetSupabaseClient, SUPABASE_SQL_SETUP_SCRIPT } from "../utils/supabaseClient";
 
 interface SuperAdminConsoleProps {
   officeTickets: Record<string, Ticket[]>;
@@ -41,9 +40,6 @@ interface SuperAdminConsoleProps {
   setOfficeCubicles: React.Dispatch<React.SetStateAction<Record<string, Cubicle[]>>>;
   users: SystemUser[];
   setUsers: React.Dispatch<React.SetStateAction<SystemUser[]>>;
-  supabaseSyncStatus?: "idle" | "offline" | "syncing" | "success" | "error";
-  pullOfficeFromSupabase?: (officeId: string) => Promise<boolean>;
-  pushOfficeToSupabase?: (officeId: string) => Promise<boolean>;
   currentOfficeId?: string;
   gatewaySelection?: "cedulacion" | "registro_civil";
 }
@@ -57,93 +53,12 @@ export default function SuperAdminConsole({
   setOfficeCubicles,
   users,
   setUsers,
-  supabaseSyncStatus = "idle",
-  pullOfficeFromSupabase,
-  pushOfficeToSupabase,
   currentOfficeId,
   gatewaySelection = "cedulacion"
 }: SuperAdminConsoleProps) {
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>("mes");
   const [selectedOfficeDetailId, setSelectedOfficeDetailId] = useState<string>("OFF-1");
   const [isGeneratingMock, setIsGeneratingMock] = useState(false);
-
-  // --- ESTADOS LOCALES PARA LA INTEGRACIÓN DE SUPABASE CLOUD ---
-  const [supabaseUrl, setSupabaseUrl] = useState<string>(() => {
-    return localStorage.getItem("ticket_system_supabase_url") || "";
-  });
-  const [supabaseAnonKey, setSupabaseAnonKey] = useState<string>(() => {
-    return localStorage.getItem("ticket_system_supabase_anon_key") || "";
-  });
-  const [configSuccess, setConfigSuccess] = useState<boolean>(false);
-  const [sqlCopied, setSqlCopied] = useState<boolean>(false);
-  const [showSqlSchema, setShowSqlSchema] = useState<boolean>(false);
-  const [isSyncingManual, setIsSyncingManual] = useState<boolean>(false);
-  const [manualSyncMsg, setManualSyncMsg] = useState<string>("");
-
-  const handleSaveSupabaseConfig = () => {
-    try {
-      if (supabaseUrl.trim()) {
-        localStorage.setItem("ticket_system_supabase_url", supabaseUrl.trim());
-      } else {
-        localStorage.removeItem("ticket_system_supabase_url");
-      }
-
-      if (supabaseAnonKey.trim()) {
-        localStorage.setItem("ticket_system_supabase_anon_key", supabaseAnonKey.trim());
-      } else {
-        localStorage.removeItem("ticket_system_supabase_anon_key");
-      }
-
-      resetSupabaseClient();
-      setConfigSuccess(true);
-      setTimeout(() => setConfigSuccess(false), 3000);
-
-      // Trigger standard storage reload event to refresh client dynamically
-      window.dispatchEvent(new Event("storage"));
-      
-      // Auto-reload to re-initialize supabase on the active hook instance
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
-
-    } catch (e) {
-      console.error("Failed to save credentials", e);
-    }
-  };
-
-  const handleCopySql = () => {
-    navigator.clipboard.writeText(SUPABASE_SQL_SETUP_SCRIPT);
-    setSqlCopied(true);
-    setTimeout(() => setSqlCopied(false), 3000);
-  };
-
-  const handleManualPull = async () => {
-    if (!pullOfficeFromSupabase) return;
-    setIsSyncingManual(true);
-    setManualSyncMsg("Solicitando estado remoto a Supabase...");
-    const success = await pullOfficeFromSupabase(currentOfficeId || "OFF-1");
-    setIsSyncingManual(false);
-    if (success) {
-      setManualSyncMsg("¡Estado remoto cargado y sincronizado exitosamente!");
-    } else {
-      setManualSyncMsg("Error al obtener estado remoto. Revise credenciales u tablas.");
-    }
-    setTimeout(() => setManualSyncMsg(""), 4000);
-  };
-
-  const handleManualPush = async () => {
-    if (!pushOfficeToSupabase) return;
-    setIsSyncingManual(true);
-    setManualSyncMsg("Subiendo estado actual a Supabase...");
-    const success = await pushOfficeToSupabase(currentOfficeId || "OFF-1");
-    setIsSyncingManual(false);
-    if (success) {
-      setManualSyncMsg("¡Estado local subido exitosamente a Supabase!");
-    } else {
-      setManualSyncMsg("Error al empujar datos. Compruebe credenciales.");
-    }
-    setTimeout(() => setManualSyncMsg(""), 4000);
-  };
 
   // --- ESTADOS LOCALES PARA LA CONSOLA DE BASE DE DATOS LOCAL ---
   const [dbStatusMsg, setDbStatusMsg] = useState<string>("");
@@ -1858,7 +1773,7 @@ export default function SuperAdminConsole({
               Infraestructura de Bases de Datos y Sincronización Postgres
             </h3>
             <p className="text-xs text-slate-450 font-medium font-sans">
-              Controle la integridad de los registros relacionales locales y configure la pasarela de sincronización con Supabase Cloud DB.
+              Controle la integridad de los registros relacionales locales y configure la pasarela de sincronización con la base de datos centralizada PostgreSQL.
             </p>
           </div>
           <div className="flex items-center gap-1.5 px-3 py-1 bg-sky-50 border border-sky-150 rounded-full font-mono text-[9px] font-black uppercase text-sky-700 w-fit">
@@ -1985,154 +1900,6 @@ export default function SuperAdminConsole({
                   <span>Chequear Schema</span>
                 </button>
               </div>
-            </div>
-          </div>
-
-          {/* CARD 2: CONEXIÓN SUPABASE POSTGRES */}
-          <div id="supabase-cloud-integration-suite" className="bg-slate-50 border border-slate-200 p-5 rounded-xl space-y-4 shadow-xs">
-            <div className="flex items-center justify-between">
-              <h4 className="text-[10px] font-black text-slate-800 uppercase tracking-widest flex items-center gap-1.5 font-mono">
-                <Cloud className="w-4 h-4 text-sky-600" />
-                Conexión Supabase Postgres
-              </h4>
-              
-              {/* Sync status pill indicator with colors */}
-              <span className={`text-[8px] border px-1.5 py-0.5 rounded font-black font-mono flex items-center gap-1 ${
-                supabaseSyncStatus === "success" 
-                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                  : supabaseSyncStatus === "syncing"
-                  ? "bg-amber-50 border-amber-200 text-amber-800 animate-pulse"
-                  : supabaseSyncStatus === "error"
-                  ? "bg-rose-50 border-rose-200 text-rose-800"
-                  : "bg-slate-100 border-slate-250 text-slate-500"
-              }`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${
-                  supabaseSyncStatus === "success" 
-                    ? "bg-emerald-600"
-                    : supabaseSyncStatus === "syncing"
-                    ? "bg-amber-500"
-                    : supabaseSyncStatus === "error"
-                    ? "bg-rose-600"
-                    : "bg-slate-400"
-                }`} />
-                {supabaseSyncStatus === "success" && "CLOUD CONECTADO"}
-                {supabaseSyncStatus === "syncing" && "SINCRONIZANDO"}
-                {supabaseSyncStatus === "error" && "ERROR ENLACE"}
-                {supabaseSyncStatus === "offline" && "SIN CONFIGURAR"}
-                {supabaseSyncStatus === "idle" && "CONECTADO"}
-              </span>
-            </div>
-
-            <p className="text-[10px] font-medium text-slate-550 leading-relaxed font-sans">
-              Guarda en la nube las colas transaccionales y los cubículos. Soporta múltiples sucursales compartiendo colas en tiempo real.
-            </p>
-
-            {/* Setup Credentials Input Area */}
-            <div className="space-y-2 bg-white border border-slate-150 p-3 rounded-lg shadow-xs">
-              <div>
-                <label className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block mb-1">
-                  Supabase URL (VITE_SUPABASE_URL)
-                </label>
-                <input
-                  type="text"
-                  placeholder="https://your-project.supabase.co"
-                  value={supabaseUrl}
-                  onChange={(e) => setSupabaseUrl(e.target.value)}
-                  className="w-full text-[10px] font-mono px-2 py-1.5 bg-slate-50 border border-slate-200 rounded focus:border-sky-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block mb-1">
-                  API Key Anónima (VITE_SUPABASE_ANON_KEY)
-                </label>
-                <input
-                  type="password"
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  value={supabaseAnonKey}
-                  onChange={(e) => setSupabaseAnonKey(e.target.value)}
-                  className="w-full text-[10px] font-mono px-2 py-1.5 bg-slate-50 border border-slate-200 rounded focus:border-sky-500 focus:outline-none"
-                />
-              </div>
-
-              {configSuccess && (
-                <p className="text-[9px] text-emerald-600 font-bold font-mono">
-                  ✔️ Credenciales actualizadas. Recargando núcleo...
-                </p>
-              )}
-
-              <button
-                type="button"
-                onClick={handleSaveSupabaseConfig}
-                className="w-full py-2 bg-sky-600 hover:bg-sky-700 text-white rounded font-extrabold text-[9px] uppercase tracking-wider transition-all cursor-pointer"
-              >
-                Guardar Credenciales y Relanzar
-              </button>
-            </div>
-
-            {/* Sync Operations and manual overrides */}
-            {supabaseSyncStatus !== "offline" && (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={handleManualPull}
-                    disabled={isSyncingManual}
-                    className="py-2.5 px-2 bg-slate-900 text-white hover:bg-slate-800 rounded-lg text-center font-bold text-[9px] uppercase tracking-wider transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1"
-                    title="Descargar el estado remoto de este Tribunal Electoral e implantarlo localmente."
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isSyncingManual ? "animate-spin" : ""}`} />
-                    <span>Cargar Nube</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleManualPush}
-                    disabled={isSyncingManual}
-                    className="py-2.5 px-2 bg-white hover:bg-slate-100 text-slate-850 border border-slate-250 rounded-lg text-center font-black text-[9px] uppercase tracking-wider transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1"
-                    title="Subir inmediatamente el estado local a la fila Cloud de Supabase."
-                  >
-                    <Cloud className="w-3.5 h-3.5 text-sky-600" />
-                    <span>Subir Nube</span>
-                  </button>
-                </div>
-
-                {manualSyncMsg && (
-                  <div className="p-2 bg-sky-50 border border-sky-150 rounded text-[9.5px] font-mono text-sky-800 text-center">
-                    {manualSyncMsg}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Accordion to Setup Supabase Table Script */}
-            <div className="pt-1 border-t border-slate-200">
-              <button
-                type="button"
-                onClick={() => setShowSqlSchema(!showSqlSchema)}
-                className="text-[8.5px] text-slate-500 hover:text-sky-700 font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-all"
-              >
-                <ExternalLink className="w-3 h-3 text-slate-400" />
-                {showSqlSchema ? "Ocultar Script SQL Postgres" : "Ver Script SQL Postgres"}
-              </button>
-              
-              {showSqlSchema && (
-                <div className="mt-2 space-y-1.5 animate-fadeIn">
-                  <p className="text-[8.5px] text-slate-400 leading-relaxed">
-                    Crea e inicializa la tabla en el editor SQL de Supabase antes de conectar para evitar errores físicos:
-                  </p>
-                  <div className="bg-slate-900 rounded p-2 text-[8px] font-mono text-slate-300 relative overflow-x-auto max-h-[150px]">
-                    <button
-                      type="button"
-                      onClick={handleCopySql}
-                      className="absolute top-1 right-1 bg-slate-800 hover:bg-slate-700 text-slate-200 px-1.5 py-0.5 rounded text-[7.5px] font-bold uppercase cursor-pointer"
-                    >
-                      {sqlCopied ? "Copiado!" : "Copiar"}
-                    </button>
-                    <pre className="text-left select-all">{SUPABASE_SQL_SETUP_SCRIPT}</pre>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>

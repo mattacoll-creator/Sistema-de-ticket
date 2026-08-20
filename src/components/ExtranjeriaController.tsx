@@ -2727,14 +2727,10 @@ export default function ExtranjeriaController({ currentRole, forceSubRole }: Ext
                 <div className="relative shrink-0">
                   <div className="absolute -inset-1 bg-amber-500/10 rounded-xl blur" />
                   <img
-                    src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/04/WhatsApp-Image-2026-04-30-at-09.45.35.png"
+                    src="/images/logo-sede-te.png"
                     alt="Tribunal Electoral Logo"
                     className="w-16 h-16 object-contain rounded-xl bg-white p-1.5 border border-amber-500/30 relative z-10"
                     referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      // Silently fall back if blocking happens
-                      (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1541872703-74c5e44368f9?auto=format&fit=crop&w=120&q=80";
-                    }}
                   />
                 </div>
                 <div className="space-y-0.5">

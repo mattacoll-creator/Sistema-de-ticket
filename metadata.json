@@ -1,6 +1,6 @@
 {
-  "name": "Tribunal Electoral de Panamá - Citas",
-  "description": "Sistema oficial de citas del Tribunal Electoral de Panamá para trámites de Cedulación, Registro Civil, Extranjería y Organización Electoral.",
+  "name": "Agendate",
+  "description": "Sistema oficial de citas y gestión de turnos del Tribunal Electoral de Panamá para trámites de Cedulación, Registro Civil, Extranjería y Organización Electoral.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

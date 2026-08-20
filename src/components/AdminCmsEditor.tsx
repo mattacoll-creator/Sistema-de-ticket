@@ -403,7 +403,7 @@ export default function AdminCmsEditor({ onConfigSaved }: AdminCmsEditorProps) {
         <AlertCircle className="w-5 h-5" />
         <div>
           <h4 className="font-bold">Error al inicializar el CMS</h4>
-          <p className="text-xs mt-1">El servidor no devolvió una estructura de configuración válida. Verifique la conexión con Supabase o el archivo local.</p>
+          <p className="text-xs mt-1">El servidor no devolvió una estructura de configuración válida. Verifique la conexión con la base de datos o el archivo local.</p>
         </div>
       </div>
     );

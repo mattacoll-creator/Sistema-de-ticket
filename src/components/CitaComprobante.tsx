@@ -358,7 +358,7 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
             {/* Logo Oficial */}
             <div className="p-1 px-2 shrink-0 flex items-center justify-center">
               <img
-                src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/06/Logo-TE-aniversario-256x256px-blanco-02.png"
+                src="/images/logo-te-aniversario.png"
                 alt="Tribunal Electoral de Panamá"
                 className="h-12 md:h-14 w-auto object-contain"
                 referrerPolicy="no-referrer"
@@ -645,12 +645,9 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
         {emailStatus === 'error' && (
           <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded text-xs space-y-2">
             <div>
-              <p className="font-extrabold flex items-center gap-1.5">
+              <p className="font-extrabold flex items-center gap-1.5 text-red-700">
                 <AlertCircle className="w-4 h-4 text-red-600" />
                 <span>No se pudo procesar el correo</span>
-              </p>
-              <p className="font-medium text-[11.5px] leading-normal text-red-700 pl-5 whitespace-pre-line">
-                {emailMessage}
               </p>
             </div>
             
@@ -670,8 +667,8 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
                 </div>
                 {showConfHtmlPreview && (
                   <div className="bg-white rounded border border-red-200 overflow-hidden shadow-sm">
-                    <div className="bg-slate-105 p-2.5 text-[10px] border-b border-slate-200 text-slate-500 font-mono flex items-center justify-between">
-                      <span>De: Tribunal Electoral (simulado en error)</span>
+                    <div className="bg-slate-100 p-2.5 text-[10px] border-b border-slate-200 text-slate-500 font-mono flex items-center justify-between">
+                      <span>De: Tribunal Electoral</span>
                       <span>Para: {emailInput}</span>
                     </div>
                     <div 

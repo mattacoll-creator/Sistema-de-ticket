@@ -79,10 +79,7 @@ export default function App() {
     officeTickets,
     setOfficeTickets,
     officeCubicles,
-    setOfficeCubicles,
-    supabaseSyncStatus,
-    pullOfficeFromSupabase,
-    pushOfficeToSupabase
+    setOfficeCubicles
   } = useTicketSystem(gatewaySelection);
 
   // --- INTEGRACIÓN GESTIÓN DE ROLES Y USUARIOS ---
@@ -385,12 +382,12 @@ export default function App() {
           <div className="max-w-4xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-3">
               <img
-                src="https://sede.tribunal-electoral.gob.pa/assets/images/logo_te.png"
+                src="/images/logo-te-aniversario.png"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = "https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/06/Logo-TE-aniversario-256x256px-blanco-02.png";
+                }}
                 alt="Tribunal Electoral de Panamá"
                 className="h-10 sm:h-12 w-auto object-contain"
-                onError={(e) => {
-                  (e.currentTarget as HTMLElement).style.display = "none";
-                }}
               />
               <div>
                 <h1 className="text-xs sm:text-sm font-black text-[#003087] tracking-tight uppercase">
@@ -893,7 +890,7 @@ export default function App() {
           
           <div className="flex flex-col md:flex-row md:items-center gap-4 pl-1">
             <img 
-              src="https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/05/AGENDATE-01.png" 
+              src="/images/agendate-logo.png" 
               referrerPolicy="no-referrer" 
               alt="Tribunal Electoral de Panamá" 
               className="h-14 md:h-16 w-auto object-contain self-start md:self-center" 
@@ -964,6 +961,19 @@ export default function App() {
           >
             <Printer className="w-4 h-4 text-amber-500" />
             <span>Kiosko de Turnos (Clientes)</span>
+          </button>
+
+          <button
+            id="tab-view-tracker"
+            onClick={() => setActiveTab("tracker")}
+            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+              activeTab === "tracker"
+                ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
+            }`}
+          >
+            <Smartphone className="w-4 h-4 text-cyan-500" />
+            <span>Seguimiento Móvil (Tracker)</span>
           </button>
 
           <button
@@ -1101,6 +1111,23 @@ export default function App() {
           </div>
         )}
 
+        {activeTab === "tracker" && (
+          <div className="w-full py-4">
+            <TicketTracker
+              tickets={tickets}
+              cubicles={cubicles}
+              initialTicketCode={trackingTicketCode}
+              onNavigateToKiosk={() => setActiveTab("kiosk")}
+              currentOfficeId={currentOfficeId}
+              officeTickets={officeTickets}
+              officeCubicles={officeCubicles}
+              onSelectOffice={(officeId) => {
+                setCurrentOfficeId(officeId);
+              }}
+            />
+          </div>
+        )}
+
         {activeTab === "tv" && (
           <div className="w-full py-4">
             <MainScreen
@@ -1111,7 +1138,6 @@ export default function App() {
               onTestSpeaker={handleTestSpeaker}
               currentOfficeId={currentOfficeId}
               gatewaySelection={gatewaySelection}
-              supabaseSyncStatus={supabaseSyncStatus}
             />
           </div>
         )}
@@ -1193,9 +1219,6 @@ export default function App() {
                 setOfficeCubicles={setOfficeCubicles}
                 users={users}
                 setUsers={setUsers}
-                supabaseSyncStatus={supabaseSyncStatus}
-                pullOfficeFromSupabase={pullOfficeFromSupabase}
-                pushOfficeToSupabase={pushOfficeToSupabase}
                 currentOfficeId={currentOfficeId}
                 gatewaySelection={gatewaySelection}
               />

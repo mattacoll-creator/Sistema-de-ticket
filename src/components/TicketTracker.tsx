@@ -166,6 +166,7 @@ export default function TicketTracker({
       t.id.toUpperCase() === cleanCode ||
       t.id.toUpperCase().includes(cleanCode) ||
       t.numberCode.toUpperCase().replace(/[-\s]/g, "") === cleanNormalized ||
+      (t.name && t.name.toUpperCase().includes(cleanCode)) ||
       ((t as any).citizenId && (t as any).citizenId.trim().toUpperCase() === cleanCode) ||
       ((t as any).cedula && (t as any).cedula.trim().toUpperCase() === cleanCode);
 
