@@ -6,7 +6,7 @@
 import React, { useState } from "react";
 import { useTicketSystem } from "./hooks/useTicketSystem";
 import { ServiceType, SERVICES_CONFIG, OFFICES_CONFIG, UserRole, SystemUser } from "./types";
-import { playCallingChime, speakCall } from "./utils/audio";
+import { playCallingChime, speakCall, announceAndCall } from "./utils/audio";
 
 
 // Import custom components
@@ -49,7 +49,7 @@ import {
 } from "lucide-react";
 
 export default function App() {
-  // Track selected gateway option: "select" | "cedulacion" | "registro_civil"
+  // Track selected gateway option: default to "select" (Vista Unificada / Agéndate)
   const [gatewaySelection, setGatewaySelection] = useState<"select" | "cedulacion" | "registro_civil">("select");
 
   const {
@@ -218,9 +218,10 @@ export default function App() {
     }
   }, []);
 
-  // Update browser URL search query parameters dynamically
+  // Update browser URL search query parameters and document title dynamically
   React.useEffect(() => {
     if (typeof window === "undefined") return;
+    document.title = "Agéndate - Tribunal Electoral";
     try {
       const url = new URL(window.location.href);
       let viewVal = "unificado";
@@ -334,9 +335,7 @@ export default function App() {
   // Speaker Test trigger
   const handleTestSpeaker = async () => {
     try {
-      await playCallingChime();
-      await new Promise(r => setTimeout(r, 450));
-      await speakCall("P-01", "María Delgado", "Módulo de Pruebas");
+      await announceAndCall("C-001", "Emmanuel Lobo", "Caja 1", 2);
     } catch (e) {
       console.warn("Dispositivo bloqueó la síntesis de voz automática.", e);
     }

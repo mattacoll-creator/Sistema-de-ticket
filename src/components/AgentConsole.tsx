@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from "react";
-import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES, getProcedureName } from "./WelcomeKiosk";
+import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES, CAJA_PROCEDURES, getProcedureName } from "./WelcomeKiosk";
 import { Ticket, Cubicle, TicketStatus, CubicleStatus, SERVICES_CONFIG, ServiceType, TicketPhase, PHASES_CONFIG, SystemUser, UserRole, OFFICES_CONFIG } from "../types";
 import { canCubicleServeProcedure } from "../hooks/useTicketSystem";
 import { 
@@ -33,7 +33,8 @@ import {
   Grid,
   ShieldAlert,
   DollarSign,
-  Camera
+  Camera,
+  Receipt
 } from "lucide-react";
 
 export function getUserDisplayDetails(u: SystemUser, isRc: boolean) {
@@ -192,6 +193,44 @@ export default function AgentConsole({
     return null;
   });
 
+  // Procedimiento seleccionado en Caja para el tiquet activo
+  const [selectedCajaProc, setSelectedCajaProc] = useState<string | null>(null);
+
+  // Estadísticas diarias de trámites pagados en Caja (CPV, REN, DUP, CJ, CRP, REG, COE)
+  const cajaPaidCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {
+      CPV: 0,
+      REN: 0,
+      DUP: 0,
+      CJ: 0,
+      CRP: 0,
+      REG: 0,
+      COE: 0
+    };
+
+    tickets.forEach(t => {
+      // Un tiquet fue pagado/atendido en Caja si pasó por la fase de caja o fue completado
+      const passedCaja = t.phaseHistory?.some(h => h.phase === TicketPhase.CAJA && h.completedAt) || 
+        (t.status === TicketStatus.COMPLETED && (t.serviceType === ServiceType.CEDULACION || t.serviceType === ServiceType.ELECTORAL)) ||
+        (t.currentPhase === TicketPhase.TRIADA);
+      
+      if (passedCaja) {
+        const procCode = t.procedure || (t.serviceType === ServiceType.ELECTORAL ? "COE" : "CPV");
+        if (counts[procCode] !== undefined) {
+          counts[procCode] += 1;
+        } else if (procCode === "RBM") {
+          counts["CPV"] += 1;
+        }
+      }
+    });
+
+    return counts;
+  }, [tickets]);
+
+  const cajaPaidTotal = React.useMemo(() => {
+    return Object.values(cajaPaidCounts).reduce((a: number, b: number) => a + b, 0);
+  }, [cajaPaidCounts]);
+
   const [usernameInput, setUsernameInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [loginError, setFormLoginError] = useState("");
@@ -269,9 +308,10 @@ export default function AgentConsole({
     return tickets.filter(t => {
       if (gatewaySelection === "registro_civil") {
         return t.serviceType === ServiceType.REGISTRO;
-      } else {
+      } else if (gatewaySelection === "cedulacion") {
         return t.serviceType !== ServiceType.REGISTRO;
       }
+      return true;
     });
   }, [tickets, gatewaySelection]);
 
@@ -1487,7 +1527,15 @@ export default function AgentConsole({
 
         {/* ACTIVE TICKET IN PROGRESS CARD */}
         <div className="space-y-2 pt-2">
-          <span className="block text-xs uppercase font-black tracking-widest text-slate-500 font-mono">Trámite Activo en Curso</span>
+          <div className="flex items-center justify-between">
+            <span className="block text-xs uppercase font-black tracking-widest text-slate-500 font-mono">Trámite Activo en Curso</span>
+            {(sessionUser?.role === UserRole.SUPERVISOR || sessionUser?.role === UserRole.SUPERADMIN) && currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) && (
+              <span className="text-[10px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-md flex items-center gap-1">
+                <Receipt className="w-3 h-3 text-emerald-600" />
+                Caja — Total Pagados Hoy: <strong className="text-emerald-950 font-black">{cajaPaidTotal}</strong>
+              </span>
+            )}
+          </div>
           
           {activeTicket ? (
             <div className="bg-blue-50/20 border-2 border-[#122e70] p-6 rounded-2xl space-y-4 relative overflow-hidden shadow-sm">
@@ -1523,6 +1571,66 @@ export default function AgentConsole({
                   )}
                 </div>
               </div>
+
+              {/* SELECCIÓN DE TRÁMITES DE CAJA (7 BOTONES: CPV, REN, DUP, CJ, CRP, REG, COE) */}
+              {currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) && (
+                <div className="bg-white border border-blue-200 p-4 rounded-xl space-y-2.5 shadow-sm">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+                      <DollarSign className="w-4 h-4 text-emerald-600" />
+                      Seleccione el Trámite a Cobrar en Caja <span className="text-rose-500">*</span>
+                    </span>
+                    <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 bg-blue-50 text-[#003087] rounded border border-blue-200">
+                      7 Trámites Habilitados en Caja
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2">
+                    {CAJA_PROCEDURES.map((proc) => {
+                      const currentSelected = selectedCajaProc || activeTicket.procedure || "CPV";
+                      const isSelected = currentSelected === proc.id;
+                      return (
+                        <button
+                          key={proc.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedCajaProc(proc.id);
+                            activeTicket.procedure = proc.id;
+                          }}
+                          className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between min-h-[85px] ${
+                            isSelected
+                              ? "bg-[#003087] border-[#002266] text-white shadow-md ring-2 ring-blue-400 scale-[1.02]"
+                              : "bg-slate-50 hover:bg-blue-50/60 border-slate-200 text-slate-800"
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className={`text-sm font-black tracking-tight font-mono ${isSelected ? "text-white" : "text-[#003087]"}`}>
+                                {proc.id}
+                              </span>
+                              <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${
+                                isSelected 
+                                  ? "bg-white/20 text-white" 
+                                  : proc.requiresPhoto 
+                                    ? "bg-amber-100 text-amber-900 border border-amber-200" 
+                                    : "bg-emerald-100 text-emerald-900 border border-emerald-200"
+                              }`}>
+                                {proc.requiresPhoto ? "Foto" : "Admin"}
+                              </span>
+                            </div>
+                            <h5 className={`text-[9.5px] font-extrabold uppercase leading-tight line-clamp-2 ${isSelected ? "text-blue-100" : "text-slate-700"}`}>
+                              {proc.name}
+                            </h5>
+                          </div>
+                          <span className={`text-[8px] font-semibold block mt-1 truncate ${isSelected ? "text-blue-200" : "text-slate-400"}`}>
+                            {proc.requiresPhoto ? "Requiere Tríada" : "Finaliza en Caja"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* LIVE STEPS PROGRESS TIMELINE */}
               <div className="mt-4 bg-white p-4 border border-blue-100 rounded-xl space-y-3.5 shadow-inner">
@@ -1564,9 +1672,9 @@ export default function AgentConsole({
                 
                 <p className="text-[11px] uppercase text-[#122e70] text-center font-bold bg-blue-50/50 py-1.5 border border-blue-100/40 rounded-lg">
                   {activeTicket.currentPhase === TicketPhase.CAJA && (
-                    (activeTicket.serviceType === ServiceType.ELECTORAL || activeTicket.serviceType === ServiceType.REGISTRO)
-                      ? "➔ Flujo Corto (Caja): Al finalizar, el ticket se completará y cerrará directamente."
-                      : "➔ Flujo Largo (Tríada): Al finalizar, el ticket pasará automáticamente a la cola de Tríada y Fotografía."
+                    (activeTicket.serviceType === ServiceType.ELECTORAL || activeTicket.serviceType === ServiceType.REGISTRO || selectedCajaProc === "REG" || selectedCajaProc === "COE")
+                      ? "➔ Flujo Administrativo (Caja): Al registrar el pago, el ticket se completará y cerrará directamente."
+                      : "➔ Flujo de Emisión (Tríada): Al registrar el pago, el ticket pasará a la cola de Tríada y Fotografía."
                   )}
                   {activeTicket.currentPhase === TicketPhase.TRIADA && "➔ Fase final de atención. Al pulsar Completar, el ciudadano se completa."}
                 </p>
@@ -1578,7 +1686,7 @@ export default function AgentConsole({
                   <button
                     id="btn-action-start"
                     onClick={() => onStartAttending(currentCubicle.id)}
-                    className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-sm transition-all"
+                    className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-sm transition-all"
                   >
                     <Play className="w-4 h-4 text-emerald-400" />
                     Iniciar Atención
@@ -1593,39 +1701,40 @@ export default function AgentConsole({
                     <Check className="w-4 h-4 text-white shrink-0" />
                     <span>Fin de Atención</span>
                   </button>
-                ) : (activeTicket?.serviceType === ServiceType.CEDULACION || gatewaySelection === "cedulacion") && currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
-                  activeTicket?.procedure === "REG" ? (
-                    <button
-                      id="btn-action-complete-ced-reg"
-                      onClick={() => onComplete(currentCubicle.id, "administrative")}
-                      className="col-span-2 w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
-                      title="Certificación de Registro (Trámite Administrativo). El ticket finaliza aquí."
-                    >
-                      <Check className="w-4 h-4 text-white shrink-0" />
-                      <span>Fin de Atención</span>
-                    </button>
-                  ) : (
-                    <div className="col-span-2 grid grid-cols-2 gap-3">
+                ) : currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
+                  (() => {
+                    const effectiveProcId = selectedCajaProc || activeTicket.procedure || "CPV";
+                    const procMeta = CAJA_PROCEDURES.find(p => p.id === effectiveProcId);
+                    const requiresPhoto = procMeta ? procMeta.requiresPhoto : (effectiveProcId !== "REG" && effectiveProcId !== "COE");
+
+                    return requiresPhoto ? (
                       <button
-                        id="btn-action-complete-ced-adm"
-                        onClick={() => onComplete(currentCubicle.id, "administrative")}
-                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.99]"
-                        title="Trámite Administrativo (No requiere fotografía). El ticket finaliza aquí."
+                        id="btn-action-caja-triada"
+                        onClick={() => {
+                          activeTicket.procedure = effectiveProcId;
+                          onComplete(currentCubicle.id, "emission_physical");
+                        }}
+                        className="col-span-2 w-full py-3.5 bg-gradient-to-r from-[#003087] to-[#122e70] hover:from-blue-800 hover:to-blue-900 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
+                        title={`Cobro de ${effectiveProcId} registrado. Enviar ciudadano a la fila de Tríada / Fotografía.`}
+                      >
+                        <Camera className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>Registrar Pago ({effectiveProcId}) ➔ Pasar a Tríada</span>
+                      </button>
+                    ) : (
+                      <button
+                        id="btn-action-caja-adm"
+                        onClick={() => {
+                          activeTicket.procedure = effectiveProcId;
+                          onComplete(currentCubicle.id, "administrative");
+                        }}
+                        className="col-span-2 w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
+                        title={`Cobro de ${effectiveProcId} registrado. Trámite administrativo/certificación concluido.`}
                       >
                         <Check className="w-4 h-4 text-white shrink-0" />
-                        <span>Fin de Atención</span>
+                        <span>Registrar Pago ({effectiveProcId}) ➔ Finalizar Trámite</span>
                       </button>
-                      <button
-                        id="btn-action-complete-ced-phys"
-                        onClick={() => onComplete(currentCubicle.id, "emission_physical")}
-                        className="w-full py-3 bg-[#003087] hover:bg-blue-800 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-[0.99]"
-                        title="Trámite de Emisión Física (Requiere fotografía). Envía el ticket a Espera en Fotografía."
-                      >
-                        <Camera className="w-4 h-4 text-white shrink-0" />
-                        <span>Pasar a Tríada</span>
-                      </button>
-                    </div>
-                  )
+                    );
+                  })()
                 ) : (
                   <button
                     id="btn-action-complete"
@@ -1690,6 +1799,74 @@ export default function AgentConsole({
             </div>
           )}
         </div>
+
+        {/* PANEL DE BOTONES DE TRÁMITES EN CAJA (7 TRÁMITES DISPONIBLES) */}
+        {currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) && (
+          <div className="bg-gradient-to-br from-slate-900 to-[#002266] border border-blue-900 text-white rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-lg">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-800/60 pb-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-500/20 border border-blue-400/30 flex items-center justify-center text-blue-300">
+                  <UserCheck className="w-4 h-4" />
+                </div>
+                <h4 className="text-xs font-black uppercase tracking-wider text-white">
+                  Tramites realizo por el operador
+                </h4>
+              </div>
+
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <span className="text-[9.5px] font-extrabold uppercase px-2.5 py-1 bg-blue-500/20 text-blue-200 border border-blue-400/30 rounded-lg">
+                  7 Trámites Habilitados
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+              {CAJA_PROCEDURES.map((proc) => {
+                const currentSelected = selectedCajaProc || (activeTicket?.procedure) || "CPV";
+                const isSelected = currentSelected === proc.id;
+
+                return (
+                  <button
+                    key={proc.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCajaProc(proc.id);
+                      if (activeTicket) {
+                        activeTicket.procedure = proc.id;
+                      }
+                    }}
+                    className={`p-3 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between min-h-[90px] ${
+                      isSelected
+                        ? "bg-[#003087] border-blue-400 text-white shadow-lg ring-2 ring-blue-400 scale-[1.02]"
+                        : "bg-white/10 hover:bg-white/15 border-white/10 text-white hover:border-white/20"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-2">
+                      <span className={`text-sm font-mono font-black ${isSelected ? "text-white" : "text-amber-400"}`}>
+                        {proc.id}
+                      </span>
+                      <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                        isSelected
+                          ? "bg-white/20 text-white"
+                          : proc.requiresPhoto 
+                            ? "bg-blue-500/30 text-blue-200 border border-blue-400/20" 
+                            : "bg-emerald-500/30 text-emerald-200 border border-emerald-400/20"
+                      }`}>
+                        {proc.requiresPhoto ? "Foto" : "Admin"}
+                      </span>
+                    </div>
+                    
+                    <p className={`text-[10px] font-extrabold uppercase leading-tight line-clamp-2 ${
+                      isSelected ? "text-blue-100" : "text-slate-200"
+                    }`} title={proc.name}>
+                      {proc.name}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* CANDIDATE LIST FOR THIS AGENT */}
         <div className="space-y-2">

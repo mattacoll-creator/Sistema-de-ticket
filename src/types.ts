@@ -4,11 +4,11 @@
  */
 
 export enum ServiceType {
-  ELECTORAL = "ELECTORAL",       // Organización Electoral
-  REGISTRO = "REGISTRO",         // Registro Civil
-  CEDULACION = "CEDULACION",     // Cedulación
-  EXTRANJERIA = "EXTRANJERIA",    // Extranjería
-  REG_CERTIFICATION = "REG_CERTIFICATION" // Certificación de REG
+  ELECTORAL = "ELECTORAL",       // Organización Electoral (O)
+  REGISTRO = "REGISTRO",         // Certificaciones de Registro Civil (REG)
+  CEDULACION = "CEDULACION",     // Cedulación (C)
+  EXTRANJERIA = "EXTRANJERIA",    // Extranjería (E)
+  REG_CERTIFICATION = "REG_CERTIFICATION" // Certificaciones de Registro Civil (REG)
 }
 
 export interface ServiceDetail {
@@ -29,8 +29,8 @@ export const SERVICES_CONFIG: Record<ServiceType, ServiceDetail> = {
   },
   [ServiceType.REGISTRO]: {
     id: ServiceType.REGISTRO,
-    name: "Registro Civil",
-    prefix: "RC",
+    name: "Certificaciones de Registro Civil",
+    prefix: "REG",
     color: "bg-blue-500 text-blue-950 border-blue-200",
     estimatedTimeMin: 10
   },
@@ -50,7 +50,7 @@ export const SERVICES_CONFIG: Record<ServiceType, ServiceDetail> = {
   },
   [ServiceType.REG_CERTIFICATION]: {
     id: ServiceType.REG_CERTIFICATION,
-    name: "Certificación de REG",
+    name: "Certificaciones de Registro Civil",
     prefix: "REG",
     color: "bg-indigo-500 text-indigo-950 border-indigo-200",
     estimatedTimeMin: 10

@@ -3038,6 +3038,359 @@ async function startServer() {
     }
   });
 
+  // ==========================================
+  // API TICKETS & TURNOS EN TIEMPO REAL (PostgreSQL + Memory Sync)
+  // ==========================================
+
+  // Live in-memory cache to guarantee instantaneous zero-delay sync across Kiosk, TV, Agents and Mobile Tracker
+  const memoryTicketsStore: Map<string, any> = new Map();
+  const memoryModulosStore: Map<string, any> = new Map();
+
+  // 1. Obtener todos los tickets de una sucursal o globales
+  app.get("/api/tickets", async (req, res) => {
+    try {
+      const sucursalId = (req.query.office as string) || (req.query.sucursal_id as string) || "OFF-1";
+      
+      let dbTickets: any[] = [];
+      if (isPgConfigured && pgPool) {
+        try {
+          const query = sucursalId === "ALL" 
+            ? `SELECT * FROM tickets ORDER BY hora_emision ASC`
+            : `SELECT * FROM tickets WHERE sucursal_id = $1 ORDER BY hora_emision ASC`;
+          const params = sucursalId === "ALL" ? [] : [sucursalId];
+          const dbRes = await pgPool.query(query, params);
+          
+          if (dbRes.rows && dbRes.rows.length > 0) {
+            dbTickets = dbRes.rows.map((r: any) => ({
+              id: r.id,
+              numberCode: r.numero_ticket,
+              number: parseInt(r.numero_ticket.replace(/\D/g, ""), 10) || 1,
+              name: r.nombre || "Ciudadano",
+              serviceType: r.tipo_tramite,
+              status: r.estado,
+              currentPhase: r.modulo_asignado ? "caja" : "triada",
+              createdAt: r.hora_emision ? new Date(r.hora_emision).getTime() : Date.now(),
+              calledAt: r.hora_llamado ? new Date(r.hora_llamado).getTime() : undefined,
+              assignedCubicle: r.modulo_asignado,
+              assignedAgent: r.agente_asignado,
+              priority: !!r.es_prioritario,
+              procedure: r.sub_tramite,
+              sucursalId: r.sucursal_id
+            }));
+          }
+        } catch (pgErr: any) {
+          console.warn("[PostgreSQL] Error fetching tickets from DB:", pgErr.message);
+        }
+      }
+
+      // Merge memory cache with database
+      const allMemTickets = Array.from(memoryTicketsStore.values());
+      const filteredMemTickets = sucursalId === "ALL"
+        ? allMemTickets
+        : allMemTickets.filter(t => (t.sucursalId || "OFF-1") === sucursalId);
+
+      const mergedMap = new Map<string, any>();
+      // First insert db tickets
+      dbTickets.forEach(t => mergedMap.set(t.id, t));
+      // Then overlay memory tickets (which may have newer local state)
+      filteredMemTickets.forEach(t => mergedMap.set(t.id, { ...(mergedMap.get(t.id) || {}), ...t }));
+
+      const finalTickets = Array.from(mergedMap.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+      return res.json({ success: true, tickets: finalTickets });
+    } catch (e: any) {
+      console.error("Error in GET /api/tickets:", e);
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // 2. Crear o actualizar un ticket (Kiosko / Agentes / TV)
+  app.post("/api/tickets", async (req, res) => {
+    try {
+      const {
+        id,
+        numberCode,
+        name,
+        serviceType,
+        procedure,
+        priority = false,
+        sucursalId = "OFF-1",
+        status = "espera",
+        currentPhase = "caja",
+        assignedCubicle,
+        assignedAgent,
+        calledAt,
+        completedAt,
+        createdAt = Date.now()
+      } = req.body;
+
+      if (!id || !numberCode) {
+        return res.status(400).json({ success: false, error: "id y numberCode son requeridos" });
+      }
+
+      const ticketPayload = {
+        id,
+        numberCode,
+        number: parseInt(String(numberCode).replace(/\D/g, ""), 10) || 1,
+        name: name || "Ciudadano",
+        serviceType: serviceType || "cedulacion",
+        procedure: procedure || "",
+        priority: !!priority,
+        sucursalId: sucursalId || "OFF-1",
+        status: status || "espera",
+        currentPhase: currentPhase || "caja",
+        assignedCubicle: assignedCubicle || null,
+        assignedAgent: assignedAgent || null,
+        calledAt: calledAt || undefined,
+        completedAt: completedAt || undefined,
+        createdAt: createdAt || Date.now()
+      };
+
+      // Always save to memory store immediately
+      memoryTicketsStore.set(id, ticketPayload);
+
+      if (isPgConfigured && pgPool) {
+        try {
+          await pgPool.query(
+            `INSERT INTO tickets (
+               id, numero_ticket, tipo_tramite, sub_tramite, nombre, es_prioritario,
+               sucursal_id, estado, modulo_asignado, agente_asignado, hora_llamado, hora_fin_atencion, hora_emision
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             ON CONFLICT (id) DO UPDATE SET
+               numero_ticket = EXCLUDED.numero_ticket,
+               tipo_tramite = EXCLUDED.tipo_tramite,
+               sub_tramite = EXCLUDED.sub_tramite,
+               nombre = EXCLUDED.nombre,
+               es_prioritario = EXCLUDED.es_prioritario,
+               sucursal_id = EXCLUDED.sucursal_id,
+               estado = EXCLUDED.estado,
+               modulo_asignado = EXCLUDED.modulo_asignado,
+               agente_asignado = EXCLUDED.agente_asignado,
+               hora_llamado = COALESCE(EXCLUDED.hora_llamado, tickets.hora_llamado),
+               hora_fin_atencion = COALESCE(EXCLUDED.hora_fin_atencion, tickets.hora_fin_atencion)`,
+            [
+              id,
+              numberCode,
+              serviceType || "cedulacion",
+              procedure || "",
+              name || "Ciudadano",
+              !!priority,
+              sucursalId,
+              status,
+              assignedCubicle || null,
+              assignedAgent || null,
+              calledAt ? new Date(calledAt) : null,
+              completedAt ? new Date(completedAt) : null,
+              new Date(createdAt)
+            ]
+          );
+
+          // Si el ticket tiene código o seguimiento móvil, guardar/actualizar la sesión en tracking_sesiones_moviles
+          await pgPool.query(
+            `INSERT INTO tracking_sesiones_moviles (id, token_acceso, ticket_id)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (token_acceso) DO UPDATE SET
+               ticket_id = EXCLUDED.ticket_id,
+               ultimo_acceso = NOW()`,
+            [`TRK-${id}`, numberCode.toUpperCase(), id]
+          );
+        } catch (pgErr: any) {
+          console.error("[PostgreSQL] Error upserting ticket:", pgErr.message);
+        }
+      }
+
+      return res.json({ success: true, message: "Ticket guardado en base de datos", ticket: ticketPayload });
+    } catch (e: any) {
+      console.error("Error in POST /api/tickets:", e);
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // 3. Sincronización masiva de tickets de una sucursal (para pantallas de TV y Kioskos)
+  app.post("/api/tickets/bulk-sync", async (req, res) => {
+    try {
+      const { sucursalId = "OFF-1", tickets = [] } = req.body;
+      
+      if (Array.isArray(tickets) && tickets.length > 0) {
+        for (const t of tickets) {
+          const itemPayload = {
+            id: t.id,
+            numberCode: t.numberCode || t.numero_ticket,
+            number: parseInt(String(t.numberCode || t.numero_ticket).replace(/\D/g, ""), 10) || 1,
+            name: t.name || t.nombre || "Ciudadano",
+            serviceType: t.serviceType || t.tipo_tramite || "cedulacion",
+            procedure: t.procedure || t.sub_tramite || "",
+            priority: !!t.priority || !!t.es_prioritario,
+            sucursalId: sucursalId,
+            status: t.status || t.estado || "espera",
+            currentPhase: t.currentPhase || "caja",
+            assignedCubicle: t.assignedCubicle || t.modulo_asignado || null,
+            assignedAgent: t.assignedAgent || t.agente_asignado || null,
+            calledAt: t.calledAt || undefined,
+            completedAt: t.completedAt || undefined,
+            createdAt: t.createdAt || Date.now()
+          };
+          memoryTicketsStore.set(t.id, itemPayload);
+
+          if (isPgConfigured && pgPool) {
+            try {
+              await pgPool.query(
+                `INSERT INTO tickets (
+                   id, numero_ticket, tipo_tramite, sub_tramite, nombre, es_prioritario,
+                   sucursal_id, estado, modulo_asignado, agente_asignado, hora_llamado, hora_fin_atencion, hora_emision
+                 )
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 ON CONFLICT (id) DO UPDATE SET
+                   estado = EXCLUDED.estado,
+                   modulo_asignado = EXCLUDED.modulo_asignado,
+                   agente_asignado = EXCLUDED.agente_asignado,
+                   hora_llamado = COALESCE(EXCLUDED.hora_llamado, tickets.hora_llamado),
+                   hora_fin_atencion = COALESCE(EXCLUDED.hora_fin_atencion, tickets.hora_fin_atencion)`,
+                [
+                  t.id,
+                  t.numberCode || t.numero_ticket,
+                  t.serviceType || t.tipo_tramite || "cedulacion",
+                  t.procedure || t.sub_tramite || "",
+                  t.name || t.nombre || "Ciudadano",
+                  !!t.priority || !!t.es_prioritario,
+                  sucursalId,
+                  t.status || t.estado || "espera",
+                  t.assignedCubicle || t.modulo_asignado || null,
+                  t.assignedAgent || t.agente_asignado || null,
+                  t.calledAt ? new Date(t.calledAt) : null,
+                  t.completedAt ? new Date(t.completedAt) : null,
+                  new Date(t.createdAt || Date.now())
+                ]
+              );
+            } catch (itemErr: any) {
+              // continue batch
+            }
+          }
+        }
+      }
+
+      return res.json({ success: true, count: memoryTicketsStore.size });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // 4. Consulta de Seguimiento Móvil por Código (ej: ?view=tracker&ticket=CED-001)
+  app.get("/api/tracker/:code", async (req, res) => {
+    try {
+      const code = String(req.params.code).trim().toUpperCase();
+      
+      // Check memory store first
+      for (const t of memoryTicketsStore.values()) {
+        if (t.numberCode?.toUpperCase() === code || t.id?.toUpperCase() === code) {
+          const aheadCount = Array.from(memoryTicketsStore.values()).filter(
+            other => (other.sucursalId || "OFF-1") === (t.sucursalId || "OFF-1") &&
+                     other.serviceType === t.serviceType &&
+                     (other.status === "espera" || other.status === "WAITING") &&
+                     (other.createdAt || 0) < (t.createdAt || 0)
+          ).length;
+
+          return res.json({
+            success: true,
+            ticket: {
+              ...t,
+              horaEmision: t.createdAt ? new Date(t.createdAt).toISOString() : new Date().toISOString(),
+              aheadCount
+            }
+          });
+        }
+      }
+
+      if (isPgConfigured && pgPool) {
+        const ticketRes = await pgPool.query(
+          `SELECT * FROM tickets WHERE UPPER(numero_ticket) = $1 OR UPPER(id) = $1 LIMIT 1`,
+          [code]
+        );
+
+        if (ticketRes.rows && ticketRes.rows.length > 0) {
+          const row = ticketRes.rows[0];
+          
+          const queueRes = await pgPool.query(
+            `SELECT COUNT(*) as ahead_count 
+             FROM tickets 
+             WHERE sucursal_id = $1 
+               AND tipo_tramite = $2 
+               AND estado = 'espera' 
+               AND hora_emision < $3`,
+            [row.sucursal_id, row.tipo_tramite, row.hora_emision]
+          );
+          
+          const aheadCount = parseInt(queueRes.rows[0]?.ahead_count || "0", 10);
+
+          return res.json({
+            success: true,
+            ticket: {
+              id: row.id,
+              numberCode: row.numero_ticket,
+              name: row.nombre,
+              serviceType: row.tipo_tramite,
+              status: row.estado,
+              assignedCubicle: row.modulo_asignado,
+              assignedAgent: row.agente_asignado,
+              horaEmision: row.hora_emision,
+              horaLlamado: row.hora_llamado,
+              sucursalId: row.sucursal_id,
+              aheadCount
+            }
+          });
+        }
+      }
+
+      return res.status(404).json({ success: false, error: "Ticket no encontrado" });
+    } catch (e: any) {
+      console.error("Error in tracker endpoint:", e);
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // 5. Estado de Ventanillas / Módulos en Vivo (Para TV y Monitores)
+  app.get("/api/modulos", async (req, res) => {
+    try {
+      const sucursalId = (req.query.office as string) || "OFF-1";
+      if (isPgConfigured && pgPool) {
+        const dbRes = await pgPool.query(`SELECT * FROM modulos_atencion WHERE sucursal_id = $1`, [sucursalId]);
+        return res.json({ success: true, modulos: dbRes.rows || [] });
+      }
+      return res.json({ success: true, modulos: [] });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.post("/api/modulos/status", async (req, res) => {
+    try {
+      const { id, nombre, sucursalId = "OFF-1", tipoServicio = "cedulacion", agenteActual, ticketActualId, estado } = req.body;
+      if (!id || !nombre) {
+        return res.status(400).json({ success: false, error: "id y nombre requeridos" });
+      }
+
+      if (isPgConfigured && pgPool) {
+        await pgPool.query(
+          `INSERT INTO modulos_atencion (id, nombre, sucursal_id, tipo_servicio, agente_actual, ticket_actual_id, estado, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             nombre = EXCLUDED.nombre,
+             sucursal_id = EXCLUDED.sucursal_id,
+             tipo_servicio = EXCLUDED.tipo_servicio,
+             agente_actual = EXCLUDED.agente_actual,
+             ticket_actual_id = EXCLUDED.ticket_actual_id,
+             estado = EXCLUDED.estado,
+             updated_at = NOW()`,
+          [id, nombre, sucursalId, tipoServicio, agenteActual || null, ticketActualId || null, estado || "disponible"]
+        );
+      }
+      return res.json({ success: true });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
   // Vite middleware setup for assets and hot builds under development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

@@ -63,29 +63,42 @@ export function playCallingChime(): Promise<void> {
 /**
  * Utiliza la API de Síntesis de voz del navegador para anunciar un ticket por su nombre.
  */
-export function speakCall(ticketCode: string, name: string, cubicleName: string): Promise<void> {
+export function speakCall(ticketCode: string, name: string, cubicleName: string, isSecondCall: boolean = false): Promise<void> {
   return new Promise((resolve) => {
     if (!("speechSynthesis" in window)) {
       console.warn("La síntesis de voz no está soportada en este navegador.");
       resolve();
-      return;
     }
 
-    // Cancelar cualquier discurso pendiente
-    window.speechSynthesis.cancel();
-
-    // Clean up cubicle name for a more natural voice announcement (e.g., removing text inside parenthesis)
+    // Clean up cubicle name for a more natural voice announcement
     // e.g. "Módulo 1 (Tríada / Fotografía)" -> "Módulo 1"
     const cleanCubicleName = cubicleName.replace(/\s*\(.*?\)\s*/g, '').trim();
 
-    // Crear el mensaje a pronunciar
-    // e.g.: "Ticket A-01, Juan Pérez, pase al Cubículo 1"
-    const parsedCode = ticketCode.split("").join(" "); // Pronuncia dígito por dígito para mayor claridad
+    // Formatear código dígito a dígito para pronunciación nítida (ej: "C 0 0 1")
+    const parsedCode = ticketCode.split("").join(" ");
+    
     let targetPrep = "al";
-    if (cleanCubicleName.toLowerCase().startsWith("caja")) {
+    const lowerCubicle = cleanCubicleName.toLowerCase();
+    if (lowerCubicle.startsWith("caja") || lowerCubicle.startsWith("ventanilla") || lowerCubicle.startsWith("sala") || lowerCubicle.startsWith("recepcion") || lowerCubicle.startsWith("recepción")) {
       targetPrep = "a la";
     }
-    const message = `¿Atención, ticket? ${parsedCode}!... ${name}!... Por favor, pase ${targetPrep} ${cleanCubicleName}.`;
+
+    const trimmedName = name && name.trim() !== "" ? name.trim() : "";
+    
+    let message = "";
+    if (isSecondCall) {
+      if (trimmedName) {
+        message = `Segundo llamado: ${trimmedName}... Por favor, diríjase ${targetPrep} ${cleanCubicleName}... Ticket ${parsedCode}.`;
+      } else {
+        message = `Segundo llamado: Ticket ${parsedCode}... Por favor, diríjase ${targetPrep} ${cleanCubicleName}.`;
+      }
+    } else {
+      if (trimmedName) {
+        message = `Atención: ${trimmedName}... Por favor, diríjase ${targetPrep} ${cleanCubicleName}... Ticket ${parsedCode}.`;
+      } else {
+        message = `Atención: Ticket ${parsedCode}... Por favor, diríjase ${targetPrep} ${cleanCubicleName}.`;
+      }
+    }
     
     const rateStr = localStorage.getItem("ticket_tts_rate");
     const pitchStr = localStorage.getItem("ticket_tts_pitch");
@@ -93,14 +106,12 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string)
 
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.lang = "es-ES";
-    utterance.rate = rateStr ? parseFloat(rateStr) : 0.95; // Un poco más lento para mejor comprensión por defecto
-    utterance.pitch = pitchStr ? parseFloat(pitchStr) : 1.05; // Tono agradable por defecto
+    utterance.rate = rateStr ? parseFloat(rateStr) : 0.95;
+    utterance.pitch = pitchStr ? parseFloat(pitchStr) : 1.05;
 
     // Buscar una voz en español
     const setVoice = () => {
       const voices = window.speechSynthesis.getVoices();
-      
-      // Buscar voces que correspondan a español (es, es-ES, es-MX, es-CO, etc.)
       const spanishVoices = voices.filter(voice => voice.lang.toLowerCase().startsWith("es"));
       
       if (spanishVoices.length > 0) {
@@ -134,7 +145,6 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string)
       }
     };
 
-    // La lista de voces puede cargarse de manera asíncrona
     setVoice();
     if (window.speechSynthesis.onvoiceschanged !== undefined) {
       window.speechSynthesis.onvoiceschanged = () => {
@@ -147,16 +157,15 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string)
     };
 
     utterance.onerror = (err) => {
-      console.warn("SpeechSynthesisUtterance event/error (benign in sandboxed iframes):", err);
+      console.warn("SpeechSynthesisUtterance event/error:", err);
       resolve();
     };
 
     window.speechSynthesis.speak(utterance);
 
-    // Timeout de resguardo por si el navegador suspende la promesa indefinidamente
     setTimeout(() => {
       resolve();
-    }, 5500);
+    }, 7000);
   });
 }
 
@@ -181,12 +190,27 @@ export function isVibrationSupported(): boolean {
 
 /**
  * Llama al timbre y luego hace la lectura de voz del turno consecutivamente.
+ * Realiza 2 llamados completos (Primer llamado + Segundo llamado) tal como solicitado.
  */
-export async function announceAndCall(ticketCode: string, name: string, cubicleName: string) {
+export async function announceAndCall(ticketCode: string, name: string, cubicleName: string, repeatCalls: number = 2) {
+  // Cancelar cualquier lectura anterior para que el nuevo llamado tome prioridad inmediata
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+
+  // 1er LLAMADO
   triggerHapticVibration([400, 200, 400]);
   await playCallingChime();
-  // Breve pausa para que el eco del timbre termine
-  await new Promise(r => setTimeout(r, 450));
-  await speakCall(ticketCode, name, cubicleName);
+  await new Promise(r => setTimeout(r, 350));
+  await speakCall(ticketCode, name, cubicleName, false);
+
+  // Si se solicitó repetir (2 llamados)
+  if (repeatCalls >= 2) {
+    // Pausa breve entre el 1er y 2do llamado
+    await new Promise(r => setTimeout(r, 1100));
+    await playCallingChime();
+    await new Promise(r => setTimeout(r, 350));
+    await speakCall(ticketCode, name, cubicleName, true);
+  }
 }
 

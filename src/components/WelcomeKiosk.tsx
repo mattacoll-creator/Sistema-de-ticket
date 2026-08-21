@@ -38,12 +38,26 @@ export const CEDULACION_PROCEDURES = [
   { id: "CJ", name: "Cédula Juvenil", description: "Documento de identidad para menores de edad" },
   { id: "CRP", name: "Carné de Residente", description: "Carné de residente permanente extranjero" },
   { id: "RBM", name: "Registro Biométrico", description: "Enrolamiento de huellas, foto y firma oficial" },
-  { id: "REG", name: "Certificación de REG", description: "Certificación de registro de cedulación" }
+  { id: "REG", name: "Certificación de REG", description: "Certificación de registro de cedulación" },
+  { id: "COE", name: "Certificaciones de OE", description: "Certificación de Organización Electoral" }
+];
+
+// Procedimientos específicos de Caja (Excluye RBM e incluye COE)
+export const CAJA_PROCEDURES = [
+  { id: "CPV", name: "Cédula por Primera Vez", description: "Trámite de primera cédula para panameños", requiresPhoto: true },
+  { id: "REN", name: "Renovación de Cédula", description: "Renovación por vencimiento de documento", requiresPhoto: true },
+  { id: "DUP", name: "Duplicado de Cédula", description: "Reposición por pérdida, robo o deterioro", requiresPhoto: true },
+  { id: "CJ", name: "Cédula Juvenil", description: "Documento de identidad para menores de edad", requiresPhoto: true },
+  { id: "CRP", name: "Carné de Residente", description: "Carné de residente permanente extranjero", requiresPhoto: true },
+  { id: "REG", name: "Certificación de REG", description: "Certificación de registro de cedulación", requiresPhoto: false },
+  { id: "COE", name: "Certificaciones de OE", description: "Certificación de Organización Electoral", requiresPhoto: false }
 ];
 
 export const getProcedureName = (procId: string): string => {
   const regProc = REGISTRO_PROCEDURES.find(p => p.id === procId);
   if (regProc) return regProc.name;
+  const cajaProc = CAJA_PROCEDURES.find(p => p.id === procId);
+  if (cajaProc) return cajaProc.name;
   const cedProc = CEDULACION_PROCEDURES.find(p => p.id === procId);
   if (cedProc) return cedProc.name;
   return procId;
@@ -378,96 +392,48 @@ export default function WelcomeKiosk({
                 </label>
               </div>
 
-              {/* Trámites / Service Selector */}
-            <div className="space-y-2">
-              <label className="block text-xs font-extrabold uppercase tracking-wide text-slate-600">
-                Seleccione el Trámite Requerido <span className="text-rose-500">*</span>
-              </label>
-              
-              {gatewaySelection === "registro_civil" ? (
-                 /* REGISTRO CIVIL SUB-PROCEDURES */
-                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 w-full">
-                   {REGISTRO_PROCEDURES.map((proc) => {
-                     const isSelected = selectedProcedure === proc.id;
-                     return (
-                       <button
-                         id={`procedure-select-${proc.id.toLowerCase()}`}
-                         key={proc.id}
-                         type="button"
-                         onClick={() => {
-                           setSelectedService(ServiceType.REGISTRO);
-                           setSelectedProcedure(proc.id);
-                         }}
-                         className={`relative flex flex-col p-3 rounded-xl text-left border transition-all cursor-pointer h-full min-h-[110px] justify-between ${
-                           isSelected
-                             ? "bg-gradient-to-br from-[#003087] to-[#122e70] border-[#0a235c] text-white shadow-lg scale-[1.02] premium-glow-blue"
-                             : "bg-white hover:bg-slate-50 border-slate-200 text-slate-800 hover:border-slate-300 shadow-sm"
-                         }`}
-                       >
-                         <div>
-                           <div className={`text-xl sm:text-2xl font-black tracking-tight leading-none mb-1.5 ${
-                             isSelected ? "text-white" : "text-[#003087]"
-                           }`}>
-                             {proc.id}
-                           </div>
-                           <h4 className={`text-[10px] font-extrabold uppercase tracking-wide leading-tight line-clamp-2 ${
-                             isSelected ? "text-blue-100" : "text-slate-700"
-                           }`}>
-                             {proc.name}
-                           </h4>
-                         </div>
-                         <p className={`text-[8.5px] leading-tight mt-1 line-clamp-1 ${
-                           isSelected ? "text-blue-200" : "text-slate-400 font-medium"
-                         }`}>
-                           {proc.description}
-                         </p>
-                       </button>
-                     );
-                   })}
-                 </div>
-               ) : (
-                 /* DEFAULT CHANNELS (CEDULACION / MULTI-SERVICE KIOSK) */
-                 <div className="space-y-4">
-                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                     {Object.values(SERVICES_CONFIG)
-                       .filter((service) => service.id !== ServiceType.REGISTRO && !(currentOfficeId !== "OFF-1" && service.id === ServiceType.EXTRANJERIA))
-                       .map((service) => {
-                         const isSelected = selectedService === service.id;
-                         return (
-                           <button
-                             id={`service-select-${service.id.toLowerCase()}`}
-                             key={service.id}
-                             type="button"
-                             onClick={() => {
-                               setSelectedService(service.id);
-                               setSelectedProcedure(null);
-                             }}
-                             className={`relative flex flex-col p-3.5 rounded-xl text-left border transition-all cursor-pointer ${
-                               isSelected
-                                 ? "bg-gradient-to-br from-[#003087] to-[#122e70] border-[#0a235c] text-white shadow-lg premium-glow-blue scale-[1.01]"
-                                 : "bg-slate-50 hover:bg-slate-100/80 border-slate-200 text-slate-800 hover:border-slate-300 shadow-sm"
-                             }`}
-                           >
-                             <div className="flex items-center justify-between w-full mb-2">
-                               <span className={`px-2 py-0.5 text-[8px] font-mono tracking-wider font-extrabold rounded ${
-                                 isSelected ? "bg-white/20 text-white" : "bg-slate-200 text-slate-700"
-                               }`}>
-                                 {service.prefix}
-                               </span>
-                             </div>
-                             <h4 className="text-xs font-black uppercase tracking-wide truncate w-full">{service.name}</h4>
-                             <p className={`text-[9px] font-mono mt-1 font-bold ${isSelected ? "text-blue-200" : "text-slate-450"}`}>
-                               ~{service.estimatedTimeMin} MINUTOS
-                             </p>
-                           </button>
-                         );
-                       })}
-                   </div>
-                 </div>
-               )}
-
-
-            </div>
+              {/* Trámites / Service Selector: 4 Botones de Inicio */}
+              <div className="space-y-2">
+                <label className="block text-xs font-extrabold uppercase tracking-wide text-slate-700">
+                  Seleccione el Departamento o Trámite <span className="text-rose-500">*</span>
+                </label>
+                
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {Object.values(SERVICES_CONFIG)
+                    .filter((service) => service.id !== ServiceType.REG_CERTIFICATION && !(currentOfficeId !== "OFF-1" && service.id === ServiceType.EXTRANJERIA))
+                    .map((service) => {
+                      const isSelected = selectedService === service.id;
+                      return (
+                        <button
+                          id={`service-select-${service.id.toLowerCase()}`}
+                          key={service.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedService(service.id);
+                            setSelectedProcedure(null);
+                          }}
+                          className={`relative flex flex-col p-3.5 rounded-xl text-left border transition-all cursor-pointer ${
+                            isSelected
+                              ? "bg-gradient-to-br from-[#003087] to-[#122e70] border-[#0a235c] text-white shadow-lg premium-glow-blue scale-[1.01]"
+                              : "bg-slate-50 hover:bg-slate-100/80 border-slate-200 text-slate-800 hover:border-slate-300 shadow-sm"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between w-full mb-2">
+                            <span className={`px-2 py-0.5 text-[8px] font-mono tracking-wider font-extrabold rounded ${
+                              isSelected ? "bg-white/20 text-white" : "bg-slate-200 text-slate-700"
+                            }`}>
+                              {service.prefix}
+                            </span>
+                          </div>
+                          <h4 className="text-xs font-black uppercase tracking-wide truncate w-full">{service.name}</h4>
+                          <p className={`text-[9px] font-mono mt-1 font-bold ${isSelected ? "text-blue-200" : "text-slate-450"}`}>
+                            ~{service.estimatedTimeMin} MINUTOS
+                          </p>
+                        </button>
+                      );
+                    })}
+                </div>
+              </div>
 
             {/* Action Area */}
             <div className="pt-2">

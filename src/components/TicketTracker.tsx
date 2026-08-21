@@ -154,6 +154,45 @@ export default function TicketTracker({
     }
   }, [selectedTicketCode]);
 
+  const [apiTrackedTicket, setApiTrackedTicket] = useState<Ticket | null>(null);
+
+  // When ticket is not found in memory or when opened directly on a mobile phone, fetch from /api/tracker/:code
+  useEffect(() => {
+    if (!selectedTicketCode) {
+      setApiTrackedTicket(null);
+      return;
+    }
+    const cleanCode = selectedTicketCode.trim().toUpperCase();
+    
+    // Query API
+    fetch(`/api/tracker/${encodeURIComponent(cleanCode)}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data && data.success && data.ticket) {
+          const t = data.ticket;
+          setApiTrackedTicket({
+            id: t.id,
+            numberCode: t.numberCode,
+            number: parseInt(t.numberCode.replace(/\D/g, ""), 10) || 1,
+            name: t.name,
+            serviceType: t.serviceType || ServiceType.CEDULACION,
+            status: t.status as TicketStatus,
+            currentPhase: TicketPhase.CAJA,
+            createdAt: t.horaEmision ? new Date(t.horaEmision).getTime() : Date.now(),
+            calledAt: t.horaLlamado ? new Date(t.horaLlamado).getTime() : undefined,
+            assignedCubicleId: t.assignedCubicle,
+            priority: false
+          });
+          if (t.sucursalId && t.sucursalId !== activeOfficeId) {
+            setActiveOfficeId(t.sucursalId);
+          }
+        }
+      })
+      .catch(err => {
+        console.warn("Tracker query error:", err);
+      });
+  }, [selectedTicketCode, activeOfficeId]);
+
   // Find the tracked ticket matching either numberCode or ID
   // If not found in current regional office, search across ALL regional offices!
   const trackedTicket = useMemo(() => {
@@ -195,8 +234,13 @@ export default function TicketTracker({
       }
     }
 
+    // 3. Fallback to API tracked ticket if found in database
+    if (apiTrackedTicket) {
+      return apiTrackedTicket;
+    }
+
     return null;
-  }, [effectiveTickets, selectedTicketCode, officeTickets, activeOfficeId]);
+  }, [effectiveTickets, selectedTicketCode, officeTickets, activeOfficeId, apiTrackedTicket]);
 
   // Find the assigned cubicle if ticket is currently called or attended
   const assignedCubicle = useMemo(() => {

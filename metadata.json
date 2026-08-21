@@ -1,5 +1,5 @@
 {
-  "name": "Agendate",
+  "name": "Agéndate",
   "description": "Sistema oficial de citas y gestión de turnos del Tribunal Electoral de Panamá para trámites de Cedulación, Registro Civil, Extranjería y Organización Electoral.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

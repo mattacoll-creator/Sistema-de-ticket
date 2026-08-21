@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import { Ticket, Cubicle, TicketStatus, SERVICES_CONFIG, TicketPhase, PHASES_CONFIG, OFFICES_CONFIG, ServiceType } from "../types";
+import { Ticket, Cubicle, TicketStatus, CubicleStatus, SERVICES_CONFIG, TicketPhase, PHASES_CONFIG, OFFICES_CONFIG, ServiceType } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { Volume2, VolumeX, Tv, UserCheck, Users, HelpCircle, ArrowRight, UserMinus, ShieldAlert, Clock } from "lucide-react";
 import { getOfficeSchedule } from "../utils/scheduleStorage";
@@ -45,12 +45,10 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   }, []);
 
   const toggleImmersiveFullscreen = () => {
-    const element = document.getElementById("main-public-screen");
-    if (!element) return;
-
     if (!isImmersiveFullscreen) {
       setIsImmersiveFullscreen(true);
-      if (element.requestFullscreen) {
+      const element = document.getElementById("main-public-screen") || document.documentElement;
+      if (element && element.requestFullscreen) {
         element.requestFullscreen().catch((err) => {
           console.log("Error launching browser fullscreen, running in-window immersive mode instead:", err);
         });
@@ -65,9 +63,10 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     }
   };
 
-  const launchFullscreenForChannel = (channel: "OR" | "OHV") => {
+  const launchFullscreenForChannel = (channel: TicketPhase | "OR" | "OHV" | "RC_OTROS" | "general") => {
     setSelectedChannel(channel);
     setIsImmersiveFullscreen(true);
+
     setTimeout(() => {
       const element = document.getElementById("main-public-screen");
       if (element && element.requestFullscreen) {
@@ -124,9 +123,10 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   const ecosystemTickets = tickets.filter(t => {
     if (gatewaySelection === "registro_civil") {
       return t.serviceType === ServiceType.REGISTRO;
-    } else {
+    } else if (gatewaySelection === "cedulacion") {
       return t.serviceType !== ServiceType.REGISTRO;
     }
+    return true;
   });
 
   // Fetch tickets currently waiting
@@ -155,6 +155,16 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
           ? sortedWaiting.filter(t => t.procedure !== "OR" && t.procedure !== "OHV")
           : sortedWaiting.filter(t => t.currentPhase === selectedChannel);
 
+  // Persistent tracking of the latest called ticket so the giant call view stays active on the TV screen
+  // Do NOT initialize with a dummy ticket that falsely claims a citizen is being called
+  const [latestCall, setLatestCall] = useState<{ ticket: Ticket; cubicle: Cubicle } | null>(() => {
+    if (activeCall) return activeCall;
+    return null;
+  });
+
+  // Recent call history for display in TV lower section
+  const [callHistory, setCallHistory] = useState<Array<{ ticket: Ticket; cubicle: Cubicle; timestamp: number }>>([]);
+
   // Filter active call based on channel selection and strictly match ecosystem
   const isCallInEcosystem = activeCall && (
     gatewaySelection === "registro_civil"
@@ -171,6 +181,114 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   )
     ? activeCall
     : null;
+
+  // Whenever a new active call comes in, update latestCall and callHistory
+  useEffect(() => {
+    if (displayedActiveCall) {
+      setLatestCall(displayedActiveCall);
+      setCallHistory(prev => {
+        const filtered = prev.filter(item => item.ticket.id !== displayedActiveCall.ticket.id);
+        return [{ ...displayedActiveCall, timestamp: Date.now() }, ...filtered].slice(0, 6);
+      });
+    }
+  }, [displayedActiveCall]);
+
+  // When selectedChannel changes, clear latestCall if it does not belong to the newly selected channel
+  useEffect(() => {
+    if (latestCall) {
+      const matchesChannel = 
+        selectedChannel === "general" ||
+        (selectedChannel === "OR" && latestCall.ticket.procedure === "OR") ||
+        (selectedChannel === "OHV" && latestCall.ticket.procedure === "OHV") ||
+        (selectedChannel === "RC_OTROS" && latestCall.ticket.procedure !== "OR" && latestCall.ticket.procedure !== "OHV") ||
+        latestCall.ticket.currentPhase === selectedChannel;
+      
+      const matchesEcosystem = gatewaySelection === "registro_civil"
+        ? latestCall.ticket.serviceType === ServiceType.REGISTRO
+        : latestCall.ticket.serviceType !== ServiceType.REGISTRO;
+
+      if (!matchesChannel || !matchesEcosystem) {
+        setLatestCall(null);
+      }
+    }
+  }, [selectedChannel, gatewaySelection]);
+
+  // Fallback: If latestCall is null, check for any ticket currently in explicit CALLING or ATTENDING state
+  // that STRICTLY matches the current channel and ecosystem
+  useEffect(() => {
+    if (!latestCall) {
+      const activeTickets = ecosystemTickets
+        .filter(t => {
+          const isCallingOrAttending = (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING) && !!t.assignedCubicleId;
+          if (!isCallingOrAttending) return false;
+          
+          if (selectedChannel === "general") return true;
+          if (selectedChannel === "OR") return t.procedure === "OR";
+          if (selectedChannel === "OHV") return t.procedure === "OHV";
+          if (selectedChannel === "RC_OTROS") return t.procedure !== "OR" && t.procedure !== "OHV";
+          return t.currentPhase === selectedChannel;
+        })
+        .sort((a, b) => (b.calledAt || 0) - (a.calledAt || 0));
+      
+      if (activeTickets.length > 0) {
+        const topTicket = activeTickets[0];
+        const topCubicle = cubicles.find(c => c.id === topTicket.assignedCubicleId);
+        if (topCubicle) {
+          setLatestCall({ ticket: topTicket, cubicle: topCubicle });
+        }
+      }
+    }
+  }, [ecosystemTickets, cubicles, latestCall, selectedChannel]);
+
+  // Effective call to show prominently in large format on the screen
+  const primaryCallToDisplay = displayedActiveCall || latestCall;
+
+  // Function to manually trigger demo / real calls from TV screen
+  const triggerDemoCall = async (
+    citizenName: string, 
+    cubicleNum: number, 
+    ticketCode: string, 
+    agentName: string, 
+    phase: TicketPhase = TicketPhase.CAJA
+  ) => {
+    const isCaja = phase === TicketPhase.CAJA;
+    const targetCubicle: Cubicle = {
+      id: isCaja ? `CUB-${34 + cubicleNum}` : `CUB-${14 + cubicleNum}`,
+      name: isCaja ? `Caja ${cubicleNum} (Cedulación)` : `Módulo ${cubicleNum} (Tríada / Fotografía)`,
+      agentName: agentName,
+      supportedServices: [ServiceType.CEDULACION],
+      supportedPhases: [phase],
+      status: CubicleStatus.ONLINE_AVAILABLE,
+      totalAttendedCount: 10
+    };
+
+    const newTicket: Ticket = {
+      id: `demo-${citizenName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`,
+      numberCode: ticketCode,
+      number: parseInt(ticketCode.replace(/\D/g, ''), 10) || 1,
+      name: citizenName,
+      serviceType: ServiceType.CEDULACION,
+      currentPhase: phase,
+      status: TicketStatus.CALLING,
+      priority: false,
+      isAppointment: false,
+      createdAt: Date.now(),
+      calledAt: Date.now(),
+      assignedCubicleId: targetCubicle.id,
+      phaseHistory: [
+        { phase: phase, timestamp: Date.now(), cubicleId: targetCubicle.id, agentName: targetCubicle.agentName }
+      ]
+    };
+
+    const callObj = { ticket: newTicket, cubicle: targetCubicle };
+    setLatestCall(callObj);
+    setCallHistory(prev => [{ ...callObj, timestamp: Date.now() }, ...prev.filter(p => p.ticket.name !== citizenName)].slice(0, 6));
+
+    if (soundEnabled) {
+      const destVoice = isCaja ? `Caja ${cubicleNum}` : `Módulo ${cubicleNum}`;
+      announceAndCall(ticketCode, citizenName, destVoice, 2).catch(console.warn);
+    }
+  };
 
   // Audio announcement ref to keep track of the last announced ticket and calledAt
   const lastAnnouncedRef = useRef<{ id: string; calledAt: number } | null>(null);
@@ -198,8 +316,8 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       ? `Caja ${cubicle.name.replace(/\D/g, '') || cubicle.name}`
       : cubicle.name;
 
-    // Play the calling sequence
-    announceAndCall(ticket.numberCode, ticket.name, destName).catch(err => {
+    // Play 2 consecutive calls (Primer llamado + Segundo llamado) with chime and voice
+    announceAndCall(ticket.numberCode, ticket.name, destName, 2).catch(err => {
       console.warn("Speech synthesis error on TV screen:", err);
     });
   }, [displayedActiveCall, soundEnabled]);
@@ -207,16 +325,23 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   // Filter cubicles strictly based on active ecosystem
   const ecosystemCubicles = cubicles.filter(c => {
     if (gatewaySelection === "registro_civil") {
-      // Cubicles assigned to Registro Civil procedures or CUB 2..23
-      return (c.supportedServices || []).includes(ServiceType.REGISTRO) || c.name.includes("(OR)") || c.name.includes("(OHV)") || c.name.includes("(OTR)") || c.name.includes("(ED)") || c.name.includes("(SAU)");
+      // Cubicles assigned to Registro Civil procedures or CUB 1..23
+      return (c.supportedServices || []).includes(ServiceType.REGISTRO) || 
+        c.name.includes("(OR)") || c.name.includes("(OHV)") || c.name.includes("(OTR)") || 
+        c.name.includes("(ED)") || c.name.includes("(SAU)") || c.name.includes("(SI") ||
+        c.name.includes("(OI)") || c.name.includes("(RS)") || c.name.includes("(RMAT)") || 
+        c.name.includes("(STR)");
     } else {
-      // Cubicles for Cedulación / Caja / Tríada (strictly exclude all Registro Civil specialized modules)
-      return (c.supportedPhases?.includes(TicketPhase.CAJA) || c.supportedPhases?.includes(TicketPhase.TRIADA)) && 
-        !(c.supportedServices || []).includes(ServiceType.REGISTRO) &&
-        !c.name.includes("(OR)") && !c.name.includes("(OHV)") && !c.name.includes("(OTR)") && 
-        !c.name.includes("(ED)") && !c.name.includes("(SAU)") && !c.name.includes("(SI") && 
-        !c.name.includes("(OI)") && !c.name.includes("(RS)") && !c.name.includes("(RMAT)") && 
-        !c.name.includes("(STR)");
+      // Cubicles for Cedulación / Caja / Tríada (strictly exclude all Registro Civil specialized modules and OTR)
+      const isRcName = c.name.includes("(OR)") || c.name.includes("(OHV)") || c.name.includes("(OTR)") || 
+        c.name.includes("(ED)") || c.name.includes("(SAU)") || c.name.includes("(SI") || 
+        c.name.includes("(OI)") || c.name.includes("(RS)") || c.name.includes("(RMAT)") || 
+        c.name.includes("(STR)");
+      if (isRcName) return false;
+
+      const hasCaja = c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().startsWith("caja");
+      const hasTriada = c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().startsWith("módulo") || c.name.toLowerCase().startsWith("modulo");
+      return hasCaja || hasTriada;
     }
   });
 
@@ -263,6 +388,116 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     if (selectedChannel === TicketPhase.TRIADA) return "Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de Tríada y Fotografía.";
     return `Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de ${PHASES_CONFIG[selectedChannel as TicketPhase]?.name || "atención"}.`;
   };
+
+  if (isImmersiveFullscreen) {
+    const primaryCall = displayedActiveCall || latestCall;
+
+    if (primaryCall) {
+      const isCaja = primaryCall.ticket.currentPhase === TicketPhase.CAJA || primaryCall.cubicle.name.toLowerCase().startsWith("caja");
+      const cleanCubicleNum = primaryCall.cubicle.name.replace(/\D/g, '') || primaryCall.cubicle.name;
+      
+      let destinationText = "";
+      if (isCaja) {
+        destinationText = `DIRÍJASE A LA CAJA ${cleanCubicleNum}`;
+      } else if (primaryCall.cubicle.name.toLowerCase().startsWith("módulo") || primaryCall.cubicle.name.toLowerCase().startsWith("modulo")) {
+        destinationText = `DIRÍJASE AL ${primaryCall.cubicle.name.replace(/\s*\(.*?\)\s*/g, '').trim().toUpperCase()}`;
+      } else if (primaryCall.cubicle.name.toLowerCase().startsWith("cubículo") || primaryCall.cubicle.name.toLowerCase().startsWith("cubiculo")) {
+        destinationText = `DIRÍJASE AL ${primaryCall.cubicle.name.replace(/\s*\(.*?\)\s*/g, '').trim().toUpperCase()}`;
+      } else {
+        destinationText = `DIRÍJASE A ${primaryCall.cubicle.name.replace(/\s*\(.*?\)\s*/g, '').trim().toUpperCase()}`;
+      }
+
+      const procedureBadge = primaryCall.ticket.serviceType === ServiceType.REGISTRO ? "REGISTRO CIVIL" : "CEDULACIÓN";
+      const phaseName = PHASES_CONFIG[primaryCall.ticket.currentPhase]?.name?.toUpperCase() || (isCaja ? "CAJA" : "TRÍADA");
+
+      return (
+        <div 
+          id="main-public-screen" 
+          className="fixed inset-0 z-[99999] bg-[#071a36] text-white flex flex-col justify-between items-center p-6 md:p-10 select-none overflow-hidden font-sans border-[8px] border-[#eab308] rounded-3xl m-2 md:m-3"
+        >
+          {/* Deep ambient radial gradient */}
+          <div 
+            className="absolute inset-0 bg-no-repeat bg-cover pointer-events-none z-0" 
+            style={{
+              backgroundImage: "radial-gradient(circle at 50% 40%, #0d2c63 0%, #071a36 68%, #030d1c 100%)"
+            }} 
+          />
+
+          {/* Exit Fullscreen discreet button in top right */}
+          <button
+            onClick={toggleImmersiveFullscreen}
+            className="absolute top-4 right-4 z-50 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white px-4 py-1.5 rounded-full text-xs font-mono font-bold uppercase tracking-wider backdrop-blur-md transition-all cursor-pointer flex items-center gap-1.5 border border-white/15 shadow-sm"
+            title="Presione ESC o haga clic aquí para salir de pantalla completa"
+          >
+            <span>✕ Salir de Pantalla Completa</span>
+          </button>
+
+          {/* Top Announcement Badges */}
+          <div className="relative z-10 flex flex-wrap items-center justify-center gap-3 pt-2">
+            <div className="bg-[#e51a24] text-white font-black text-xs sm:text-sm md:text-base px-6 py-2 rounded-full uppercase tracking-wider shadow-lg flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
+              <span>🔔 LLAMADO ACTIVO DE TURNO</span>
+            </div>
+            <div className="bg-[#102550] border border-blue-400/40 text-blue-200 font-mono text-xs sm:text-sm font-bold px-6 py-2 rounded-full uppercase tracking-wider shadow-sm">
+              SISTEMA DE VOZ: 2 LLAMADOS
+            </div>
+          </div>
+
+          {/* Citizen Name Section */}
+          <div className="relative z-10 text-center w-full max-w-6xl px-4 my-auto flex flex-col items-center">
+            <span className="text-xs sm:text-sm md:text-base font-black tracking-[0.25em] text-[#00d0ff] uppercase font-mono mb-2">
+              CIUDADANO(A)
+            </span>
+            <h1 className="text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-black text-[#ffdc2b] font-sans tracking-tight uppercase leading-none drop-shadow-[0_10px_35px_rgba(0,0,0,0.9)] max-w-5xl">
+              {primaryCall.ticket.name || "CIUDADANO SIN NOMBRE"}
+            </h1>
+          </div>
+
+          {/* Big White Card with Red Border */}
+          <div className="relative z-10 bg-white border-[10px] sm:border-[14px] border-[#e51a24] rounded-[28px] sm:rounded-[36px] px-8 sm:px-16 py-8 sm:py-12 text-center w-full max-w-4xl shadow-[0_25px_60px_rgba(0,0,0,0.8)] my-auto flex flex-col items-center justify-center">
+            <h2 className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black text-[#1b3d75] uppercase font-mono tracking-tight leading-none">
+              {destinationText}
+            </h2>
+            
+            <div className="mt-4">
+              <span className="bg-red-50 text-[#e51a24] border border-red-200/80 font-mono font-black text-xs sm:text-sm md:text-base px-6 py-1.5 rounded-full uppercase tracking-wider inline-block">
+                {procedureBadge}
+              </span>
+            </div>
+
+            <div className="h-1.5 w-28 bg-[#e51a24] my-5 rounded-full" />
+
+            <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 text-slate-700 font-mono text-xs sm:text-sm md:text-base font-black uppercase">
+              <span>TICKET: <strong className="text-[#e51a24] font-black text-xl sm:text-2xl">{primaryCall.ticket.numberCode}</strong></span>
+              <span className="text-slate-400">•</span>
+              <span>AGENTE: <strong className="text-slate-900 font-extrabold">{primaryCall.cubicle.agentName.toUpperCase()}</strong></span>
+            </div>
+          </div>
+
+          {/* Bottom Stat Badges */}
+          <div className="relative z-10 flex flex-wrap items-center justify-center gap-4 sm:gap-6 pb-2">
+            <div className="bg-[#061838]/90 border border-cyan-500/40 px-8 py-3 rounded-2xl shadow-xl text-center min-w-[210px]">
+              <span className="text-[10px] sm:text-xs font-mono font-bold text-cyan-300 block uppercase tracking-wider">
+                CÓDIGO DE TURNO
+              </span>
+              <span className="text-3xl sm:text-4xl md:text-5xl font-black font-mono text-white tracking-widest block mt-0.5">
+                {primaryCall.ticket.numberCode}
+              </span>
+            </div>
+
+            <div className="bg-[#061838]/90 border border-blue-500/40 px-8 py-3 rounded-2xl shadow-xl text-center min-w-[210px]">
+              <span className="text-[10px] sm:text-xs font-mono font-bold text-blue-300 block uppercase tracking-wider">
+                FASE DEL TRÁMITE
+              </span>
+              <span className="text-xl sm:text-2xl md:text-3xl font-black font-mono uppercase text-white tracking-wider block mt-1">
+                {phaseName}
+              </span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+  }
 
   return (
     <div id="main-public-screen" className={`rounded-2xl p-6.5 shadow-2xl border flex flex-col justify-between h-full min-h-[720px] overflow-hidden relative transition-all duration-700 ${
@@ -363,21 +598,53 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               {/* Botones de Pantalla Completa solicitados al lado de Probar Voz */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => launchFullscreenForChannel("OR")}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
-                  title="📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)"
+                  id="btn-pantalla-completa-light"
+                  onClick={toggleImmersiveFullscreen}
+                  className="px-3.5 py-1.5 bg-[#2a45c7] hover:bg-[#1e38b3] text-white rounded-xl font-black text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-blue-400/30 active:scale-95 shrink-0"
+                  title="🖥️ PANTALLA COMPLETA: Vista gigante para monitores y TV de sala"
                 >
-                  <Tv className="w-3.5 h-3.5 text-white" />
-                  <span>📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)</span>
+                  <Tv className="w-3.5 h-3.5 text-white/90" />
+                  <span>🖥️ PANTALLA COMPLETA</span>
                 </button>
-                <button
-                  onClick={() => launchFullscreenForChannel("OHV")}
-                  className="px-3 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
-                  title="📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)"
-                >
-                  <Tv className="w-3.5 h-3.5 text-slate-950" />
-                  <span>📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)</span>
-                </button>
+                {gatewaySelection === "cedulacion" ? (
+                  <>
+                    <button
+                      onClick={() => launchFullscreenForChannel(TicketPhase.CAJA)}
+                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
+                      title="📺 PANTALLA COMPLETA: CAJA (Cedulación)"
+                    >
+                      <Tv className="w-3 h-3 text-white" />
+                      <span>CAJA</span>
+                    </button>
+                    <button
+                      onClick={() => launchFullscreenForChannel(TicketPhase.TRIADA)}
+                      className="px-2.5 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
+                      title="📺 PANTALLA COMPLETA: TRÍADA / FOTOGRAFÍA"
+                    >
+                      <Tv className="w-3 h-3 text-slate-950" />
+                      <span>TRÍADA</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => launchFullscreenForChannel("OR")}
+                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
+                      title="📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)"
+                    >
+                      <Tv className="w-3 h-3 text-white" />
+                      <span>OR</span>
+                    </button>
+                    <button
+                      onClick={() => launchFullscreenForChannel("OHV")}
+                      className="px-2.5 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
+                      title="📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)"
+                    >
+                      <Tv className="w-3 h-3 text-slate-950" />
+                      <span>OHV</span>
+                    </button>
+                  </>
+                )}
               </div>
 
               {/* Digital Clock Badge in Light Mode */}
@@ -434,7 +701,50 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               </span>
             </div>
 
-            <div className="flex items-center justify-between md:justify-end gap-5">
+            <div className="flex flex-wrap items-center justify-between md:justify-end gap-3">
+              {/* Quick Demo Call Buttons requested by user */}
+              <div className="flex items-center gap-2 bg-white/5 border border-white/10 p-1.5 rounded-xl">
+                {gatewaySelection === "cedulacion" ? (
+                  <>
+                    <button
+                      onClick={() => triggerDemoCall("Emmanuel Lobo", 1, "C-001", "Karla Cedeño", TicketPhase.CAJA)}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] uppercase rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+                      title="Ejecutar llamado de Emmanuel Lobo a Caja 1 con 2 avisos de voz"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>▶️ LLAMAR: EMMANUEL LOBO (CAJA 1)</span>
+                    </button>
+                    <button
+                      onClick={() => triggerDemoCall("Oscar Vega", 2, "C-002", "Julio Acosta", TicketPhase.CAJA)}
+                      className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-white font-black text-[10px] uppercase rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+                      title="Ejecutar llamado de Oscar Vega a Caja 2 con 2 avisos de voz"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>▶️ LLAMAR: OSCAR VEGA (CAJA 2)</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => triggerDemoCall("Carlos Ortega", 2, "REG-001", "Oficial de Recepción", TicketPhase.TRIADA)}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] uppercase rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+                      title="Ejecutar llamado de Registro Civil a Cubículo 2 (OR)"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>▶️ LLAMAR: OR (CUBÍCULO 2)</span>
+                    </button>
+                    <button
+                      onClick={() => triggerDemoCall("María Santos", 16, "REG-002", "Oficial Hechos Vitales", TicketPhase.TRIADA)}
+                      className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-white font-black text-[10px] uppercase rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+                      title="Ejecutar llamado de Registro Civil a Cubículo 16 (OHV)"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>▶️ LLAMAR: OHV (CUBÍCULO 16)</span>
+                    </button>
+                  </>
+                )}
+              </div>
+
               {/* Speaker Control & Test (styled as glassy settings badge) */}
               <div className="flex items-center gap-2.5 bg-white/5 border border-white/10 px-3.5 py-1.5 rounded-xl font-mono text-[10px] tracking-wider shadow-sm select-none">
                 <button
@@ -458,21 +768,53 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               {/* Botones de Pantalla Completa solicitados al lado de Probar Voz */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => launchFullscreenForChannel("OR")}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
-                  title="📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)"
+                  id="btn-pantalla-completa-dark"
+                  onClick={toggleImmersiveFullscreen}
+                  className="px-3.5 py-1.5 bg-[#2a45c7] hover:bg-[#1e38b3] text-white rounded-xl font-black text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-blue-400/30 active:scale-95 shrink-0"
+                  title="🖥️ PANTALLA COMPLETA: Vista gigante para monitores y TV de sala"
                 >
-                  <Tv className="w-3.5 h-3.5 text-white" />
-                  <span>📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)</span>
+                  <Tv className="w-3.5 h-3.5 text-white/90" />
+                  <span>🖥️ PANTALLA COMPLETA</span>
                 </button>
-                <button
-                  onClick={() => launchFullscreenForChannel("OHV")}
-                  className="px-3 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9.5px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
-                  title="📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)"
-                >
-                  <Tv className="w-3.5 h-3.5 text-slate-950" />
-                  <span>📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)</span>
-                </button>
+                {gatewaySelection === "cedulacion" ? (
+                  <>
+                    <button
+                      onClick={() => launchFullscreenForChannel(TicketPhase.CAJA)}
+                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
+                      title="📺 PANTALLA COMPLETA: CAJA (Cedulación)"
+                    >
+                      <Tv className="w-3 h-3 text-white" />
+                      <span>CAJA</span>
+                    </button>
+                    <button
+                      onClick={() => launchFullscreenForChannel(TicketPhase.TRIADA)}
+                      className="px-2.5 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
+                      title="📺 PANTALLA COMPLETA: TRÍADA / FOTOGRAFÍA"
+                    >
+                      <Tv className="w-3 h-3 text-slate-950" />
+                      <span>TRÍADA</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => launchFullscreenForChannel("OR")}
+                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
+                      title="📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)"
+                    >
+                      <Tv className="w-3 h-3 text-white" />
+                      <span>OR</span>
+                    </button>
+                    <button
+                      onClick={() => launchFullscreenForChannel("OHV")}
+                      className="px-2.5 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
+                      title="📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)"
+                    >
+                      <Tv className="w-3 h-3 text-slate-950" />
+                      <span>OHV</span>
+                    </button>
+                  </>
+                )}
               </div>
 
               {/* Smart Digital Clock Badge styled matching the Photo */}
@@ -734,97 +1076,125 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         </div>
 
         {/* --- HERO: FLASHING CALL OUT SECTION --- */}
-        <div id="hero-callout-screen" className="min-h-[190px] relative">
+        <div id="hero-callout-screen" className="min-h-[220px] relative">
           <AnimatePresence mode="wait">
-            {displayedActiveCall ? (
+            {primaryCallToDisplay ? (
               <motion.div
-                key={displayedActiveCall.ticket.id}
-                initial={{ opacity: 0, scale: 0.98 }}
+                key={primaryCallToDisplay.ticket.id + "-" + (primaryCallToDisplay.ticket.calledAt || 0)}
+                initial={{ opacity: 0, scale: 0.96 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.98 }}
-                transition={{ duration: 0.25 }}
-                className="bg-[#0c244c] border-2 border-sky-505/60 rounded-3xl p-10 lg:p-14 flex flex-col items-center justify-center gap-10 shadow-2xl relative overflow-hidden ring-8 ring-sky-500/10"
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.3 }}
+                className="bg-gradient-to-b from-[#081836] via-[#0d2757] to-[#081836] border-4 border-amber-400/80 rounded-3xl p-6 sm:p-10 lg:p-12 flex flex-col items-center justify-center gap-8 shadow-2xl relative overflow-hidden ring-8 ring-blue-600/20"
               >
-                {/* Visual flashy background indicators */}
-                <div className="absolute top-0 bottom-0 left-0 w-3 bg-rose-600 animate-pulse" />
-                <div className="absolute top-0 bottom-0 right-0 w-3 bg-amber-400 animate-pulse" />
+                {/* Visual flashy background indicator borders */}
+                <div className="absolute top-0 bottom-0 left-0 w-3.5 bg-amber-400 animate-pulse" />
+                <div className="absolute top-0 bottom-0 right-0 w-3.5 bg-amber-400 animate-pulse" />
+                <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-red-600 via-white to-blue-600" />
 
-                {/* GIGANTIC DESTINATION BOX */}
-                <div className="flex flex-col items-center justify-center bg-white border-[10px] border-rose-600 px-14 py-12 rounded-3xl text-center min-w-[380px] lg:min-w-[540px] max-w-full z-10 shadow-2xl text-slate-900 transition-all transform hover:scale-[1.02]">
-                  <span className="text-sm md:text-lg lg:text-xl xl:text-2xl tracking-widest text-[#122e70] uppercase font-mono font-black">
-                    {displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA ? "POR FAVOR DIRÍJASE A LA" : "POR FAVOR DIRÍJASE AL"}
+                {/* Top Announcement Badges */}
+                <div className="flex flex-wrap items-center justify-center gap-3 z-10">
+                  <span className="px-5 py-2 text-sm sm:text-base md:text-lg font-mono tracking-widest font-black uppercase bg-red-600 text-white rounded-xl shadow-lg animate-bounce flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full bg-white animate-ping" />
+                    🛎️ LLAMADO ACTIVO DE TURNO
                   </span>
-                  
-                  {(() => {
-                    const isCaja = displayedActiveCall.ticket.currentPhase === TicketPhase.CAJA;
-                    const fullName = displayedActiveCall.cubicle.name;
-                    const cleanName = isCaja 
-                      ? `CAJA ${fullName.replace(/\D/g, '') || fullName}`
-                      : fullName.replace(/\s*\(.*?\)\s*/g, '').trim();
-                    const subtitle = !isCaja && fullName.includes("(")
-                      ? fullName.match(/\((.*?)\)/)?.[1].trim()
-                      : null;
-
-                    return (
-                      <div className="flex flex-col items-center justify-center">
-                        <p className="text-6xl md:text-8xl lg:text-[7.5rem] xl:text-[9rem] font-black text-[#122e70] mt-4 uppercase font-mono tracking-wide leading-none animate-pulse">
-                          {cleanName.toUpperCase()}
-                        </p>
-                        {subtitle && (
-                          <p className="text-sm md:text-lg lg:text-xl xl:text-3xl font-black text-rose-600 mt-4 tracking-widest uppercase font-mono bg-rose-50 border border-rose-100 px-6 py-2 rounded-full shadow-sm animate-pulse">
-                            {subtitle.toUpperCase()}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })()}
-                  
-                  <div className="h-1.5 w-36 bg-rose-600 my-5 rounded-full" />
-                  
-                  <p className="text-xs md:text-sm lg:text-base xl:text-lg text-slate-500 font-mono uppercase tracking-widest font-black">
-                    📢 ATENDIDO POR AGENTE: <span className="text-slate-800">{displayedActiveCall.cubicle.agentName.toUpperCase()}</span>
-                  </p>
+                  {primaryCallToDisplay.ticket.priority && (
+                    <span className="px-4 py-2 text-sm sm:text-base md:text-lg font-black bg-amber-500 text-white rounded-xl uppercase flex items-center gap-1.5 shadow-lg animate-pulse">
+                      <ShieldAlert className="w-5 h-5" /> ATENCIÓN PREFERENCIAL
+                    </span>
+                  )}
+                  <span className="px-4 py-2 text-xs sm:text-sm font-mono font-bold uppercase bg-blue-900/80 border border-blue-400/40 text-blue-200 rounded-xl">
+                    SISTEMA DE VOZ: 2 LLAMADOS
+                  </span>
                 </div>
 
-                <div className="space-y-4 text-center z-10 w-full flex flex-col items-center justify-center">
-                  <div className="flex flex-wrap items-center justify-center gap-2.5">
-                    <span className="px-4 py-1.5 text-xs md:text-sm lg:text-base font-mono tracking-widest font-black uppercase bg-rose-600 text-white rounded-md animate-bounce shadow-md">
-                      🛎️ TURNO LLAMADO
-                    </span>
-                    {displayedActiveCall.ticket.priority && (
-                      <span className="px-3.5 py-1.5 text-xs md:text-sm lg:text-base font-black bg-amber-500 text-white rounded-md uppercase flex items-center gap-1 shadow-md animate-pulse">
-                        <ShieldAlert className="w-4 h-4" /> ATENCIÓN PRIORITARIA
-                      </span>
-                    )}
-                  </div>
-                  
-                  <h1 className="text-9xl md:text-[13rem] lg:text-[16rem] xl:text-[18rem] font-black tracking-widest text-[#ffffff] py-1 font-mono leading-none drop-shadow-[0_6px_20px_rgba(255,255,255,0.25)] animate-pulse">
-                    {displayedActiveCall.ticket.numberCode}
+                {/* CITIZEN NAME IN GIGANTIC LETTERS */}
+                <div className="text-center z-10 w-full px-2 max-w-5xl">
+                  <p className="text-xs sm:text-sm md:text-base font-black tracking-widest text-cyan-300 uppercase font-mono mb-2">
+                    CIUDADANO(A)
+                  </p>
+                  <h1 className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl xl:text-9xl font-black tracking-tight text-amber-300 uppercase font-sans leading-none drop-shadow-[0_6px_24px_rgba(0,0,0,0.8)] line-clamp-2">
+                    {primaryCallToDisplay.ticket.name || "CIUDADANO SIN NOMBRE"}
                   </h1>
+                </div>
+
+                {/* GIGANTIC DESTINATION BOX: "DIRÍJASE A LA CAJA 1 / CAJA 2 / MÓDULO..." */}
+                {(() => {
+                  const isCaja = primaryCallToDisplay.ticket.currentPhase === TicketPhase.CAJA;
+                  const fullName = primaryCallToDisplay.cubicle.name;
+                  const cleanCubicleNum = fullName.replace(/\D/g, '') || fullName;
                   
-                  <p className="text-3xl md:text-5xl lg:text-6xl font-extrabold text-blue-200 uppercase tracking-widest italic truncate max-w-[850px] drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">
-                    {displayedActiveCall.ticket.name}
-                  </p>
-                  
-                  <div className="flex items-center justify-center gap-3 mt-4">
-                    <span className="text-xs md:text-sm lg:text-base font-mono font-black text-slate-300 uppercase tracking-widest">IR DIRECTAMENTE A:</span>
-                    <span className={`px-5 py-2 text-xs md:text-sm lg:text-base font-mono font-black uppercase shadow-sm border rounded-lg ${PHASES_CONFIG[displayedActiveCall.ticket.currentPhase].color}`}>
-                      {PHASES_CONFIG[displayedActiveCall.ticket.currentPhase].name.toUpperCase()}
+                  let destinationText = "";
+                  if (isCaja || fullName.toLowerCase().startsWith("caja")) {
+                    destinationText = `DIRÍJASE A LA CAJA ${cleanCubicleNum}`;
+                  } else if (fullName.toLowerCase().startsWith("módulo") || fullName.toLowerCase().startsWith("modulo")) {
+                    destinationText = `DIRÍJASE AL ${fullName.replace(/\s*\(.*?\)\s*/g, '').trim().toUpperCase()}`;
+                  } else if (fullName.toLowerCase().startsWith("cubículo") || fullName.toLowerCase().startsWith("cubiculo")) {
+                    destinationText = `DIRÍJASE AL ${fullName.replace(/\s*\(.*?\)\s*/g, '').trim().toUpperCase()}`;
+                  } else {
+                    destinationText = `DIRÍJASE A ${fullName.replace(/\s*\(.*?\)\s*/g, '').trim().toUpperCase()}`;
+                  }
+
+                  const subtitle = fullName.includes("(")
+                    ? fullName.match(/\((.*?)\)/)?.[1].trim()
+                    : null;
+
+                  return (
+                    <div className="flex flex-col items-center justify-center bg-white border-[8px] sm:border-[12px] border-red-600 px-8 sm:px-14 py-8 sm:py-10 rounded-3xl text-center w-full max-w-4xl z-10 shadow-2xl text-slate-900 transition-all transform">
+                      <p className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black text-[#003087] uppercase font-mono tracking-tight leading-none animate-pulse">
+                        {destinationText}
+                      </p>
+                      
+                      {subtitle && (
+                        <p className="text-xs sm:text-sm md:text-base lg:text-lg font-black text-red-700 mt-3 tracking-wider uppercase font-mono bg-red-50 border border-red-200 px-4 py-1.5 rounded-full">
+                          {subtitle.toUpperCase()}
+                        </p>
+                      )}
+
+                      <div className="h-1.5 w-32 bg-red-600 my-4 rounded-full" />
+
+                      <div className="flex flex-wrap items-center justify-center gap-4 text-slate-700 font-mono text-xs sm:text-sm md:text-base font-black uppercase">
+                        <span>TICKET: <strong className="text-red-700 font-extrabold text-lg sm:text-xl md:text-2xl">{primaryCallToDisplay.ticket.numberCode}</strong></span>
+                        <span>•</span>
+                        <span>AGENTE: <strong className="text-slate-900">{primaryCallToDisplay.cubicle.agentName.toUpperCase()}</strong></span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* TICKET CODE AND STAGE BANNER */}
+                <div className="flex flex-wrap items-center justify-center gap-4 z-10 text-center">
+                  <div className="bg-slate-900/90 border border-cyan-400/40 px-6 py-2.5 rounded-2xl shadow-md">
+                    <span className="text-xs font-mono font-bold text-cyan-300 block uppercase">CÓDIGO DE TURNO</span>
+                    <span className="text-3xl sm:text-4xl md:text-5xl font-black font-mono text-white tracking-widest">
+                      {primaryCallToDisplay.ticket.numberCode}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-900/90 border border-blue-400/40 px-6 py-2.5 rounded-2xl shadow-md">
+                    <span className="text-xs font-mono font-bold text-blue-300 block uppercase">FASE DEL TRÁMITE</span>
+                    <span className={`text-base sm:text-lg md:text-xl font-black font-mono uppercase text-white`}>
+                      {PHASES_CONFIG[primaryCallToDisplay.ticket.currentPhase]?.name?.toUpperCase() || "ATENCIÓN"}
                     </span>
                   </div>
                 </div>
 
-                {/* Dismiss Call indicator */}
-                <button
-                  id="btn-dismiss-active-call"
-                  onClick={onClearActiveCall}
-                  className="absolute top-4 right-4 text-sky-205 hover:text-white p-2 text-xs rounded-full transition-colors cursor-pointer bg-white/10 border border-white/5 hover:bg-white/20"
-                  title="Ocultar alerta visual"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                {/* Dismiss / Clear Call indicator (for manual dismiss) */}
+                {displayedActiveCall && (
+                  <button
+                    id="btn-dismiss-active-call"
+                    onClick={() => {
+                      onClearActiveCall();
+                      setLatestCall(null);
+                    }}
+                    className="absolute top-4 right-4 text-sky-200 hover:text-white p-2 text-xs rounded-full transition-colors cursor-pointer bg-white/10 border border-white/10 hover:bg-white/20"
+                    title="Ocultar llamado"
+                  >
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
               </motion.div>
             ) : (
               <div className={`border rounded-2xl p-8 flex flex-col lg:flex-row items-center justify-between gap-6 text-center lg:text-left h-full shadow-sm relative overflow-hidden transition-all duration-300 ${
@@ -839,7 +1209,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       : "bg-sky-955/70 text-sky-400 border border-sky-850/50"
                   }`}>
                     {selectedChannel === "general" 
-                      ? "🔍 RECOMENDACIÓN DE SALA" 
+                      ? "🔍 SALA DE ESPERA - TRIBUNAL ELECTORAL" 
                       : selectedChannel === "OR"
                         ? "📺 PANTALLA EXCLUSIVA: CUBÍCULOS DE OR"
                         : selectedChannel === "OHV"
@@ -848,17 +1218,19 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                             ? "📺 PANTALLA EXCLUSIVA: OTROS TRÁMITES Y ENTREGA"
                             : `📺 DETALLE DE PANTALLA: FASE DE ${PHASES_CONFIG[selectedChannel as TicketPhase].name.toUpperCase()}`}
                   </span>
-                  <h2 className={`text-2xl font-black uppercase tracking-widest leading-tight ${isTriadaChannel ? "text-slate-900" : "text-white"}`}>Turnos Pendientes de Atención</h2>
+                  <h2 className={`text-2xl font-black uppercase tracking-widest leading-tight ${isTriadaChannel ? "text-slate-900" : "text-white"}`}>
+                    Esperando próximo llamado de turno
+                  </h2>
                   <p className={`text-sm max-w-2xl leading-relaxed font-semibold ${isTriadaChannel ? "text-slate-500" : "text-sky-200/70"}`}>
                     {selectedChannel === "general" 
-                      ? "Por favor, observe las pantallas inferiores. Conservará su mismo número de turno durante todo su trayecto y el sistema lo guiará por voz de llamada en cada sección."
+                      ? "Por favor tome asiento y preste atención a la pantalla y al sistema de audio. Su turno será anunciado por su nombre y código con 2 llamados de voz consecutivos."
                       : selectedChannel === "OR"
                         ? "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Recepción (OR) - Cubículos 2 al 8."
                         : selectedChannel === "OHV"
                           ? "Los números en esta pantalla están esperando ser atendidos en los cubículos de Oficial de Hechos Vitales (OHV) - Cubículos 16 al 20."
                           : selectedChannel === "RC_OTROS"
-                            ? "Los números en esta pantalla corresponden a Trámites Especiales, Investigación, Recepción de Sentencia, Matrimonio, Atención al Usuario y Entrega de Documentos (ED, SAU, OI, SI, RMAT, RS, STR, OTR)."
-                            : `Los números que figuran en esta pantalla están en espera o listos para ser atendidos específicamente en la fase de ${PHASES_CONFIG[selectedChannel as TicketPhase].name}.`}
+                            ? "Los números en esta pantalla corresponden a Trámites Especiales, Investigación, Recepción de Sentencia, Matrimonio, Atención al Usuario y Entrega de Documentos."
+                            : `Los números que figuran en esta pantalla están en espera para la fase de ${PHASES_CONFIG[selectedChannel as TicketPhase].name}.`}
                   </p>
                 </div>
                 
@@ -876,14 +1248,54 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               </div>
             )}
           </AnimatePresence>
-         </div>
- 
-         {/* --- BODY: DUAL GRID --- */}
-         <div className={`grid grid-cols-1 ${layoutFocus === "both" ? "lg:grid-cols-12" : "grid-cols-1"} gap-8 pt-3`}>
+        </div>
+
+        {/* --- BODY: DUAL GRID --- */}
+         <div className={`grid grid-cols-1 ${layoutFocus === "both" ? "lg:grid-cols-12" : "grid-cols-1"} gap-6 pt-2`}>
            
-           {/* COLUMN LEFT: Cubicle Monitors (Styled EXACTLY like the Photo) */}
+           {/* COLUMN LEFT: Últimos Turnos Llamados & Cubicle Monitors */}
            {layoutFocus !== "queue" && (
-             <div className={`space-y-3 animate-fade-in ${layoutFocus === "both" ? "lg:col-span-7" : ""}`}>
+             <div className={`space-y-4 animate-fade-in ${layoutFocus === "both" ? "lg:col-span-7" : ""}`}>
+               
+               {/* Sección Destacada: Últimos Turnos Llamados */}
+               {callHistory.length > 0 && (
+                 <div className="bg-slate-900/60 border border-blue-500/20 p-3.5 rounded-2xl shadow-md">
+                   <div className="flex items-center justify-between pb-2 border-b border-white/5 mb-2.5">
+                     <span className="text-xs font-black font-mono tracking-widest text-[#00d0ff] uppercase flex items-center gap-2">
+                       <Clock className="w-4 h-4 text-cyan-400" />
+                       ÚLTIMOS TURNOS LLAMADOS
+                     </span>
+                     <span className="text-[10px] font-mono font-bold text-sky-300/70 uppercase">
+                       {callHistory.length} EN HISTORIAL RECIENTE
+                     </span>
+                   </div>
+
+                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                     {callHistory.slice(0, 3).map((item, idx) => (
+                       <div
+                         key={idx}
+                         className="bg-gradient-to-br from-[#072458] to-[#041638] border border-cyan-500/30 p-3 rounded-xl flex flex-col justify-between shadow-sm"
+                       >
+                         <div className="flex items-center justify-between">
+                           <span className="text-xs font-black font-mono text-amber-300 bg-amber-950/60 border border-amber-500/40 px-2 py-0.5 rounded">
+                             {item.ticket.numberCode}
+                           </span>
+                           <span className="text-[10px] font-mono font-black text-cyan-300">
+                             {item.cubicle.name}
+                           </span>
+                         </div>
+                         <p className="text-sm font-black text-white uppercase truncate mt-1.5">
+                           {item.ticket.name}
+                         </p>
+                         <span className="text-[9px] font-mono text-sky-300/60 mt-1">
+                           {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                         </span>
+                       </div>
+                     ))}
+                   </div>
+                 </div>
+               )}
+
                <div className={`flex items-center justify-between border-b pb-2 mb-2 ${
                  isTriadaChannel ? "border-slate-300" : "border-white/5"
                }`}>
