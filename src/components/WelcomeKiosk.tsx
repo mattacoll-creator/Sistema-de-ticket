@@ -86,67 +86,6 @@ export default function WelcomeKiosk({
     localStorage.setItem("ticket_system_paper_size_v1", size);
   };
 
-  // Cita lookup state for quick arrival check-in without re-entering name or cedula
-  const [showCitaLookup, setShowCitaLookup] = useState(false);
-  const [searchCid, setSearchCid] = useState("");
-  const [citaLookupError, setCitaLookupError] = useState("");
-
-  const handleCitaCheckin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchCid.trim()) return;
-    setCitaLookupError("");
-
-    try {
-      const saved = localStorage.getItem('citas_tribunal_electoral_v2') || localStorage.getItem('te_panama_citas');
-      if (saved) {
-        const list = JSON.parse(saved);
-        const query = searchCid.trim().toLowerCase();
-        const found = list.find((c: any) => {
-          const id = (c.datosPersonales?.identificacion || '').toLowerCase();
-          const tx = (c.codigoTransaccion || '').toLowerCase();
-          return id === query || tx === query || (query.length >= 4 && id.includes(query));
-        });
-
-        if (found) {
-          const citizenName = found.datosPersonales?.nombreCompleto || 'Ciudadano Cita';
-          const citizenId = found.datosPersonales?.identificacion || 'Cédula';
-          const isPriority = found.datosPersonales?.tieneDiscapacidad || false;
-
-          let srv = ServiceType.CEDULACION;
-          if (found.servicioCategoria === 'registro_civil') srv = ServiceType.REGISTRO;
-          else if (found.servicioCategoria === 'extranjeria') srv = ServiceType.EXTRANJERIA;
-          else if (found.servicioCategoria === 'organizacion_electoral') srv = ServiceType.ELECTORAL;
-
-          let proc: string | undefined = undefined;
-          const sub = (found.subServicioId || '').toLowerCase();
-          if (found.servicioCategoria === 'organizacion_electoral' || sub.includes('oe_') || sub.includes('afiliacion') || sub.includes('residencia')) proc = 'OE';
-          else if (sub.includes('renovacion')) proc = 'REN';
-          else if (sub.includes('primera')) proc = 'CPV';
-          else if (sub.includes('duplicado')) proc = 'DUP';
-
-          setIsPrinting(true);
-          setTimeout(() => {
-            const ticket = onCreateTicket(
-              `${citizenName} (${citizenId})`,
-              srv,
-              isPriority,
-              true, // isAppointment = true -> 📅 CITA PREVIA on TV!
-              proc
-            );
-            setPrintedTicket(ticket);
-            setIsPrinting(false);
-            setShowCitaLookup(false);
-            setSearchCid("");
-          }, 800);
-          return;
-        }
-      }
-      setCitaLookupError("No se encontró ninguna cita confirmada activa con esa cédula o código.");
-    } catch (err) {
-      setCitaLookupError("Error al verificar la cita.");
-    }
-  };
-
   // Focus simulation
   const [inputFocused, setInputFocused] = useState(false);
 
@@ -263,37 +202,6 @@ export default function WelcomeKiosk({
           </div>
           
           <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
-            {onNavigateToTracker && (
-              <button
-                type="button"
-                onClick={() => onNavigateToTracker("")}
-                className="px-3.5 py-1.5 bg-cyan-700 hover:bg-cyan-800 text-white font-black text-[10px] uppercase tracking-wider rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer hover:scale-105 active:scale-95"
-              >
-                <Smartphone className="w-3.5 h-3.5 text-cyan-200" />
-                <span>📱 Seguimiento en Celular</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setShowCitaLookup(true);
-                setCitaLookupError("");
-              }}
-              className="px-3.5 py-1.5 bg-blue-900 hover:bg-blue-950 text-white font-black text-[10px] uppercase tracking-wider rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer hover:scale-105 active:scale-95"
-            >
-              <TicketIcon className="w-3.5 h-3.5 text-amber-400" />
-              <span>Confirmar Cita / Cédula</span>
-            </button>
-            {onNavigateToCitas && (
-              <button
-                type="button"
-                onClick={onNavigateToCitas}
-                className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[10px] uppercase tracking-wider rounded-lg shadow-sm flex items-center gap-1.5 transition-all cursor-pointer hover:scale-105 active:scale-95"
-              >
-                <Calendar className="w-3.5 h-3.5 fill-slate-950" />
-                <span>¿Tiene Cita Previa? / CitasTE</span>
-              </button>
-            )}
             <span className={`px-2 py-1 text-[8.5px] uppercase tracking-widest font-mono font-extrabold rounded border shadow-sm ${
               scheduleStatus.isOpen || ignoreSchedule
                 ? "bg-emerald-50 text-emerald-700 border-emerald-200 animate-pulse"
@@ -739,74 +647,6 @@ export default function WelcomeKiosk({
           </div>
         </>,
         document.body
-      )}
-
-      {/* Cita Quick Check-in Modal */}
-      {showCitaLookup && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-5 relative font-sans">
-            <button
-              type="button"
-              onClick={() => setShowCitaLookup(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition cursor-pointer font-bold text-sm"
-            >
-              ✕
-            </button>
-
-            <div className="flex items-center gap-3 border-b border-slate-100 pb-3">
-              <div className="p-2.5 bg-blue-900 text-amber-400 rounded-xl shadow-sm">
-                <Calendar className="w-5 h-5" />
-              </div>
-              <div>
-                <h4 className="text-sm font-black text-slate-900 uppercase tracking-wider">Confirmar Cita por Cédula</h4>
-                <p className="text-[11px] text-slate-500 font-medium">Omitiendo paso de reingreso de datos al contar con nombre y cédula.</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleCitaCheckin} className="space-y-4">
-              <div className="space-y-1.5">
-                <label htmlFor="search-cid-input" className="block text-xs font-extrabold uppercase tracking-wide text-slate-700">
-                  Ingrese Cédula o Código de Cita
-                </label>
-                <input
-                  id="search-cid-input"
-                  type="text"
-                  value={searchCid}
-                  onChange={(e) => setSearchCid(e.target.value)}
-                  placeholder="Ej: 8-824-1109 o 26-AB3X9"
-                  className="w-full px-3.5 py-3 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-700 font-mono shadow-xs"
-                  autoFocus
-                />
-                <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-[11px] text-blue-950 font-medium leading-relaxed mt-1">
-                  ⚡ <strong>Paso Omitido Automáticamente:</strong> Como su nombre y cédula ya fueron capturados en el agendamiento de cita, no necesita hacer fila ni reescribir sus datos. Se emitirá el turno de TV directo.
-                </div>
-              </div>
-
-              {citaLookupError && (
-                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold rounded-xl animate-pulse">
-                  {citaLookupError}
-                </div>
-              )}
-
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCitaLookup(false)}
-                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={!searchCid.trim() || isPrinting}
-                  className="flex-1 py-3 bg-blue-900 hover:bg-blue-950 text-white font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer shadow-md disabled:opacity-50 flex items-center justify-center gap-1.5"
-                >
-                  {isPrinting ? "Emitiendo..." : "Emitir Turno TV Directo"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
       )}
 
       <div className="border-t border-slate-100 pt-3 flex flex-col sm:flex-row items-center gap-2 sm:gap-0 justify-between text-[9px] text-slate-400 font-mono uppercase font-bold">

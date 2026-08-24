@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Volume2, VolumeX, Tv, UserCheck, Users, HelpCircle, ArrowRight, UserMinus, ShieldAlert, Clock } from "lucide-react";
 import { getOfficeSchedule } from "../utils/scheduleStorage";
 import { announceAndCall } from "../utils/audio";
+import { getServerTime } from "../utils/serverTime";
 
 interface MainScreenProps {
   tickets: Ticket[];
@@ -23,12 +24,31 @@ interface MainScreenProps {
 export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: MainScreenProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV" | "RC_OTROS">("general");
+  const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV" | "RC_OTROS">(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const ch = (params.get("channel") || params.get("fase") || params.get("pantalla") || params.get("canal") || "").toLowerCase();
+        const v = (params.get("view") || "").toLowerCase();
+        if (ch === "caja" || v === "tv-caja" || v === "caja-tv") return TicketPhase.CAJA;
+        if (ch === "triada" || ch === "fotografia" || ch === "foto" || v === "tv-triada" || v === "triada-tv") return TicketPhase.TRIADA;
+        if (ch === "or") return "OR";
+        if (ch === "ohv") return "OHV";
+        if (ch === "rc_otros") return "RC_OTROS";
+      } catch (e) {}
+    }
+    return "general";
+  });
   const [layoutFocus, setLayoutFocus] = useState<"both" | "cubicles" | "queue" >("both");
   const [isImmersiveFullscreen, setIsImmersiveFullscreen] = useState(false);
 
   useEffect(() => {
-    setSelectedChannel("general");
+    // Only reset to general if switching between major gateways (e.g. from cedulación to registro civil)
+    if (gatewaySelection === "registro_civil" && (selectedChannel === TicketPhase.CAJA || selectedChannel === TicketPhase.TRIADA)) {
+      setSelectedChannel("general");
+    } else if (gatewaySelection === "cedulacion" && (selectedChannel === "OR" || selectedChannel === "OHV" || selectedChannel === "RC_OTROS")) {
+      setSelectedChannel("general");
+    }
   }, [gatewaySelection]);
 
   useEffect(() => {
@@ -113,9 +133,10 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     };
   }, []);
 
-  // Maintain local clock
+  // Maintain synchronized server clock
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    setCurrentTime(getServerTime());
+    const timer = setInterval(() => setCurrentTime(getServerTime()), 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -155,63 +176,90 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
           ? sortedWaiting.filter(t => t.procedure !== "OR" && t.procedure !== "OHV")
           : sortedWaiting.filter(t => t.currentPhase === selectedChannel);
 
+  // Helper to determine if a given call belongs strictly to the currently selected channel & ecosystem
+  const isCallMatchingChannel = (
+    call: { ticket: Ticket; cubicle: Cubicle } | null,
+    channel: "general" | TicketPhase | "OR" | "OHV" | "RC_OTROS",
+    gateway: "select" | "cedulacion" | "registro_civil"
+  ): boolean => {
+    if (!call || !call.ticket || !call.cubicle) return false;
+
+    // 1. Ecosystem match
+    if (gateway === "registro_civil") {
+      if (call.ticket.serviceType !== ServiceType.REGISTRO) return false;
+    } else {
+      if (call.ticket.serviceType === ServiceType.REGISTRO) return false;
+    }
+
+    // 2. Channel match
+    if (channel === "general") return true;
+    if (channel === "OR") return call.ticket.procedure === "OR";
+    if (channel === "OHV") return call.ticket.procedure === "OHV";
+    if (channel === "RC_OTROS") return call.ticket.procedure !== "OR" && call.ticket.procedure !== "OHV";
+    
+    // For Cedulación phases: CAJA vs TRIADA
+    if (channel === TicketPhase.CAJA) {
+      const isCajaPhase = call.ticket.currentPhase === TicketPhase.CAJA;
+      const isCajaCubicle = call.cubicle.supportedPhases?.includes(TicketPhase.CAJA) || call.cubicle.name.toLowerCase().startsWith("caja");
+      return isCajaPhase || isCajaCubicle;
+    }
+    if (channel === TicketPhase.TRIADA) {
+      const isTriadaPhase = call.ticket.currentPhase === TicketPhase.TRIADA;
+      const isTriadaCubicle = call.cubicle.supportedPhases?.includes(TicketPhase.TRIADA) || 
+        call.cubicle.name.toLowerCase().startsWith("módulo") || 
+        call.cubicle.name.toLowerCase().startsWith("modulo");
+      return isTriadaPhase || isTriadaCubicle;
+    }
+
+    return call.ticket.currentPhase === channel;
+  };
+
+  // Filter active call based on channel selection and strictly match ecosystem
+  const displayedActiveCall = isCallMatchingChannel(activeCall, selectedChannel, gatewaySelection)
+    ? activeCall
+    : null;
+
   // Persistent tracking of the latest called ticket so the giant call view stays active on the TV screen
-  // Do NOT initialize with a dummy ticket that falsely claims a citizen is being called
   const [latestCall, setLatestCall] = useState<{ ticket: Ticket; cubicle: Cubicle } | null>(() => {
-    if (activeCall) return activeCall;
+    if (activeCall && isCallMatchingChannel(activeCall, selectedChannel, gatewaySelection)) {
+      return activeCall;
+    }
     return null;
   });
 
   // Recent call history for display in TV lower section
   const [callHistory, setCallHistory] = useState<Array<{ ticket: Ticket; cubicle: Cubicle; timestamp: number }>>([]);
 
-  // Filter active call based on channel selection and strictly match ecosystem
-  const isCallInEcosystem = activeCall && (
-    gatewaySelection === "registro_civil"
-      ? activeCall.ticket.serviceType === ServiceType.REGISTRO
-      : activeCall.ticket.serviceType !== ServiceType.REGISTRO
-  );
-
-  const displayedActiveCall = isCallInEcosystem && (
-    selectedChannel === "general" || 
-    (selectedChannel === "OR" && activeCall.ticket.procedure === "OR") ||
-    (selectedChannel === "OHV" && activeCall.ticket.procedure === "OHV") ||
-    (selectedChannel === "RC_OTROS" && activeCall.ticket.procedure !== "OR" && activeCall.ticket.procedure !== "OHV") ||
-    activeCall.ticket.currentPhase === selectedChannel
-  )
-    ? activeCall
-    : null;
-
-  // Whenever a new active call comes in, update latestCall and callHistory
+  // Whenever a new active call comes in that matches our channel, update latestCall and callHistory
   useEffect(() => {
     if (displayedActiveCall) {
       setLatestCall(displayedActiveCall);
       setCallHistory(prev => {
         const filtered = prev.filter(item => item.ticket.id !== displayedActiveCall.ticket.id);
-        return [{ ...displayedActiveCall, timestamp: Date.now() }, ...filtered].slice(0, 6);
+        return [{ ...displayedActiveCall, timestamp: Date.now() }, ...filtered].slice(0, 8);
       });
     }
   }, [displayedActiveCall]);
 
-  // When selectedChannel changes, clear latestCall if it does not belong to the newly selected channel
+  // When selectedChannel changes, clear latestCall or revalidate it, and filter callHistory
   useEffect(() => {
     if (latestCall) {
-      const matchesChannel = 
-        selectedChannel === "general" ||
-        (selectedChannel === "OR" && latestCall.ticket.procedure === "OR") ||
-        (selectedChannel === "OHV" && latestCall.ticket.procedure === "OHV") ||
-        (selectedChannel === "RC_OTROS" && latestCall.ticket.procedure !== "OR" && latestCall.ticket.procedure !== "OHV") ||
-        latestCall.ticket.currentPhase === selectedChannel;
+      const liveTicket = ecosystemTickets.find(t => t.id === latestCall.ticket.id);
+      const isStillMatching = isCallMatchingChannel(
+        liveTicket ? { ticket: liveTicket, cubicle: latestCall.cubicle } : latestCall,
+        selectedChannel,
+        gatewaySelection
+      );
       
-      const matchesEcosystem = gatewaySelection === "registro_civil"
-        ? latestCall.ticket.serviceType === ServiceType.REGISTRO
-        : latestCall.ticket.serviceType !== ServiceType.REGISTRO;
-
-      if (!matchesChannel || !matchesEcosystem) {
+      // If the ticket in latestCall has advanced to another phase (e.g. from CAJA to TRIADA)
+      // or if it was completed, or doesn't match the current channel, clear it
+      if (!isStillMatching || (liveTicket && liveTicket.currentPhase !== latestCall.ticket.currentPhase)) {
         setLatestCall(null);
       }
     }
-  }, [selectedChannel, gatewaySelection]);
+    // Re-filter callHistory to ensure no leaked calls from other channels remain
+    setCallHistory(prev => prev.filter(item => isCallMatchingChannel(item, selectedChannel, gatewaySelection)));
+  }, [selectedChannel, gatewaySelection, ecosystemTickets, latestCall]);
 
   // Fallback: If latestCall is null, check for any ticket currently in explicit CALLING or ATTENDING state
   // that STRICTLY matches the current channel and ecosystem
@@ -233,68 +281,26 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       if (activeTickets.length > 0) {
         const topTicket = activeTickets[0];
         const topCubicle = cubicles.find(c => c.id === topTicket.assignedCubicleId);
-        if (topCubicle) {
+        if (topCubicle && isCallMatchingChannel({ ticket: topTicket, cubicle: topCubicle }, selectedChannel, gatewaySelection)) {
           setLatestCall({ ticket: topTicket, cubicle: topCubicle });
         }
       }
     }
-  }, [ecosystemTickets, cubicles, latestCall, selectedChannel]);
+  }, [ecosystemTickets, cubicles, latestCall, selectedChannel, gatewaySelection]);
 
-  // Effective call to show prominently in large format on the screen
-  const primaryCallToDisplay = displayedActiveCall || latestCall;
-
-  // Function to manually trigger demo / real calls from TV screen
-  const triggerDemoCall = async (
-    citizenName: string, 
-    cubicleNum: number, 
-    ticketCode: string, 
-    agentName: string, 
-    phase: TicketPhase = TicketPhase.CAJA
-  ) => {
-    const isCaja = phase === TicketPhase.CAJA;
-    const targetCubicle: Cubicle = {
-      id: isCaja ? `CUB-${34 + cubicleNum}` : `CUB-${14 + cubicleNum}`,
-      name: isCaja ? `Caja ${cubicleNum} (Cedulación)` : `Módulo ${cubicleNum} (Tríada / Fotografía)`,
-      agentName: agentName,
-      supportedServices: [ServiceType.CEDULACION],
-      supportedPhases: [phase],
-      status: CubicleStatus.ONLINE_AVAILABLE,
-      totalAttendedCount: 10
-    };
-
-    const newTicket: Ticket = {
-      id: `demo-${citizenName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`,
-      numberCode: ticketCode,
-      number: parseInt(ticketCode.replace(/\D/g, ''), 10) || 1,
-      name: citizenName,
-      serviceType: ServiceType.CEDULACION,
-      currentPhase: phase,
-      status: TicketStatus.CALLING,
-      priority: false,
-      isAppointment: false,
-      createdAt: Date.now(),
-      calledAt: Date.now(),
-      assignedCubicleId: targetCubicle.id,
-      phaseHistory: [
-        { phase: phase, timestamp: Date.now(), cubicleId: targetCubicle.id, agentName: targetCubicle.agentName }
-      ]
-    };
-
-    const callObj = { ticket: newTicket, cubicle: targetCubicle };
-    setLatestCall(callObj);
-    setCallHistory(prev => [{ ...callObj, timestamp: Date.now() }, ...prev.filter(p => p.ticket.name !== citizenName)].slice(0, 6));
-
-    if (soundEnabled) {
-      const destVoice = isCaja ? `Caja ${cubicleNum}` : `Módulo ${cubicleNum}`;
-      announceAndCall(ticketCode, citizenName, destVoice, 2).catch(console.warn);
-    }
-  };
+  // Effective call to show prominently in large format on the screen (strictly validated for current channel)
+  const primaryCallToDisplay = displayedActiveCall || (
+    latestCall && isCallMatchingChannel(latestCall, selectedChannel, gatewaySelection) ? latestCall : null
+  );
 
   // Audio announcement ref to keep track of the last announced ticket and calledAt
   const lastAnnouncedRef = useRef<{ id: string; calledAt: number } | null>(null);
 
   useEffect(() => {
     if (!displayedActiveCall || !soundEnabled) return;
+
+    // Strict safety check: only announce if displayed call matches our channel & ecosystem
+    if (!isCallMatchingChannel(displayedActiveCall, selectedChannel, gatewaySelection)) return;
 
     const { ticket, cubicle } = displayedActiveCall;
     const ticketId = ticket.id;
@@ -312,7 +318,8 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       return; // Sin llamado en TV para la Caja de Registro Civil
     }
 
-    const destName = ticket.currentPhase === TicketPhase.CAJA
+    const isCaja = ticket.currentPhase === TicketPhase.CAJA || cubicle.name.toLowerCase().startsWith("caja");
+    const destName = isCaja
       ? `Caja ${cubicle.name.replace(/\D/g, '') || cubicle.name}`
       : cubicle.name;
 
@@ -320,7 +327,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     announceAndCall(ticket.numberCode, ticket.name, destName, 2).catch(err => {
       console.warn("Speech synthesis error on TV screen:", err);
     });
-  }, [displayedActiveCall, soundEnabled]);
+  }, [displayedActiveCall, soundEnabled, selectedChannel, gatewaySelection]);
 
   // Filter cubicles strictly based on active ecosystem
   const ecosystemCubicles = cubicles.filter(c => {
@@ -390,7 +397,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   };
 
   if (isImmersiveFullscreen) {
-    const primaryCall = displayedActiveCall || latestCall;
+    const primaryCall = primaryCallToDisplay;
 
     if (primaryCall) {
       const isCaja = primaryCall.ticket.currentPhase === TicketPhase.CAJA || primaryCall.cubicle.name.toLowerCase().startsWith("caja");
@@ -571,8 +578,8 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
               {/* Sync Status Badge */}
               <span className="text-[9.5px] bg-emerald-50 border border-emerald-200 text-emerald-700 font-mono px-3 py-1 rounded-lg font-black uppercase tracking-wider flex items-center gap-1.5" title="Conexión en tiempo real activa">
-                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
-                <span>Sistema en Línea (TE)</span>
+                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping"></span>
+                <span>Despacho Automático Activo</span>
               </span>
 
               {/* Speaker Control & Test (styled as glassy settings badge) */}
@@ -702,49 +709,6 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
             </div>
 
             <div className="flex flex-wrap items-center justify-between md:justify-end gap-3">
-              {/* Quick Demo Call Buttons requested by user */}
-              <div className="flex items-center gap-2 bg-white/5 border border-white/10 p-1.5 rounded-xl">
-                {gatewaySelection === "cedulacion" ? (
-                  <>
-                    <button
-                      onClick={() => triggerDemoCall("Emmanuel Lobo", 1, "C-001", "Karla Cedeño", TicketPhase.CAJA)}
-                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] uppercase rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
-                      title="Ejecutar llamado de Emmanuel Lobo a Caja 1 con 2 avisos de voz"
-                    >
-                      <Volume2 className="w-3.5 h-3.5" />
-                      <span>▶️ LLAMAR: EMMANUEL LOBO (CAJA 1)</span>
-                    </button>
-                    <button
-                      onClick={() => triggerDemoCall("Oscar Vega", 2, "C-002", "Julio Acosta", TicketPhase.CAJA)}
-                      className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-white font-black text-[10px] uppercase rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
-                      title="Ejecutar llamado de Oscar Vega a Caja 2 con 2 avisos de voz"
-                    >
-                      <Volume2 className="w-3.5 h-3.5" />
-                      <span>▶️ LLAMAR: OSCAR VEGA (CAJA 2)</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => triggerDemoCall("Carlos Ortega", 2, "REG-001", "Oficial de Recepción", TicketPhase.TRIADA)}
-                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] uppercase rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
-                      title="Ejecutar llamado de Registro Civil a Cubículo 2 (OR)"
-                    >
-                      <Volume2 className="w-3.5 h-3.5" />
-                      <span>▶️ LLAMAR: OR (CUBÍCULO 2)</span>
-                    </button>
-                    <button
-                      onClick={() => triggerDemoCall("María Santos", 16, "REG-002", "Oficial Hechos Vitales", TicketPhase.TRIADA)}
-                      className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-white font-black text-[10px] uppercase rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
-                      title="Ejecutar llamado de Registro Civil a Cubículo 16 (OHV)"
-                    >
-                      <Volume2 className="w-3.5 h-3.5" />
-                      <span>▶️ LLAMAR: OHV (CUBÍCULO 16)</span>
-                    </button>
-                  </>
-                )}
-              </div>
-
               {/* Speaker Control & Test (styled as glassy settings badge) */}
               <div className="flex items-center gap-2.5 bg-white/5 border border-white/10 px-3.5 py-1.5 rounded-xl font-mono text-[10px] tracking-wider shadow-sm select-none">
                 <button

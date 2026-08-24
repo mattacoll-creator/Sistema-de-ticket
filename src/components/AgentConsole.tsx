@@ -361,7 +361,10 @@ export default function AgentConsole({
     currentCubicle = cubicles[0];
   }
 
-  const activeTicket = tickets.find(t => t.id === currentCubicle.currentTicketId);
+  const activeTicket = tickets.find(t =>
+    (currentCubicle.currentTicketId && t.id === currentCubicle.currentTicketId && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING)) ||
+    (t.assignedCubicleId === currentCubicle.id && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING))
+  );
 
   // Filter candidates waiting that can be processed by this agent (supports current phase or RC specialty)
   const candidateWaitingTickets = ecosystemTickets.filter(t => {
@@ -1681,90 +1684,168 @@ export default function AgentConsole({
               </div>
 
               {/* ACTION TOOLBARS */}
-              <div className="grid grid-cols-2 gap-3 pt-3 border-t border-blue-100">
+              <div className="space-y-3 pt-3 border-t border-blue-100">
                 {activeTicket.status === TicketStatus.CALLING ? (
-                  <button
-                    id="btn-action-start"
-                    onClick={() => onStartAttending(currentCubicle.id)}
-                    className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-sm transition-all"
-                  >
-                    <Play className="w-4 h-4 text-emerald-400" />
-                    Iniciar Atención
-                  </button>
-                ) : gatewaySelection === "registro_civil" && !currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
-                  <button
-                    id="btn-action-complete-rc"
-                    onClick={() => onComplete(currentCubicle.id)}
-                    className="col-span-2 w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
-                    title="Trámite concluido con éxito"
-                  >
-                    <Check className="w-4 h-4 text-white shrink-0" />
-                    <span>Fin de Atención</span>
-                  </button>
-                ) : currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
-                  (() => {
-                    const effectiveProcId = selectedCajaProc || activeTicket.procedure || "CPV";
-                    const procMeta = CAJA_PROCEDURES.find(p => p.id === effectiveProcId);
-                    const requiresPhoto = procMeta ? procMeta.requiresPhoto : (effectiveProcId !== "REG" && effectiveProcId !== "COE");
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      id="btn-action-start"
+                      type="button"
+                      onClick={() => onStartAttending(currentCubicle.id)}
+                      className="py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
+                    >
+                      <Play className="w-4 h-4 text-white" />
+                      <span>Iniciar Atención</span>
+                    </button>
 
-                    return requiresPhoto ? (
-                      <button
-                        id="btn-action-caja-triada"
-                        onClick={() => {
-                          activeTicket.procedure = effectiveProcId;
-                          onComplete(currentCubicle.id, "emission_physical");
-                        }}
-                        className="col-span-2 w-full py-3.5 bg-gradient-to-r from-[#003087] to-[#122e70] hover:from-blue-800 hover:to-blue-900 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
-                        title={`Cobro de ${effectiveProcId} registrado. Enviar ciudadano a la fila de Tríada / Fotografía.`}
-                      >
-                        <Camera className="w-4 h-4 text-amber-400 shrink-0" />
-                        <span>Registrar Pago ({effectiveProcId}) ➔ Pasar a Tríada</span>
-                      </button>
-                    ) : (
-                      <button
-                        id="btn-action-caja-adm"
-                        onClick={() => {
-                          activeTicket.procedure = effectiveProcId;
-                          onComplete(currentCubicle.id, "administrative");
-                        }}
-                        className="col-span-2 w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
-                        title={`Cobro de ${effectiveProcId} registrado. Trámite administrativo/certificación concluido.`}
-                      >
-                        <Check className="w-4 h-4 text-white shrink-0" />
-                        <span>Registrar Pago ({effectiveProcId}) ➔ Finalizar Trámite</span>
-                      </button>
-                    );
-                  })()
+                    <button
+                      id="btn-action-recall"
+                      type="button"
+                      onClick={() => onRecall(currentCubicle.id)}
+                      className="py-3.5 px-4 bg-white hover:bg-slate-100 text-[#122e70] border border-blue-300 font-black text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm"
+                      title="Re-llamar al altavoz"
+                    >
+                      <Volume2 className="w-4 h-4 text-[#122e70] animate-pulse" />
+                      <span>Volver a Llamar</span>
+                    </button>
+
+                    <button
+                      id="btn-action-miss"
+                      type="button"
+                      onClick={() => onMiss(currentCubicle.id)}
+                      className="sm:col-span-2 w-full py-2.5 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 font-extrabold text-[11px] uppercase tracking-wider rounded-xl border border-slate-200 cursor-pointer flex items-center justify-center gap-2 transition-all"
+                      title="Marca cliente como ausente"
+                    >
+                      <UserX className="w-4 h-4 text-rose-500" />
+                      <span>No se presentó (Marcar Ausente)</span>
+                    </button>
+                  </div>
                 ) : (
-                  <button
-                    id="btn-action-complete"
-                    onClick={() => onComplete(currentCubicle.id)}
-                    className="w-full py-3 bg-[#122e70] hover:bg-blue-800 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all"
-                  >
-                    <Check className="w-4 h-4 text-white" />
-                    Completar Atención
-                  </button>
+                  <div className="space-y-3">
+                    {/* ATTENDING ACTIONS */}
+                    {gatewaySelection === "registro_civil" && !currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <button
+                          id="btn-action-complete-rc"
+                          type="button"
+                          onClick={() => onComplete(currentCubicle.id)}
+                          className="sm:col-span-2 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
+                          title="Trámite concluido con éxito"
+                        >
+                          <Check className="w-5 h-5 text-white shrink-0" />
+                          <span>Finalizar Atención (Trámite Concluido)</span>
+                        </button>
+                      </div>
+                    ) : currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
+                      (() => {
+                        const effectiveProcId = selectedCajaProc || activeTicket.procedure || "CPV";
+                        const procMeta = CAJA_PROCEDURES.find(p => p.id === effectiveProcId);
+                        const requiresPhoto = procMeta ? procMeta.requiresPhoto : (effectiveProcId !== "REG" && effectiveProcId !== "COE");
+
+                        return (
+                          <div className="space-y-2.5">
+                            {/* Primary Button based on selected procedure */}
+                            {requiresPhoto ? (
+                              <button
+                                id="btn-action-caja-triada"
+                                type="button"
+                                onClick={() => {
+                                  activeTicket.procedure = effectiveProcId;
+                                  onComplete(currentCubicle.id, "emission_physical");
+                                }}
+                                className="w-full py-3.5 bg-gradient-to-r from-[#003087] to-[#122e70] hover:from-blue-800 hover:to-blue-900 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
+                                title={`Cobro de ${effectiveProcId} registrado. Enviar ciudadano a la fila de Tríada / Fotografía.`}
+                              >
+                                <Camera className="w-4 h-4 text-amber-400 shrink-0" />
+                                <span>Registrar Pago ({effectiveProcId}) ➔ Pasar a Tríada</span>
+                              </button>
+                            ) : (
+                              <button
+                                id="btn-action-caja-adm"
+                                type="button"
+                                onClick={() => {
+                                  activeTicket.procedure = effectiveProcId;
+                                  onComplete(currentCubicle.id, "administrative");
+                                }}
+                                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
+                                title={`Cobro de ${effectiveProcId} registrado. Trámite administrativo/certificación concluido.`}
+                              >
+                                <Check className="w-4 h-4 text-white shrink-0" />
+                                <span>Registrar Pago ({effectiveProcId}) ➔ Finalizar Atención</span>
+                              </button>
+                            )}
+
+                            {/* Secondary direct controls for edge-case flexibility */}
+                            <div className="grid grid-cols-2 gap-2.5">
+                              <button
+                                id="btn-action-force-triada"
+                                type="button"
+                                onClick={() => {
+                                  activeTicket.procedure = effectiveProcId;
+                                  onComplete(currentCubicle.id, "emission_physical");
+                                }}
+                                className="py-2.5 px-3 bg-blue-50 hover:bg-blue-100 text-[#122e70] border border-blue-200 font-black text-[10px] uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-all"
+                                title="Enviar a Tríada y Fotografía"
+                              >
+                                <Camera className="w-3.5 h-3.5 text-blue-700" />
+                                <span>Pasar a Tríada</span>
+                              </button>
+
+                              <button
+                                id="btn-action-force-finish"
+                                type="button"
+                                onClick={() => {
+                                  activeTicket.procedure = effectiveProcId;
+                                  onComplete(currentCubicle.id, "administrative");
+                                }}
+                                className="py-2.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-black text-[10px] uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-all"
+                                title="Finalizar trámite aquí en caja"
+                              >
+                                <Check className="w-3.5 h-3.5 text-emerald-700" />
+                                <span>Finalizar Atención</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      <div className="grid grid-cols-1 gap-3">
+                        <button
+                          id="btn-action-complete"
+                          type="button"
+                          onClick={() => onComplete(currentCubicle.id)}
+                          className="w-full py-3.5 bg-[#122e70] hover:bg-blue-800 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
+                        >
+                          <Check className="w-5 h-5 text-white" />
+                          <span>Finalizar Atención (Trámite Completado)</span>
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <button
+                        id="btn-action-recall"
+                        type="button"
+                        onClick={() => onRecall(currentCubicle.id)}
+                        className="py-2.5 px-4 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-black text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-xs"
+                        title="Re-llamar al altavoz"
+                      >
+                        <Volume2 className="w-4 h-4 text-indigo-600 animate-pulse" />
+                        <span>Volver a Llamar</span>
+                      </button>
+
+                      <button
+                        id="btn-action-miss"
+                        type="button"
+                        onClick={() => onMiss(currentCubicle.id)}
+                        className="py-2.5 px-4 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 font-extrabold text-[11px] uppercase tracking-wider rounded-xl border border-slate-200 cursor-pointer flex items-center justify-center gap-2 transition-all"
+                        title="Marca cliente como ausente"
+                      >
+                        <UserX className="w-4 h-4 text-rose-500" />
+                        <span>Marcar Ausente</span>
+                      </button>
+                    </div>
+                  </div>
                 )}
-
-                <button
-                  id="btn-action-recall"
-                  onClick={() => onRecall(currentCubicle.id)}
-                  className="w-full py-3 bg-white hover:bg-slate-100 text-indigo-700 border border-indigo-400 font-black text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm"
-                  title="Re-llamar al altavoz"
-                >
-                  <Volume2 className="w-4 h-4 text-indigo-600 animate-pulse" />
-                  Volver a Llamar
-                </button>
-
-                <button
-                  id="btn-action-miss"
-                  onClick={() => onMiss(currentCubicle.id)}
-                  className="col-span-2 w-full py-3 bg-slate-100 hover:bg-rose-50 text-slate-705 hover:text-rose-700 font-extrabold text-[11px] uppercase tracking-wider rounded-xl border border-slate-205 cursor-pointer flex items-center justify-center gap-2 transition-all mt-1"
-                  title="Marca cliente como ausente"
-                >
-                  <UserX className="w-4 h-4 text-rose-500" />
-                  No se presentó (Marcar Ausente)
-                </button>
               </div>
             </div>
           ) : (

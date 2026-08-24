@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Ticket, TicketStatus, TicketPhase, Cubicle, CubicleStatus, ServiceType, SERVICES_CONFIG } from "../types";
+import { getServerTimestamp } from "../utils/serverTime";
 
 const STORAGE_KEYS = {
   TICKETS: "ticket_system_tickets_v1",
@@ -17,6 +18,66 @@ const STORAGE_KEYS = {
   OFFICE_AUTO_ASSIGN: "ticket_system_office_auto_assign_v1",
   ACTIVE_CALL: "ticket_system_active_call_v1"
 };
+
+/**
+ * Normaliza cualquier formato de ticket (desde backend PostgreSQL, API o localStorage)
+ * para asegurar consistencia tipada exacta en todos los componentes y pantallas de TV.
+ */
+export function normalizeClientTicket(raw: any): Ticket {
+  const normStatus = ((): TicketStatus => {
+    const s = String(raw.status || raw.estado || "").toUpperCase();
+    if (s === "WAITING" || s === "ESPERA") return TicketStatus.WAITING;
+    if (s === "CALLING" || s === "LLAMADO") return TicketStatus.CALLING;
+    if (s === "ATTENDING" || s === "ATENDIENDO" || s === "ATENCION") return TicketStatus.ATTENDING;
+    if (s === "COMPLETED" || s === "FINALIZADO" || s === "COMPLETADO") return TicketStatus.COMPLETED;
+    if (s === "MISSED" || s === "CANCELADO" || s === "PERDIDO") return TicketStatus.MISSED;
+    return TicketStatus.WAITING;
+  })();
+
+  const normService = ((): ServiceType => {
+    const s = String(raw.serviceType || raw.tipo_tramite || "").toUpperCase();
+    if (s.includes("ELECTORAL") || s === "O") return ServiceType.ELECTORAL;
+    if (s.includes("REGISTRO") || s === "REG" || s.includes("CERTIFICACION")) return ServiceType.REGISTRO;
+    if (s.includes("EXTRANJERIA") || s === "E" || s.includes("EXT")) return ServiceType.EXTRANJERIA;
+    return ServiceType.CEDULACION;
+  })();
+
+  const normPhase = ((): TicketPhase => {
+    const p = String(raw.currentPhase || raw.fase_actual || "").toUpperCase();
+    if (p === "TRIADA" || p === "FOTOGRAFIA" || p === "FOTO") return TicketPhase.TRIADA;
+    return TicketPhase.CAJA;
+  })();
+
+  const cTime = raw.createdAt
+    ? (typeof raw.createdAt === "number" ? raw.createdAt : new Date(raw.createdAt).getTime())
+    : (raw.hora_emision ? new Date(raw.hora_emision).getTime() : getServerTimestamp());
+
+  const cubId = raw.assignedCubicleId || raw.assignedCubicle || raw.modulo_asignado || undefined;
+
+  return {
+    id: String(raw.id || Math.random().toString(36).substring(2, 9)),
+    numberCode: String(raw.numberCode || raw.numero_ticket || "C-001"),
+    number: parseInt(String(raw.number || raw.numberCode || raw.numero_ticket || "1").replace(/\D/g, ""), 10) || 1,
+    name: String(raw.name || raw.nombre || "Ciudadano"),
+    serviceType: normService,
+    status: normStatus,
+    currentPhase: normPhase,
+    phaseHistory: Array.isArray(raw.phaseHistory) && raw.phaseHistory.length > 0
+      ? raw.phaseHistory
+      : [{ phase: normPhase, timestamp: cTime }],
+    createdAt: cTime,
+    calledAt: raw.calledAt
+      ? (typeof raw.calledAt === "number" ? raw.calledAt : new Date(raw.calledAt).getTime())
+      : (raw.hora_llamado ? new Date(raw.hora_llamado).getTime() : undefined),
+    completedAt: raw.completedAt
+      ? (typeof raw.completedAt === "number" ? raw.completedAt : new Date(raw.completedAt).getTime())
+      : (raw.hora_fin_atencion ? new Date(raw.hora_fin_atencion).getTime() : undefined),
+    assignedCubicleId: cubId,
+    priority: !!(raw.priority || raw.es_prioritario),
+    isAppointment: !!(raw.isAppointment || raw.es_cita),
+    procedure: raw.procedure || raw.sub_tramite || undefined
+  };
+}
 
 export function canCubicleServeProcedure(cubicleId: string, procedure?: string): boolean {
   if (!procedure) return true; // Non-procedure tickets (like Cedulación) can be served normally
@@ -811,13 +872,23 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     }
   }, []);
 
-  // 2. Persist to localStorage on changes
+  // 2. Persist to localStorage on changes & broadcast to all open screens/tabs
   useEffect(() => {
     try {
       if (activeCall) {
         localStorage.setItem(STORAGE_KEYS.ACTIVE_CALL, JSON.stringify(activeCall));
       } else {
         localStorage.removeItem(STORAGE_KEYS.ACTIVE_CALL);
+      }
+
+      if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+        try {
+          const bc = new BroadcastChannel("te_ticket_system_channel");
+          bc.postMessage({ type: "ACTIVE_CALL_CHANGED", activeCall: activeCall || null });
+          bc.close();
+        } catch (e) {
+          // ignore BroadcastChannel errors
+        }
       }
     } catch (e) {
       console.error("Error saving active call to localStorage", e);
@@ -849,35 +920,38 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     }
   }, [officeTickets, currentOfficeId]);
 
-  // Periodic background polling (every 3.5s) to synchronize TV screens, Kiosks and Mobile Tracker with PostgreSQL database
+  // Periodic background polling (every 2.5s) to synchronize TV screens, Kiosks and Mobile Tracker with PostgreSQL database
   useEffect(() => {
     const pollInterval = setInterval(() => {
       fetch(`/api/tickets?office=${currentOfficeId}`)
         .then(res => res.ok ? res.json() : null)
         .then(data => {
-          if (data && data.success && Array.isArray(data.tickets) && data.tickets.length > 0) {
+          if (data && data.success && Array.isArray(data.tickets)) {
             setOfficeTickets(prev => {
               const currentList = prev[currentOfficeId] || [];
-              let hasChanges = false;
-              const merged = [...currentList];
+              const normalizedIncoming = data.tickets.map(normalizeClientTicket);
 
-              data.tickets.forEach((srvTicket: any) => {
-                const idx = merged.findIndex(t => t.id === srvTicket.id || t.numberCode === srvTicket.numberCode);
-                if (idx < 0) {
-                  merged.push(srvTicket);
-                  hasChanges = true;
-                } else if (
-                  merged[idx].status !== srvTicket.status ||
-                  merged[idx].assignedCubicle !== srvTicket.assignedCubicle ||
-                  merged[idx].calledAt !== srvTicket.calledAt
-                ) {
-                  merged[idx] = { ...merged[idx], ...srvTicket };
-                  hasChanges = true;
+              // Check if there are any differences
+              let hasChanges = false;
+              if (currentList.length !== normalizedIncoming.length) {
+                hasChanges = true;
+              } else {
+                for (let i = 0; i < normalizedIncoming.length; i++) {
+                  const incoming = normalizedIncoming[i];
+                  const existing = currentList.find(t => t.id === incoming.id || t.numberCode === incoming.numberCode);
+                  if (!existing ||
+                      existing.status !== incoming.status ||
+                      existing.currentPhase !== incoming.currentPhase ||
+                      existing.assignedCubicleId !== incoming.assignedCubicleId ||
+                      existing.calledAt !== incoming.calledAt) {
+                    hasChanges = true;
+                    break;
+                  }
                 }
-              });
+              }
 
               if (hasChanges) {
-                return { ...prev, [currentOfficeId]: merged };
+                return { ...prev, [currentOfficeId]: normalizedIncoming };
               }
               return prev;
             });
@@ -886,7 +960,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         .catch(() => {
           // ignore network hiccups
         });
-    }, 3500);
+    }, 2500);
 
     return () => clearInterval(pollInterval);
   }, [currentOfficeId]);
@@ -957,14 +1031,21 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         const storedOfficeTickets = localStorage.getItem(STORAGE_KEYS.OFFICE_TICKETS);
         if (storedOfficeTickets) {
           const parsedTickets = JSON.parse(storedOfficeTickets);
+          const rawOfficeList = parsedTickets[currentOfficeId] || [];
+          const normalizedOfficeList = rawOfficeList.map(normalizeClientTicket);
+
           const incomingStateStr = JSON.stringify({
-            tickets: parsedTickets[currentOfficeId] || [],
+            tickets: normalizedOfficeList,
             cubicles: officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
             auto_assign: officeAutoAssign[currentOfficeId] !== false
           });
 
           if (incomingStateStr !== currentStateRef.current) {
-            setOfficeTickets(parsedTickets);
+            const mappedAll: Record<string, Ticket[]> = {};
+            Object.keys(parsedTickets).forEach(k => {
+              mappedAll[k] = (parsedTickets[k] || []).map(normalizeClientTicket);
+            });
+            setOfficeTickets(mappedAll);
           }
         }
 
@@ -1018,7 +1099,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         bc.onmessage = (event) => {
           if (event.data?.type === "TICKET_CREATED" || event.data?.type === "TICKET_UPDATED") {
             const officeId = event.data.officeId || currentOfficeId;
-            const updatedTicket = event.data.ticket;
+            const updatedTicket = event.data.ticket ? normalizeClientTicket(event.data.ticket) : null;
             if (updatedTicket) {
               setOfficeTickets(prev => {
                 const currentList = prev[officeId] || [];
@@ -1104,7 +1185,8 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
     let finalIsAppointment = isAppointment;
 
-    const initialPhase = serviceType === ServiceType.REGISTRO ? TicketPhase.TRIADA : TicketPhase.CAJA;
+    const initialPhase = TicketPhase.CAJA;
+    const serverCreatedTime = getServerTimestamp();
 
     const newTicket: Ticket = {
       id: Math.random().toString(36).substring(2, 9),
@@ -1114,8 +1196,8 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       serviceType,
       status: TicketStatus.WAITING,
       currentPhase: initialPhase,
-      phaseHistory: [{ phase: initialPhase, timestamp: Date.now() }],
-      createdAt: Date.now(),
+      phaseHistory: [{ phase: initialPhase, timestamp: serverCreatedTime }],
+      createdAt: serverCreatedTime,
       priority,
       isAppointment: finalIsAppointment,
       procedure: finalProcedure
@@ -1134,6 +1216,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         serviceType: newTicket.serviceType,
         procedure: newTicket.procedure,
         priority: newTicket.priority,
+        isAppointment: newTicket.isAppointment,
         sucursalId: currentOfficeId,
         status: newTicket.status,
         currentPhase: newTicket.currentPhase,
@@ -1248,6 +1331,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     });
 
     const chosenTicket = candidates[0];
+    const serverNow = getServerTimestamp();
 
     // If there was an existing ticket being attended at this cubicle, transition/complete it first based on phase pipeline
     let updatedTickets = tickets.map(t => {
@@ -1264,13 +1348,13 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
               nextStatus = TicketStatus.WAITING;
             } else {
               nextStatus = TicketStatus.COMPLETED;
-              finalCompletedAt = Date.now();
+              finalCompletedAt = serverNow;
             }
           } else {
             const isShortFlow = t.serviceType === ServiceType.ELECTORAL || t.serviceType === ServiceType.REGISTRO;
             if (isShortFlow) {
               nextStatus = TicketStatus.COMPLETED;
-              finalCompletedAt = Date.now();
+              finalCompletedAt = serverNow;
             } else {
               nextPhase = TicketPhase.TRIADA;
               nextStatus = TicketStatus.WAITING;
@@ -1278,14 +1362,14 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           }
         } else {
           nextStatus = TicketStatus.COMPLETED;
-          finalCompletedAt = Date.now();
+          finalCompletedAt = serverNow;
         }
 
         const updatedHistory = t.phaseHistory.map(h => {
           if (h.phase === t.currentPhase && !h.completedAt) {
             return {
               ...h,
-              completedAt: Date.now(),
+              completedAt: serverNow,
               cubicleId: cubicleId,
               agentName: targetCubicle.agentName
             };
@@ -1296,7 +1380,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         if (nextPhase) {
           updatedHistory.push({
             phase: nextPhase,
-            timestamp: Date.now()
+            timestamp: serverNow
           });
           return {
             ...t,
@@ -1320,14 +1404,16 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     });
 
     // Mark chosen ticket as CALLING
+    let chosenTicketRef: Ticket = {
+      ...chosenTicket,
+      status: TicketStatus.CALLING,
+      calledAt: serverNow,
+      assignedCubicleId: cubicleId
+    };
+
     updatedTickets = updatedTickets.map(t => {
       if (t.id === chosenTicket.id) {
-        return {
-          ...t,
-          status: TicketStatus.CALLING,
-          calledAt: Date.now(),
-          assignedCubicleId: cubicleId
-        };
+        return chosenTicketRef;
       }
       return t;
     });
@@ -1348,105 +1434,58 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     }));
 
     // Trigger UI Voice Event & TV Display
-    const updatedTicketRef = { ...chosenTicket, status: TicketStatus.CALLING, assignedCubicleId: cubicleId, calledAt: Date.now() };
-    setActiveCall({ ticket: updatedTicketRef, cubicle: targetCubicle });
-  }, [cubicles, tickets, setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
+    setActiveCall({ ticket: chosenTicketRef, cubicle: targetCubicle });
+
+    // Sync to backend API immediately
+    fetch("/api/tickets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: chosenTicketRef.id,
+        numberCode: chosenTicketRef.numberCode,
+        name: chosenTicketRef.name,
+        serviceType: chosenTicketRef.serviceType,
+        procedure: chosenTicketRef.procedure,
+        priority: chosenTicketRef.priority,
+        isAppointment: chosenTicketRef.isAppointment,
+        sucursalId: currentOfficeId,
+        status: chosenTicketRef.status,
+        currentPhase: chosenTicketRef.currentPhase,
+        assignedCubicleId: cubicleId,
+        assignedAgent: targetCubicle.agentName,
+        calledAt: serverNow,
+        createdAt: chosenTicketRef.createdAt
+      })
+    }).catch(() => {});
+
+    // Broadcast across windows/tabs
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        const bc = new BroadcastChannel("te_ticket_system_channel");
+        bc.postMessage({ type: "TICKET_UPDATED", officeId: currentOfficeId, ticket: chosenTicketRef });
+        bc.postMessage({ type: "ACTIVE_CALL_CHANGED", activeCall: { ticket: chosenTicketRef, cubicle: targetCubicle } });
+        bc.close();
+      } catch (err) {}
+    }
+  }, [cubicles, tickets, currentOfficeId, setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
 
   // 5. Active ticket actions (start actual attending or finish)
   const startAttendingTicket = useCallback((cubicleId: string) => {
     const targetCubicle = cubicles.find(c => c.id === cubicleId);
-    setTicketsForCurrentOffice(prev => prev.map(t => {
-      if (
-        (t.assignedCubicleId === cubicleId || (targetCubicle && t.id === targetCubicle.currentTicketId)) &&
-        t.status === TicketStatus.CALLING
-      ) {
-        return { ...t, status: TicketStatus.ATTENDING };
-      }
-      return t;
-    }));
-  }, [cubicles, setTicketsForCurrentOffice]);
-
-  const completeTicket = useCallback((cubicleId: string, outcome?: "administrative" | "emission_physical") => {
-    const targetCubicle = cubicles.find(c => c.id === cubicleId);
-    if (!targetCubicle || !targetCubicle.currentTicketId) return;
+    let updatedTicketRef: Ticket | null = null;
+    const serverNow = getServerTimestamp();
 
     setTicketsForCurrentOffice(prev => prev.map(t => {
-      if (t.id === targetCubicle.currentTicketId) {
-        let nextPhase: TicketPhase | null = null;
-        let nextStatus = TicketStatus.WAITING;
-        let finalCompletedAt: number | undefined = undefined;
-
-        if (t.currentPhase === TicketPhase.CAJA) {
-          if (outcome === "administrative") {
-            nextStatus = TicketStatus.COMPLETED;
-            finalCompletedAt = Date.now();
-          } else if (outcome === "emission_physical") {
-            nextPhase = TicketPhase.TRIADA;
-            nextStatus = TicketStatus.WAITING;
-          } else {
-            if (t.serviceType === ServiceType.CEDULACION) {
-              const doesCorrespond = t.procedure !== "REG";
-              if (doesCorrespond) {
-                nextPhase = TicketPhase.TRIADA;
-                nextStatus = TicketStatus.WAITING;
-              } else {
-                nextStatus = TicketStatus.COMPLETED;
-                finalCompletedAt = Date.now();
-              }
-            } else {
-              const isShortFlow = t.serviceType === ServiceType.ELECTORAL || t.serviceType === ServiceType.REGISTRO;
-              if (isShortFlow) {
-                nextStatus = TicketStatus.COMPLETED;
-                finalCompletedAt = Date.now();
-              } else {
-                nextPhase = TicketPhase.TRIADA;
-                nextStatus = TicketStatus.WAITING;
-              }
-            }
-          }
-        } else {
-          // TRIADA is final step
-          nextStatus = TicketStatus.COMPLETED;
-          finalCompletedAt = Date.now();
-        }
-
-        // Close the current phase history object
-        const updatedHistory = t.phaseHistory.map(h => {
-          if (h.phase === t.currentPhase && !h.completedAt) {
-            return {
-              ...h,
-              completedAt: Date.now(),
-              cubicleId: cubicleId,
-              agentName: targetCubicle.agentName
-            };
-          }
-          return h;
-        });
-
-        if (nextPhase) {
-          // Add the next phase to the history
-          updatedHistory.push({
-            phase: nextPhase,
-            timestamp: Date.now()
-          });
-          
-          return {
-            ...t,
-            currentPhase: nextPhase,
-            status: nextStatus,
-            phaseHistory: updatedHistory,
-            assignedCubicleId: undefined, // Clear assignment so others can call it
-            calledAt: undefined
-          };
-        } else {
-          return {
-            ...t,
-            status: nextStatus,
-            completedAt: finalCompletedAt,
-            phaseHistory: updatedHistory,
-            assignedCubicleId: undefined
-          };
-        }
+      const isTarget = (targetCubicle && t.id === targetCubicle.currentTicketId) ||
+        (t.assignedCubicleId === cubicleId && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING));
+      
+      if (isTarget) {
+        updatedTicketRef = {
+          ...t,
+          status: TicketStatus.ATTENDING,
+          assignedCubicleId: cubicleId
+        };
+        return updatedTicketRef;
       }
       return t;
     }));
@@ -1455,22 +1494,237 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       if (c.id === cubicleId) {
         return {
           ...c,
-          status: CubicleStatus.ONLINE_AVAILABLE,
-          currentTicketId: undefined,
-          totalAttendedCount: c.totalAttendedCount + 1
+          status: CubicleStatus.ATTENDING,
+          currentTicketId: updatedTicketRef?.id || c.currentTicketId
         };
       }
       return c;
     }));
-  }, [cubicles, setTicketsForCurrentOffice, setCubiclesForCurrentOffice]);
+
+    if (updatedTicketRef) {
+      const ticketToSync: Ticket = updatedTicketRef;
+      fetch("/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: ticketToSync.id,
+          numberCode: ticketToSync.numberCode,
+          name: ticketToSync.name,
+          serviceType: ticketToSync.serviceType,
+          procedure: ticketToSync.procedure,
+          priority: ticketToSync.priority,
+          isAppointment: ticketToSync.isAppointment,
+          sucursalId: currentOfficeId,
+          status: TicketStatus.ATTENDING,
+          currentPhase: ticketToSync.currentPhase,
+          assignedCubicleId: cubicleId,
+          assignedAgent: targetCubicle?.agentName,
+          calledAt: ticketToSync.calledAt,
+          createdAt: ticketToSync.createdAt
+        })
+      }).catch(() => {});
+
+      if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+        try {
+          const bc = new BroadcastChannel("te_ticket_system_channel");
+          bc.postMessage({ type: "TICKET_UPDATED", officeId: currentOfficeId, ticket: ticketToSync });
+          bc.close();
+        } catch (err) {}
+      }
+    }
+  }, [cubicles, currentOfficeId, setTicketsForCurrentOffice, setCubiclesForCurrentOffice]);
+
+  const completeTicket = useCallback((cubicleId: string, outcome?: "administrative" | "emission_physical") => {
+    const targetCubicle = cubicles.find(c => c.id === cubicleId);
+    const serverNow = getServerTimestamp();
+
+    // Find ticket associated with cubicle
+    const currentTicket = tickets.find(t =>
+      (targetCubicle && t.id === targetCubicle.currentTicketId) ||
+      (t.assignedCubicleId === cubicleId && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING))
+    );
+
+    if (!currentTicket) {
+      // Fallback: free up the cubicle just in case
+      setCubiclesForCurrentOffice(prev => prev.map(c => {
+        if (c.id === cubicleId) {
+          return {
+            ...c,
+            status: CubicleStatus.ONLINE_AVAILABLE,
+            currentTicketId: undefined
+          };
+        }
+        return c;
+      }));
+      return;
+    }
+
+    let nextPhase: TicketPhase | null = null;
+    let nextStatus = TicketStatus.WAITING;
+    let finalCompletedAt: number | undefined = undefined;
+
+    if (currentTicket.currentPhase === TicketPhase.CAJA) {
+      if (outcome === "administrative") {
+        nextStatus = TicketStatus.COMPLETED;
+        finalCompletedAt = serverNow;
+      } else if (outcome === "emission_physical") {
+        nextPhase = TicketPhase.TRIADA;
+        nextStatus = TicketStatus.WAITING;
+      } else {
+        if (currentTicket.serviceType === ServiceType.CEDULACION) {
+          const doesCorrespond = currentTicket.procedure !== "REG" && currentTicket.procedure !== "COE";
+          if (doesCorrespond) {
+            nextPhase = TicketPhase.TRIADA;
+            nextStatus = TicketStatus.WAITING;
+          } else {
+            nextStatus = TicketStatus.COMPLETED;
+            finalCompletedAt = serverNow;
+          }
+        } else {
+          const isShortFlow = currentTicket.serviceType === ServiceType.ELECTORAL || currentTicket.serviceType === ServiceType.REGISTRO;
+          if (isShortFlow) {
+            nextStatus = TicketStatus.COMPLETED;
+            finalCompletedAt = serverNow;
+          } else {
+            nextPhase = TicketPhase.TRIADA;
+            nextStatus = TicketStatus.WAITING;
+          }
+        }
+      }
+    } else {
+      // TRIADA or other is final step
+      nextStatus = TicketStatus.COMPLETED;
+      finalCompletedAt = serverNow;
+    }
+
+    // Close the current phase history object
+    const updatedHistory = (currentTicket.phaseHistory || []).map(h => {
+      if (h.phase === currentTicket.currentPhase && !h.completedAt) {
+        return {
+          ...h,
+          completedAt: serverNow,
+          cubicleId: cubicleId,
+          agentName: targetCubicle?.agentName
+        };
+      }
+      return h;
+    });
+
+    if (nextPhase) {
+      updatedHistory.push({
+        phase: nextPhase,
+        timestamp: serverNow
+      });
+    }
+
+    const updatedTicket: Ticket = nextPhase ? {
+      ...currentTicket,
+      currentPhase: nextPhase,
+      status: nextStatus,
+      phaseHistory: updatedHistory,
+      assignedCubicleId: undefined, // Clear assignment so others in Tríada can call it
+      calledAt: undefined
+    } : {
+      ...currentTicket,
+      status: nextStatus,
+      completedAt: finalCompletedAt,
+      phaseHistory: updatedHistory,
+      assignedCubicleId: undefined
+    };
+
+    // Update tickets
+    setTicketsForCurrentOffice(prev => prev.map(t => {
+      if (t.id === currentTicket.id) {
+        return updatedTicket;
+      }
+      return t;
+    }));
+
+    // Update cubicle to available
+    setCubiclesForCurrentOffice(prev => prev.map(c => {
+      if (c.id === cubicleId) {
+        return {
+          ...c,
+          status: CubicleStatus.ONLINE_AVAILABLE,
+          currentTicketId: undefined,
+          totalAttendedCount: (c.totalAttendedCount || 0) + 1
+        };
+      }
+      return c;
+    }));
+
+    // Clear activeCall if it was for this ticket
+    setActiveCall(prev => {
+      if (prev && prev.ticket.id === currentTicket.id) {
+        return null;
+      }
+      return prev;
+    });
+
+    // Synchronize to backend database / memory immediately
+    fetch("/api/tickets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: updatedTicket.id,
+        numberCode: updatedTicket.numberCode,
+        name: updatedTicket.name,
+        serviceType: updatedTicket.serviceType,
+        procedure: updatedTicket.procedure,
+        priority: updatedTicket.priority,
+        isAppointment: updatedTicket.isAppointment,
+        sucursalId: currentOfficeId,
+        status: updatedTicket.status,
+        currentPhase: updatedTicket.currentPhase,
+        phaseHistory: updatedTicket.phaseHistory,
+        assignedCubicleId: null,
+        assignedAgent: null,
+        calledAt: null,
+        completedAt: updatedTicket.completedAt,
+        createdAt: updatedTicket.createdAt
+      })
+    }).catch(() => {});
+
+    // Broadcast across windows / tabs
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        const bc = new BroadcastChannel("te_ticket_system_channel");
+        bc.postMessage({ type: "TICKET_UPDATED", officeId: currentOfficeId, ticket: updatedTicket });
+        bc.postMessage({ type: "ACTIVE_CALL_CHANGED", activeCall: null });
+        bc.close();
+      } catch (err) {}
+    }
+  }, [cubicles, tickets, currentOfficeId, setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
 
   const markTicketAsMissed = useCallback((cubicleId: string) => {
     const targetCubicle = cubicles.find(c => c.id === cubicleId);
-    if (!targetCubicle || !targetCubicle.currentTicketId) return;
+    const serverNow = getServerTimestamp();
+
+    const currentTicket = tickets.find(t =>
+      (targetCubicle && t.id === targetCubicle.currentTicketId) ||
+      (t.assignedCubicleId === cubicleId && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING))
+    );
+
+    if (!currentTicket) {
+      setCubiclesForCurrentOffice(prev => prev.map(c => {
+        if (c.id === cubicleId) {
+          return { ...c, status: CubicleStatus.ONLINE_AVAILABLE, currentTicketId: undefined };
+        }
+        return c;
+      }));
+      return;
+    }
+
+    const updatedTicket: Ticket = {
+      ...currentTicket,
+      status: TicketStatus.MISSED,
+      completedAt: serverNow,
+      assignedCubicleId: undefined
+    };
 
     setTicketsForCurrentOffice(prev => prev.map(t => {
-      if (t.id === targetCubicle.currentTicketId) {
-        return { ...t, status: TicketStatus.MISSED, completedAt: Date.now() };
+      if (t.id === currentTicket.id) {
+        return updatedTicket;
       }
       return t;
     }));
@@ -1485,39 +1739,85 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       }
       return c;
     }));
-  }, [cubicles, setTicketsForCurrentOffice, setCubiclesForCurrentOffice]);
+
+    setActiveCall(prev => {
+      if (prev && prev.ticket.id === currentTicket.id) {
+        return null;
+      }
+      return prev;
+    });
+
+    fetch("/api/tickets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: updatedTicket.id,
+        numberCode: updatedTicket.numberCode,
+        name: updatedTicket.name,
+        serviceType: updatedTicket.serviceType,
+        procedure: updatedTicket.procedure,
+        priority: updatedTicket.priority,
+        isAppointment: updatedTicket.isAppointment,
+        sucursalId: currentOfficeId,
+        status: TicketStatus.MISSED,
+        currentPhase: updatedTicket.currentPhase,
+        assignedCubicleId: null,
+        assignedAgent: null,
+        completedAt: serverNow,
+        createdAt: updatedTicket.createdAt
+      })
+    }).catch(() => {});
+
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        const bc = new BroadcastChannel("te_ticket_system_channel");
+        bc.postMessage({ type: "TICKET_UPDATED", officeId: currentOfficeId, ticket: updatedTicket });
+        bc.postMessage({ type: "ACTIVE_CALL_CHANGED", activeCall: null });
+        bc.close();
+      } catch (err) {}
+    }
+  }, [cubicles, tickets, currentOfficeId, setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
 
   const transferTicketToCajaRC = useCallback((cubicleId: string) => {
     const targetCubicle = cubicles.find(c => c.id === cubicleId);
-    if (!targetCubicle || !targetCubicle.currentTicketId) return;
+    const serverNow = getServerTimestamp();
+
+    const currentTicket = tickets.find(t =>
+      (targetCubicle && t.id === targetCubicle.currentTicketId) ||
+      (t.assignedCubicleId === cubicleId && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING))
+    );
+
+    if (!currentTicket) return;
+
+    const updatedHistory = (currentTicket.phaseHistory || []).map(h => {
+      if (h.phase === currentTicket.currentPhase && !h.completedAt) {
+        return {
+          ...h,
+          completedAt: serverNow,
+          cubicleId: cubicleId,
+          agentName: targetCubicle?.agentName
+        };
+      }
+      return h;
+    });
+
+    updatedHistory.push({
+      phase: TicketPhase.CAJA,
+      timestamp: serverNow
+    });
+
+    const updatedTicket: Ticket = {
+      ...currentTicket,
+      currentPhase: TicketPhase.CAJA,
+      status: TicketStatus.WAITING,
+      phaseHistory: updatedHistory,
+      assignedCubicleId: undefined,
+      calledAt: undefined
+    };
 
     setTicketsForCurrentOffice(prev => prev.map(t => {
-      if (t.id === targetCubicle.currentTicketId) {
-        const updatedHistory = t.phaseHistory.map(h => {
-          if (h.phase === t.currentPhase && !h.completedAt) {
-            return {
-              ...h,
-              completedAt: Date.now(),
-              cubicleId: cubicleId,
-              agentName: targetCubicle.agentName
-            };
-          }
-          return h;
-        });
-
-        updatedHistory.push({
-          phase: TicketPhase.CAJA,
-          timestamp: Date.now()
-        });
-
-        return {
-          ...t,
-          currentPhase: TicketPhase.CAJA,
-          status: TicketStatus.WAITING,
-          phaseHistory: updatedHistory,
-          assignedCubicleId: undefined,
-          calledAt: undefined
-        };
+      if (t.id === currentTicket.id) {
+        return updatedTicket;
       }
       return t;
     }));
@@ -1528,12 +1828,50 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           ...c,
           status: CubicleStatus.ONLINE_AVAILABLE,
           currentTicketId: undefined,
-          totalAttendedCount: c.totalAttendedCount + 1
+          totalAttendedCount: (c.totalAttendedCount || 0) + 1
         };
       }
       return c;
     }));
-  }, [cubicles, setTicketsForCurrentOffice, setCubiclesForCurrentOffice]);
+
+    setActiveCall(prev => {
+      if (prev && prev.ticket.id === currentTicket.id) {
+        return null;
+      }
+      return prev;
+    });
+
+    fetch("/api/tickets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: updatedTicket.id,
+        numberCode: updatedTicket.numberCode,
+        name: updatedTicket.name,
+        serviceType: updatedTicket.serviceType,
+        procedure: updatedTicket.procedure,
+        priority: updatedTicket.priority,
+        isAppointment: updatedTicket.isAppointment,
+        sucursalId: currentOfficeId,
+        status: TicketStatus.WAITING,
+        currentPhase: TicketPhase.CAJA,
+        phaseHistory: updatedTicket.phaseHistory,
+        assignedCubicleId: null,
+        assignedAgent: null,
+        calledAt: null,
+        createdAt: updatedTicket.createdAt
+      })
+    }).catch(() => {});
+
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        const bc = new BroadcastChannel("te_ticket_system_channel");
+        bc.postMessage({ type: "TICKET_UPDATED", officeId: currentOfficeId, ticket: updatedTicket });
+        bc.postMessage({ type: "ACTIVE_CALL_CHANGED", activeCall: null });
+        bc.close();
+      } catch (err) {}
+    }
+  }, [cubicles, tickets, currentOfficeId, setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
 
   const recallCurrentTicket = useCallback((cubicleId: string) => {
     const targetCubicle = cubicles.find(c => c.id === cubicleId);
@@ -1547,7 +1885,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     }
 
     // Update calledAt to current time so TV screen can detect it as a fresh recall
-    const updatedCalledAt = Date.now();
+    const updatedCalledAt = getServerTimestamp();
     setTicketsForCurrentOffice(prev => prev.map(t => {
       if (t.id === currentTicket.id) {
         return {
@@ -1561,7 +1899,17 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     // Trigger local activeCall state
     const updatedTicket = { ...currentTicket, calledAt: updatedCalledAt };
     setActiveCall({ ticket: updatedTicket, cubicle: targetCubicle });
-  }, [cubicles, tickets, setTicketsForCurrentOffice, setActiveCall]);
+
+    // Broadcast across windows
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        const bc = new BroadcastChannel("te_ticket_system_channel");
+        bc.postMessage({ type: "TICKET_UPDATED", officeId: currentOfficeId, ticket: updatedTicket });
+        bc.postMessage({ type: "ACTIVE_CALL_CHANGED", activeCall: { ticket: updatedTicket, cubicle: targetCubicle } });
+        bc.close();
+      } catch (err) {}
+    }
+  }, [cubicles, tickets, currentOfficeId, setTicketsForCurrentOffice, setActiveCall]);
 
   // 6. Change cubicle status (e.g., transition to BREAK or OFFLINE)
   const changeCubicleStatus = useCallback((cubicleId: string, newStatus: CubicleStatus, agentName?: string) => {
@@ -1614,19 +1962,20 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     let assignedCount = 0;
     const callsToTrigger: { ticket: Ticket; cubicle: Cubicle }[] = [];
 
+    // Iterate through all free cubicles
     for (let cIndex = 0; cIndex < updatedCubicles.length; cIndex++) {
       const cubicle = updatedCubicles[cIndex];
       if (cubicle.status !== CubicleStatus.ONLINE_AVAILABLE) {
         continue;
       }
 
-      // Find best candidate for this cubicle
+      // Find all candidates that are in WAITING status and supported by this cubicle
       const candidates = updatedTickets.filter(t => {
         if (t.status !== TicketStatus.WAITING) return false;
-        if (!cubicle.supportedPhases.includes(t.currentPhase)) return false;
+        if (!cubicle.supportedPhases || !cubicle.supportedPhases.includes(t.currentPhase)) return false;
         if (cubicle.supportedServices && !cubicle.supportedServices.includes(t.serviceType)) return false;
 
-        // Preferential attention (priority & citas agendadas) vs Regular attention routing rules:
+        // Preferential attention routing rules:
         const isCubiclePreferential = cubicle.isPreferential === true ||
           cubicle.name.toLowerCase().includes("preferencial") ||
           cubicle.id === "CUB-30" ||
@@ -1649,13 +1998,13 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         } else {
           const hasOfficePrefForPhase = currentCubicles.some(c =>
             (c.isPreferential === true || c.name.toLowerCase().includes("preferencial")) &&
-            c.supportedPhases.includes(t.currentPhase)
+            c.supportedPhases?.includes(t.currentPhase)
           );
           if (hasOfficePrefForPhase && t.priority) {
             return false;
           }
 
-          // En módulo regular, citas agendadas tienen preferencia sobre turnos espontáneos
+          // In regular module, scheduled appointments have priority over spontaneous walk-ins
           const anyAppointmentWaiting = updatedTickets.some(otherT =>
             otherT.status === TicketStatus.WAITING &&
             otherT.currentPhase === t.currentPhase &&
@@ -1676,11 +2025,11 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       if (candidates.length === 0) continue;
 
       // Sort candidates:
-      // 1. Preferencial con Cita (Score 6)
-      // 2. Preferencial (Score 4)
-      // 3. Regular con Cita Agendada (Score 2)
-      // 4. Regular espontáneo (Score 0)
-      // Dentro del mismo nivel, por orden de llegada (createdAt)
+      // 1. Preferential with appointment (Score 6)
+      // 2. Preferential (Score 4)
+      // 3. Regular with appointment (Score 2)
+      // 4. Regular walk-in (Score 0)
+      // Then FIFO by createdAt
       candidates.sort((a, b) => {
         const valA = (a.priority ? 4 : 0) + (a.isAppointment ? 2 : 0);
         const valB = (b.priority ? 4 : 0) + (b.isAppointment ? 2 : 0);
@@ -1692,7 +2041,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
       const chosenTicket = candidates[0];
 
-      // Mark chosen ticket as CALLING in our local updatedTickets
+      // Mark chosen ticket as CALLING
       updatedTickets = updatedTickets.map(t => {
         if (t.id === chosenTicket.id) {
           return {
@@ -1705,7 +2054,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         return t;
       });
 
-      // Update cubicle status in our local updatedCubicles
+      // Mark cubicle as ATTENDING
       updatedCubicles = updatedCubicles.map(c => {
         if (c.id === cubicle.id) {
           return {
@@ -1742,17 +2091,22 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
   useEffect(() => {
     if (!isAutoAssignActive) return;
 
-    // Check if there's any ONLINE_AVAILABLE cubicle
-    const firstFreeCubicle = cubicles.find(c => c.status === CubicleStatus.ONLINE_AVAILABLE);
-    if (!firstFreeCubicle) return;
+    // Check if there is ANY free cubicle that can serve ANY waiting ticket
+    const freeCubicles = cubicles.filter(c => c.status === CubicleStatus.ONLINE_AVAILABLE);
+    if (freeCubicles.length === 0) return;
 
-    // Check if there's any WAITING ticket supportable by that cubicle
-    const hasCompatibleWaitingTicket = tickets.some(t => {
-      if (t.status !== TicketStatus.WAITING) return false;
-      return firstFreeCubicle.supportedPhases.includes(t.currentPhase);
-    });
+    const waitingTickets = tickets.filter(t => t.status === TicketStatus.WAITING);
+    if (waitingTickets.length === 0) return;
 
-    if (!hasCompatibleWaitingTicket) return;
+    const hasAnyMatch = freeCubicles.some(c => 
+      waitingTickets.some(t => 
+        (c.supportedPhases || []).includes(t.currentPhase) &&
+        (c.supportedServices ? c.supportedServices.includes(t.serviceType) : true) &&
+        canCubicleServeProcedure(c.id, t.procedure)
+      )
+    );
+
+    if (!hasAnyMatch) return;
 
     // Trigger auto assignment
     triggerAutoAssignment(tickets, cubicles);

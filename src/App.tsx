@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { useTicketSystem } from "./hooks/useTicketSystem";
-import { ServiceType, SERVICES_CONFIG, OFFICES_CONFIG, UserRole, SystemUser } from "./types";
+import { ServiceType, SERVICES_CONFIG, OFFICES_CONFIG, UserRole, SystemUser, TicketStatus, TicketPhase, Ticket } from "./types";
 import { playCallingChime, speakCall, announceAndCall } from "./utils/audio";
 
 
@@ -202,7 +202,7 @@ export default function App() {
         setActiveTab("tracker");
       } else if (v === "unificado" || v === "gateway" || v === "select" || v === "inicio" || v === "portal") {
         setGatewaySelection("select");
-      } else if (v === "tv" || v === "monitor" || v === "sala") {
+      } else if (v === "tv" || v === "monitor" || v === "sala" || v === "tv-caja" || v === "tv-triada" || v === "caja-tv" || v === "triada-tv") {
         setGatewaySelection("cedulacion");
         setActiveTab("tv");
       } else if (v === "agent" || v === "agente" || v === "ventanilla") {
@@ -332,10 +332,14 @@ export default function App() {
     setIsAdminLoginModalOpen(true);
   };
 
-  // Speaker Test trigger
+  // Speaker Test trigger - Uses the first waiting ticket in queue or a sample citizen
   const handleTestSpeaker = async () => {
     try {
-      await announceAndCall("C-001", "Emmanuel Lobo", "Caja 1", 2);
+      const firstWaiting = tickets.find(t => t.status === TicketStatus.WAITING);
+      const testName = firstWaiting ? firstWaiting.name : "Emmanuel Lobo";
+      const testCode = firstWaiting ? firstWaiting.numberCode : "C-001";
+      const testDest = firstWaiting && firstWaiting.currentPhase === TicketPhase.TRIADA ? "Módulo 10" : "Caja 1";
+      await announceAndCall(testCode, testName, testDest, 2);
     } catch (e) {
       console.warn("Dispositivo bloqueó la síntesis de voz automática.", e);
     }

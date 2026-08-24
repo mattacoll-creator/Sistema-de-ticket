@@ -214,7 +214,8 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
           identificacion: cita.datosPersonales.identificacion,
           telefono: cita.datosPersonales.telefono,
           requisitos: currentSubService?.requisitos || [],
-          numeroSeguimiento: cita.datosPersonales.numeroSeguimiento
+          numeroSeguimiento: cita.datosPersonales.numeroSeguimiento,
+          ticketTurnoCode: cita.ticketTurnoCode
         }),
       });
 
@@ -286,7 +287,8 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
           identificacion: cita.datosPersonales.identificacion,
           telefono: cita.datosPersonales.telefono,
           requisitos: currentSubService?.requisitos || [],
-          numeroSeguimiento: cita.datosPersonales.numeroSeguimiento
+          numeroSeguimiento: cita.datosPersonales.numeroSeguimiento,
+          ticketTurnoCode: cita.ticketTurnoCode
         }),
       });
 
@@ -396,7 +398,7 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
         <div className="p-5 md:p-6 space-y-4">
 
           {/* TV Turno Banner & Auto-Arrival indicator */}
-          {cita.ticketTurnoCode && !isCanceled && (
+          {cita.ticketTurnoCode && !isCanceled ? (
             <div className="bg-gradient-to-r from-[#122e70] to-blue-900 text-white p-4 rounded-xl shadow-sm border border-blue-800 space-y-2 font-sans animate-fade-in">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -421,7 +423,21 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
                 ⚡ <strong>Paso de confirmación de llegada omitido:</strong> Como su nombre y cédula ya fueron registrados en el sistema de citas, el sistema omitió automáticamente el paso de llegada. Su turno ha sido transmitido en directo a las pantallas TV de la sede como <strong>📅 CITA PREVIA</strong>.
               </div>
             </div>
-          )}
+          ) : !isCanceled ? (
+            <div className="bg-amber-50 border border-amber-300 text-amber-950 p-4 rounded-xl shadow-sm space-y-2 font-sans animate-fade-in">
+              <div className="flex items-center gap-2">
+                <span className="p-1 px-2 bg-amber-600 text-white font-black rounded text-[10px] uppercase tracking-wider">
+                  Trámite Especializado
+                </span>
+                <span className="text-xs font-black uppercase text-amber-900">
+                  Atención Directa en Sección Especializada
+                </span>
+              </div>
+              <p className="text-xs text-amber-900 font-medium leading-relaxed">
+                ℹ️ <strong>Sin ticket de dispensador general:</strong> Por la naturaleza de este trámite (revisión de expediente / memorial / resolución de migración), <strong>no requiere emitir ticket en pantalla de TV general</strong>. El día y hora agendados, preséntese directamente con sus requisitos ante la sección de <strong>{cita.servicioCategoria === 'extranjeria' ? 'Extranjería' : 'Verificación de Identidad / Cédula Tardía'}</strong>.
+              </p>
+            </div>
+          ) : null}
           
           {/* Main info column */}
           <div className="space-y-4">

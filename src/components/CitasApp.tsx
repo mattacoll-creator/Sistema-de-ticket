@@ -164,15 +164,20 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
     const finalTxCode = `${fecha.replace(/-/g, '').substring(2)}-${code}`;
 
     let ticketTurnoCode: string | undefined = undefined;
+    const sub = (selectedSubServicioId || '').toLowerCase();
+    const isTardia20Anos = sub.includes('ced_pasados_edad') || sub.includes('20') || sub.includes('pasado');
+    const isExtranjeriaPrimeraVez = sub.includes('ext_primera_vez') || (selectedCategoria === 'extranjeria' && (sub.includes('primera') || sub.includes('residente permanente por primera vez')));
 
-    if (onCreateTicket) {
+    // Las únicas citas que NO deben tener ticket de turno general son Cédula por primera vez 20 años y 1 día y Carné de residente primera vez
+    const shouldGenerateTicket = !isTardia20Anos && !isExtranjeriaPrimeraVez;
+
+    if (onCreateTicket && shouldGenerateTicket) {
       let serviceType = ServiceType.CEDULACION;
       if (selectedCategoria === 'registro_civil') serviceType = ServiceType.REGISTRO;
       else if (selectedCategoria === 'extranjeria') serviceType = ServiceType.EXTRANJERIA;
       else if (selectedCategoria === 'organizacion_electoral') serviceType = ServiceType.ELECTORAL;
 
       let procedureCode: string | undefined = undefined;
-      const sub = (selectedSubServicioId || '').toLowerCase();
       if (selectedCategoria === 'organizacion_electoral' || sub.includes('oe_') || sub.includes('afiliacion') || sub.includes('residencia')) {
         procedureCode = 'OE';
       } else if (sub.includes('renovacion')) procedureCode = 'REN';
@@ -183,12 +188,13 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       const citizenName = datosPersonales.nombreCompleto || 
         `${datosPersonales.primerNombre || ''} ${datosPersonales.primerApellido || ''}`.trim() || 'Ciudadano Cita';
 
-      // Automatically issue ticket directly to TV Queue (skipping manual arrival/confirmation)
+      // Automatically issue ticket directly to TV Queue with Priority and Appointment flag
+      const isPriorityCitizen = true; // All online appointments have priority queuing
       const ticket = onCreateTicket(
         `${citizenName} (${datosPersonales.identificacion || 'Cédula'})`,
         serviceType,
-        datosPersonales.tieneDiscapacidad || false,
-        true, // isAppointment = true -> Displays 📅 CITA PREVIA on TV!
+        isPriorityCitizen,
+        true, // isAppointment = true -> Displays 📅 CITA PREVIA on TV with Priority!
         procedureCode
       );
       ticketTurnoCode = ticket.numberCode;

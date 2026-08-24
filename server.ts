@@ -1276,7 +1276,8 @@ async function startServer() {
         identificacion, 
         telefono,
         requisitos = [],
-        numeroSeguimiento
+        numeroSeguimiento,
+        ticketTurnoCode
       } = req.body;
 
       if (!email) {
@@ -1605,10 +1606,17 @@ async function startServer() {
                 <p class="conf-desc">Presente este comprobante digital o físico el día asignado.</p>
               </div>
 
-              <!-- Transaction Code Section -->
+              <!-- Transaction Code & Turno Section -->
               <div class="code-box">
                 <div class="code-label">Código de Cita</div>
                 <div class="code-value">${codigoTransaccion}</div>
+                ${ticketTurnoCode ? `
+                <div style="margin-top: 10px; padding-top: 8px; border-top: 1px dashed #bfdbfe;">
+                  <span style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #1e3a8a; display: block; letter-spacing: 0.05em;">Número de Turno Asignado para Pantallas TV:</span>
+                  <span style="font-family: monospace; font-weight: 900; font-size: 24px; color: #1e3a8a; display: inline-block; margin-top: 2px;">${ticketTurnoCode}</span>
+                  <span style="display: block; font-size: 11px; color: #047857; font-weight: bold; margin-top: 2px;">⭐ ATENCIÓN PREFERENTE / CITA PREVIA</span>
+                </div>
+                ` : ''}
               </div>
 
               <!-- Core info segment -->
@@ -2444,7 +2452,8 @@ async function startServer() {
         identificacion, 
         telefono,
         requisitos = [],
-        numeroSeguimiento
+        numeroSeguimiento,
+        ticketTurnoCode
       } = req.body;
 
       if (!email) {
@@ -2759,6 +2768,13 @@ async function startServer() {
               <div class="code-box">
                 <div class="code-label">Código de Cita</div>
                 <div class="code-value">${codigoTransaccion}</div>
+                ${ticketTurnoCode ? `
+                <div style="margin-top: 10px; padding-top: 8px; border-top: 1px dashed #fcd34d;">
+                  <span style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #92400e; display: block; letter-spacing: 0.05em;">Turno Asignado para Pantallas TV:</span>
+                  <span style="font-family: monospace; font-weight: 900; font-size: 24px; color: #b45309; display: inline-block; margin-top: 2px;">${ticketTurnoCode}</span>
+                  <span style="display: block; font-size: 11px; color: #047857; font-weight: bold; margin-top: 2px;">⭐ ATENCIÓN PREFERENTE / CITA PREVIA</span>
+                </div>
+                ` : ''}
               </div>
 
               <div class="content-body">
@@ -3046,6 +3062,43 @@ async function startServer() {
   const memoryTicketsStore: Map<string, any> = new Map();
   const memoryModulosStore: Map<string, any> = new Map();
 
+  // Helper normalizers for seamless synchronization across Kiosk, TV and Agents
+  function normalizeTicketStatus(st: any): string {
+    const s = String(st || "").toUpperCase();
+    if (s === "ESPERA" || s === "WAITING") return "WAITING";
+    if (s === "LLAMADO" || s === "CALLING") return "CALLING";
+    if (s === "ATENDIENDO" || s === "ATTENDING" || s === "ATENCION") return "ATTENDING";
+    if (s === "COMPLETADO" || s === "FINALIZADO" || s === "COMPLETED") return "COMPLETED";
+    if (s === "CANCELADO" || s === "MISSED" || s === "PERDIDO") return "MISSED";
+    return "WAITING";
+  }
+
+  function normalizeTicketPhase(ph: any, serviceType?: string): string {
+    const p = String(ph || "").toUpperCase();
+    if (p === "TRIADA" || p === "FOTOGRAFIA" || p === "FOTO") return "TRIADA";
+    return "CAJA";
+  }
+
+  function normalizeServiceType(st: any): string {
+    const s = String(st || "").toUpperCase();
+    if (s.includes("ELECTORAL") || s === "O") return "ELECTORAL";
+    if (s.includes("REGISTRO") || s === "REG" || s.includes("CERTIFICACION")) return "REGISTRO";
+    if (s.includes("EXTRANJERIA") || s === "E" || s.includes("EXT")) return "EXTRANJERIA";
+    return "CEDULACION";
+  }
+
+  // 0. Hora Oficial del Servidor (Sincronización TV, Kioskos y Monitores - Panama UTC-5)
+  app.get("/api/server-time", (req, res) => {
+    const now = new Date();
+    return res.json({
+      success: true,
+      timestamp: now.getTime(),
+      iso: now.toISOString(),
+      timezone: "America/Panama",
+      offsetMinutes: -300
+    });
+  });
+
   // 1. Obtener todos los tickets de una sucursal o globales
   app.get("/api/tickets", async (req, res) => {
     try {
@@ -3061,22 +3114,35 @@ async function startServer() {
           const dbRes = await pgPool.query(query, params);
           
           if (dbRes.rows && dbRes.rows.length > 0) {
-            dbTickets = dbRes.rows.map((r: any) => ({
-              id: r.id,
-              numberCode: r.numero_ticket,
-              number: parseInt(r.numero_ticket.replace(/\D/g, ""), 10) || 1,
-              name: r.nombre || "Ciudadano",
-              serviceType: r.tipo_tramite,
-              status: r.estado,
-              currentPhase: r.modulo_asignado ? "caja" : "triada",
-              createdAt: r.hora_emision ? new Date(r.hora_emision).getTime() : Date.now(),
-              calledAt: r.hora_llamado ? new Date(r.hora_llamado).getTime() : undefined,
-              assignedCubicle: r.modulo_asignado,
-              assignedAgent: r.agente_asignado,
-              priority: !!r.es_prioritario,
-              procedure: r.sub_tramite,
-              sucursalId: r.sucursal_id
-            }));
+            dbTickets = dbRes.rows.map((r: any) => {
+              const svc = normalizeServiceType(r.tipo_tramite);
+              const phase = normalizeTicketPhase(r.fase_actual || (r.modulo_asignado ? "CAJA" : (svc === "REGISTRO" ? "TRIADA" : "CAJA")), svc);
+              const st = normalizeTicketStatus(r.estado);
+              const cTime = r.hora_emision ? new Date(r.hora_emision).getTime() : Date.now();
+              const callTime = r.hora_llamado ? new Date(r.hora_llamado).getTime() : undefined;
+              const compTime = r.hora_fin_atencion ? new Date(r.hora_fin_atencion).getTime() : undefined;
+
+              return {
+                id: r.id,
+                numberCode: r.numero_ticket,
+                number: parseInt(String(r.numero_ticket).replace(/\D/g, ""), 10) || 1,
+                name: r.nombre || "Ciudadano",
+                serviceType: svc,
+                status: st,
+                currentPhase: phase,
+                phaseHistory: [{ phase, timestamp: cTime }],
+                createdAt: cTime,
+                calledAt: callTime,
+                completedAt: compTime,
+                assignedCubicle: r.modulo_asignado || null,
+                assignedCubicleId: r.modulo_asignado || null,
+                assignedAgent: r.agente_asignado || null,
+                priority: !!r.es_prioritario,
+                isAppointment: !!r.es_cita,
+                procedure: r.sub_tramite || "",
+                sucursalId: r.sucursal_id
+              };
+            });
           }
         } catch (pgErr: any) {
           console.warn("[PostgreSQL] Error fetching tickets from DB:", pgErr.message);
@@ -3097,7 +3163,7 @@ async function startServer() {
 
       const finalTickets = Array.from(mergedMap.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
-      return res.json({ success: true, tickets: finalTickets });
+      return res.json({ success: true, tickets: finalTickets, serverTime: Date.now() });
     } catch (e: any) {
       console.error("Error in GET /api/tickets:", e);
       return res.status(500).json({ success: false, error: e.message });
@@ -3114,13 +3180,16 @@ async function startServer() {
         serviceType,
         procedure,
         priority = false,
+        isAppointment = false,
         sucursalId = "OFF-1",
-        status = "espera",
-        currentPhase = "caja",
+        status = "WAITING",
+        currentPhase = "CAJA",
         assignedCubicle,
+        assignedCubicleId,
         assignedAgent,
         calledAt,
         completedAt,
+        phaseHistory,
         createdAt = Date.now()
       } = req.body;
 
@@ -3128,22 +3197,33 @@ async function startServer() {
         return res.status(400).json({ success: false, error: "id y numberCode son requeridos" });
       }
 
+      const normService = normalizeServiceType(serviceType);
+      const normStatus = normalizeTicketStatus(status);
+      const normPhase = normalizeTicketPhase(currentPhase, normService);
+      const cubId = assignedCubicleId || assignedCubicle || null;
+      const tCreatedAt = typeof createdAt === "number" ? createdAt : (createdAt ? new Date(createdAt).getTime() : Date.now());
+      const tCalledAt = calledAt ? (typeof calledAt === "number" ? calledAt : new Date(calledAt).getTime()) : undefined;
+      const tCompletedAt = completedAt ? (typeof completedAt === "number" ? completedAt : new Date(completedAt).getTime()) : undefined;
+
       const ticketPayload = {
-        id,
-        numberCode,
+        id: String(id),
+        numberCode: String(numberCode),
         number: parseInt(String(numberCode).replace(/\D/g, ""), 10) || 1,
         name: name || "Ciudadano",
-        serviceType: serviceType || "cedulacion",
+        serviceType: normService,
         procedure: procedure || "",
         priority: !!priority,
+        isAppointment: !!isAppointment,
         sucursalId: sucursalId || "OFF-1",
-        status: status || "espera",
-        currentPhase: currentPhase || "caja",
-        assignedCubicle: assignedCubicle || null,
+        status: normStatus,
+        currentPhase: normPhase,
+        phaseHistory: Array.isArray(phaseHistory) && phaseHistory.length > 0 ? phaseHistory : [{ phase: normPhase, timestamp: tCreatedAt }],
+        assignedCubicle: cubId,
+        assignedCubicleId: cubId,
         assignedAgent: assignedAgent || null,
-        calledAt: calledAt || undefined,
-        completedAt: completedAt || undefined,
-        createdAt: createdAt || Date.now()
+        calledAt: tCalledAt,
+        completedAt: tCompletedAt,
+        createdAt: tCreatedAt
       };
 
       // Always save to memory store immediately
@@ -3172,17 +3252,17 @@ async function startServer() {
             [
               id,
               numberCode,
-              serviceType || "cedulacion",
+              normService,
               procedure || "",
               name || "Ciudadano",
               !!priority,
-              sucursalId,
-              status,
-              assignedCubicle || null,
+              sucursalId || "OFF-1",
+              normStatus,
+              cubId,
               assignedAgent || null,
-              calledAt ? new Date(calledAt) : null,
-              completedAt ? new Date(completedAt) : null,
-              new Date(createdAt)
+              tCalledAt ? new Date(tCalledAt) : null,
+              tCompletedAt ? new Date(tCompletedAt) : null,
+              new Date(tCreatedAt)
             ]
           );
 
@@ -3200,7 +3280,7 @@ async function startServer() {
         }
       }
 
-      return res.json({ success: true, message: "Ticket guardado en base de datos", ticket: ticketPayload });
+      return res.json({ success: true, message: "Ticket guardado en base de datos", ticket: ticketPayload, serverTime: Date.now() });
     } catch (e: any) {
       console.error("Error in POST /api/tickets:", e);
       return res.status(500).json({ success: false, error: e.message });
@@ -3214,22 +3294,33 @@ async function startServer() {
       
       if (Array.isArray(tickets) && tickets.length > 0) {
         for (const t of tickets) {
+          const normService = normalizeServiceType(t.serviceType || t.tipo_tramite);
+          const normStatus = normalizeTicketStatus(t.status || t.estado);
+          const normPhase = normalizeTicketPhase(t.currentPhase || t.fase_actual, normService);
+          const cubId = t.assignedCubicleId || t.assignedCubicle || t.modulo_asignado || null;
+          const tCreatedAt = t.createdAt ? (typeof t.createdAt === "number" ? t.createdAt : new Date(t.createdAt).getTime()) : Date.now();
+          const tCalledAt = t.calledAt ? (typeof t.calledAt === "number" ? t.calledAt : new Date(t.calledAt).getTime()) : undefined;
+          const tCompletedAt = t.completedAt ? (typeof t.completedAt === "number" ? t.completedAt : new Date(t.completedAt).getTime()) : undefined;
+
           const itemPayload = {
             id: t.id,
             numberCode: t.numberCode || t.numero_ticket,
             number: parseInt(String(t.numberCode || t.numero_ticket).replace(/\D/g, ""), 10) || 1,
             name: t.name || t.nombre || "Ciudadano",
-            serviceType: t.serviceType || t.tipo_tramite || "cedulacion",
+            serviceType: normService,
             procedure: t.procedure || t.sub_tramite || "",
             priority: !!t.priority || !!t.es_prioritario,
+            isAppointment: !!t.isAppointment || !!t.es_cita,
             sucursalId: sucursalId,
-            status: t.status || t.estado || "espera",
-            currentPhase: t.currentPhase || "caja",
-            assignedCubicle: t.assignedCubicle || t.modulo_asignado || null,
+            status: normStatus,
+            currentPhase: normPhase,
+            phaseHistory: Array.isArray(t.phaseHistory) && t.phaseHistory.length > 0 ? t.phaseHistory : [{ phase: normPhase, timestamp: tCreatedAt }],
+            assignedCubicle: cubId,
+            assignedCubicleId: cubId,
             assignedAgent: t.assignedAgent || t.agente_asignado || null,
-            calledAt: t.calledAt || undefined,
-            completedAt: t.completedAt || undefined,
-            createdAt: t.createdAt || Date.now()
+            calledAt: tCalledAt,
+            completedAt: tCompletedAt,
+            createdAt: tCreatedAt
           };
           memoryTicketsStore.set(t.id, itemPayload);
 
@@ -3250,17 +3341,17 @@ async function startServer() {
                 [
                   t.id,
                   t.numberCode || t.numero_ticket,
-                  t.serviceType || t.tipo_tramite || "cedulacion",
+                  normService,
                   t.procedure || t.sub_tramite || "",
                   t.name || t.nombre || "Ciudadano",
                   !!t.priority || !!t.es_prioritario,
                   sucursalId,
-                  t.status || t.estado || "espera",
-                  t.assignedCubicle || t.modulo_asignado || null,
+                  normStatus,
+                  cubId,
                   t.assignedAgent || t.agente_asignado || null,
-                  t.calledAt ? new Date(t.calledAt) : null,
-                  t.completedAt ? new Date(t.completedAt) : null,
-                  new Date(t.createdAt || Date.now())
+                  tCalledAt ? new Date(tCalledAt) : null,
+                  tCompletedAt ? new Date(tCompletedAt) : null,
+                  new Date(tCreatedAt)
                 ]
               );
             } catch (itemErr: any) {
@@ -3270,7 +3361,7 @@ async function startServer() {
         }
       }
 
-      return res.json({ success: true, count: memoryTicketsStore.size });
+      return res.json({ success: true, count: memoryTicketsStore.size, serverTime: Date.now() });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });
     }
