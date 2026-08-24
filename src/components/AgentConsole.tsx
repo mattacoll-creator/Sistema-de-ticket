@@ -276,7 +276,38 @@ export default function AgentConsole({
       return;
     }
 
+    // VALIDACIÓN ESTRICTA DE ROLES: CAJA NO PUEDE ENTRAR A TRÍADA Y TRÍADA NO PUEDE ENTRAR A CAJA
+    if (gatewaySelection !== "registro_civil") {
+      if (preLoginRole === "caja") {
+        if (foundUser.role === UserRole.AGENT_TRIADA) {
+          setFormLoginError(`🚫 Acceso Denegado: El usuario @${foundUser.username} (${foundUser.fullName}) está asignado exclusivamente al área de TRÍADA Y FOTOGRAFÍA. No tiene autorización para ingresar ni operar en el área de CAJA.`);
+          return;
+        }
+        if (foundUser.role !== UserRole.AGENT_CAJA && foundUser.role !== UserRole.SUPERADMIN && foundUser.role !== UserRole.SUPERVISOR) {
+          setFormLoginError("🚫 Acceso Denegado: Este usuario no cuenta con credenciales para operar en Caja.");
+          return;
+        }
+      } else if (preLoginRole === "triada") {
+        if (foundUser.role === UserRole.AGENT_CAJA) {
+          setFormLoginError(`🚫 Acceso Denegado: El usuario @${foundUser.username} (${foundUser.fullName}) está asignado exclusivamente al área de CAJA. No tiene autorización para ingresar ni operar en el área de TRÍADA Y FOTOGRAFÍA.`);
+          return;
+        }
+        if (foundUser.role !== UserRole.AGENT_TRIADA && foundUser.role !== UserRole.SUPERADMIN && foundUser.role !== UserRole.SUPERVISOR) {
+          setFormLoginError("🚫 Acceso Denegado: Este usuario no cuenta con credenciales para operar en Tríada / Fotografía.");
+          return;
+        }
+      }
+    }
+
     // Todo correcto -> Iniciar sesión
+    if (foundUser.role === UserRole.AGENT_CAJA) {
+      setActiveRoleFilter(TicketPhase.CAJA);
+      setPreLoginRole("caja");
+    } else if (foundUser.role === UserRole.AGENT_TRIADA) {
+      setActiveRoleFilter(TicketPhase.TRIADA);
+      setPreLoginRole("triada");
+    }
+
     setSessionUser(foundUser);
     setHasSelectedCubicle(false);
     setFormLoginError("");
@@ -389,15 +420,10 @@ export default function AgentConsole({
     return a.createdAt - b.createdAt;
   });
 
-  const handleTogglePhase = (phaseId: TicketPhase) => {
-    let newPhases = [...(currentCubicle.supportedPhases || [])];
-    if (newPhases.includes(phaseId)) {
-      if (newPhases.length <= 1) return; // Prevent draining all phases
-      newPhases = newPhases.filter(p => p !== phaseId);
-    } else {
-      newPhases.push(phaseId);
-    }
-    onUpdateCubicleConfig(currentCubicle.id, newPhases, currentCubicle.supportedServices || []);
+  const handleTogglePhase = (_phaseId: TicketPhase) => {
+    // Fases estrictamente bloqueadas por rol: Caja es estrictamente Caja y Tríada es estrictamente Tríada.
+    // No se permite intercambio cruzado de fases entre operadores.
+    return;
   };
 
   const handleToggleService = (serviceId: ServiceType) => {
@@ -1471,24 +1497,36 @@ export default function AgentConsole({
             </div>
 
             <div className="space-y-2">
-              <span className="text-[10px] uppercase font-mono tracking-widest text-slate-400 block font-black">Fases Habilitadas en este Módulo:</span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-mono tracking-widest text-slate-500 block font-black">
+                  Fase Oficial Asignada a este Módulo:
+                </span>
+                <span className="text-[9px] font-black uppercase text-amber-800 bg-amber-100 border border-amber-300 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                  🔒 ROL ESTRICTO / SIN CAMBIO CRUZADO
+                </span>
+              </div>
               <div className="flex flex-wrap gap-2">
-                {Object.values(PHASES_CONFIG).map((phase) => {
-                  const isActive = (currentCubicle.supportedPhases || []).includes(phase.id);
+                {(currentCubicle.supportedPhases || []).map((phaseId) => {
+                  const phase = PHASES_CONFIG[phaseId];
+                  if (!phase) return null;
+                  const isCaja = phase.id === TicketPhase.CAJA;
                   return (
-                    <button
+                    <div
                       key={phase.id}
-                      type="button"
-                      onClick={() => handleTogglePhase(phase.id)}
-                      className={`px-3.5 py-2 text-[11px] font-black border tracking-wider uppercase cursor-pointer transition-all rounded-lg ${
-                        isActive 
-                          ? `${phase.color} font-black border-blue-300 shadow-sm` 
-                          : "bg-white text-slate-400 border-slate-200 hover:text-slate-700 hover:bg-slate-100"
+                      className={`px-3.5 py-2 text-xs font-black border tracking-wider uppercase rounded-xl flex items-center gap-2.5 shadow-xs ${
+                        isCaja 
+                          ? "bg-emerald-50 text-emerald-900 border-emerald-300" 
+                          : "bg-cyan-50 text-cyan-900 border-cyan-300"
                       }`}
                     >
-                      {isActive ? "✓ " : ""}
-                      {phase.name.toUpperCase()}
-                    </button>
+                      <span className="text-sm">{isCaja ? "💰" : "📸"}</span>
+                      <div>
+                        <span className="block font-black">{phase.name.toUpperCase()}</span>
+                        <span className="text-[9.5px] text-slate-500 font-bold block font-mono">
+                          {isCaja ? "Módulo Exclusivo de Recaudación y Cobro" : "Módulo Exclusivo de Tríada, Captura y Biometría"}
+                        </span>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
