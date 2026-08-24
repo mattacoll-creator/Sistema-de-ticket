@@ -37,6 +37,14 @@ import {
   Receipt
 } from "lucide-react";
 
+const DEFAULT_FALLBACK_USER: SystemUser = {
+  id: "default",
+  username: "mcruz",
+  fullName: "Mateo Cruz (Cajero Sede Ancón)",
+  role: UserRole.AGENT_CAJA,
+  officeId: "OFF-1"
+};
+
 export function getUserDisplayDetails(u: SystemUser, isRc: boolean) {
   if (isRc) {
     let fullName = u.fullName;
@@ -316,13 +324,7 @@ export default function AgentConsole({
   };
 
   // --- COMPORTAMIENTO DE ACCESO, ROLES SECURITY Y REGIONALES ---
-  const rawLoggedInUser = sessionUser || {
-    id: "default",
-    username: "mcruz",
-    fullName: "Mateo Cruz (Cajero Sede Ancón)",
-    role: UserRole.AGENT_CAJA,
-    officeId: "OFF-1"
-  };
+  const rawLoggedInUser = sessionUser || DEFAULT_FALLBACK_USER;
 
   const loggedInUser = React.useMemo(() => {
     const details = getUserDisplayDetails(rawLoggedInUser, gatewaySelection === "registro_civil");
@@ -347,20 +349,24 @@ export default function AgentConsole({
   }, [tickets, gatewaySelection]);
 
   React.useEffect(() => {
-    if (isCajaOnly && activeRoleFilter !== TicketPhase.CAJA) {
-      setActiveRoleFilter(TicketPhase.CAJA);
+    if (isCajaOnly) {
+      if (activeRoleFilter !== TicketPhase.CAJA) {
+        setActiveRoleFilter(TicketPhase.CAJA);
+      }
       const firstCaja = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja"));
-      if (firstCaja) {
+      if (firstCaja && !cubicles.find(c => c.id === activeCubicleId && (c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().includes("caja")))) {
         setActiveCubicleId(firstCaja.id);
       }
-    } else if (isTriadaOnly && activeRoleFilter !== TicketPhase.TRIADA) {
-      setActiveRoleFilter(TicketPhase.TRIADA);
+    } else if (isTriadaOnly) {
+      if (activeRoleFilter !== TicketPhase.TRIADA) {
+        setActiveRoleFilter(TicketPhase.TRIADA);
+      }
       const firstTriada = cubicles.find(c => c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada"));
-      if (firstTriada) {
+      if (firstTriada && !cubicles.find(c => c.id === activeCubicleId && (c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada")))) {
         setActiveCubicleId(firstTriada.id);
       }
     }
-  }, [isCajaOnly, isTriadaOnly, activeRoleFilter, cubicles]);
+  }, [isCajaOnly, isTriadaOnly, activeRoleFilter, activeCubicleId, cubicles]);
 
   // Guarantee we filter cubicles for active selection:
   const filteredRoleCubicles = cubicles.filter(c => {

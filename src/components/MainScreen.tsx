@@ -141,43 +141,51 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   }, []);
 
   // Isolate tickets strictly by system ecosystem (Cedulación vs Registro Civil)
-  const ecosystemTickets = tickets.filter(t => {
-    if (gatewaySelection === "registro_civil") {
-      return t.serviceType === ServiceType.REGISTRO;
-    } else if (gatewaySelection === "cedulacion") {
-      return t.serviceType !== ServiceType.REGISTRO;
-    }
-    return true;
-  });
+  const ecosystemTickets = React.useMemo(() => {
+    return tickets.filter(t => {
+      if (gatewaySelection === "registro_civil") {
+        return t.serviceType === ServiceType.REGISTRO;
+      } else if (gatewaySelection === "cedulacion") {
+        return t.serviceType !== ServiceType.REGISTRO;
+      }
+      return true;
+    });
+  }, [tickets, gatewaySelection]);
 
   // Fetch tickets currently waiting
-  const waitingTickets = ecosystemTickets.filter(t => t.status === TicketStatus.WAITING);
+  const waitingTickets = React.useMemo(() => {
+    return ecosystemTickets.filter(t => t.status === TicketStatus.WAITING);
+  }, [ecosystemTickets]);
   
   // Sorted waiting queue (Priority and Appointments get moved to front)
-  const sortedWaiting = [...waitingTickets].sort((a, b) => {
-    const isAppA = a.isAppointment && gatewaySelection !== "registro_civil";
-    const isAppB = b.isAppointment && gatewaySelection !== "registro_civil";
-    const valA = (a.priority ? 4 : 0) + (isAppA ? 2 : 0);
-    const valB = (b.priority ? 4 : 0) + (isAppB ? 2 : 0);
-    if (valA !== valB) {
-      return valB - valA;
-    }
-    return a.createdAt - b.createdAt;
-  });
+  const sortedWaiting = React.useMemo(() => {
+    return [...waitingTickets].sort((a, b) => {
+      const isAppA = a.isAppointment && gatewaySelection !== "registro_civil";
+      const isAppB = b.isAppointment && gatewaySelection !== "registro_civil";
+      const valA = (a.priority ? 4 : 0) + (isAppA ? 2 : 0);
+      const valB = (b.priority ? 4 : 0) + (isAppB ? 2 : 0);
+      if (valA !== valB) {
+        return valB - valA;
+      }
+      return a.createdAt - b.createdAt;
+    });
+  }, [waitingTickets, gatewaySelection]);
 
   // Filter based on active channel selection
-  const filteredWaiting = selectedChannel === "general"
-    ? sortedWaiting
-    : selectedChannel === "OR"
-      ? sortedWaiting.filter(t => t.procedure === "OR")
-      : selectedChannel === "OHV"
-        ? sortedWaiting.filter(t => t.procedure === "OHV")
-        : selectedChannel === "RC_OTROS"
-          ? sortedWaiting.filter(t => t.procedure !== "OR" && t.procedure !== "OHV")
-          : sortedWaiting.filter(t => t.currentPhase === selectedChannel);
+  const filteredWaiting = React.useMemo(() => {
+    return selectedChannel === "general"
+      ? sortedWaiting
+      : selectedChannel === "OR"
+        ? sortedWaiting.filter(t => t.procedure === "OR")
+        : selectedChannel === "OHV"
+          ? sortedWaiting.filter(t => t.procedure === "OHV")
+          : selectedChannel === "RC_OTROS"
+            ? sortedWaiting.filter(t => t.procedure !== "OR" && t.procedure !== "OHV")
+            : sortedWaiting.filter(t => t.currentPhase === selectedChannel);
+  }, [selectedChannel, sortedWaiting]);
 
   // Helper to determine if a given call belongs strictly to the currently selected channel & ecosystem
-  const isCallMatchingChannel = (
+  const isCallMatchingChannel = React.useCallback((
     call: { ticket: Ticket; cubicle: Cubicle } | null,
     channel: "general" | TicketPhase | "OR" | "OHV" | "RC_OTROS",
     gateway: "select" | "cedulacion" | "registro_civil"
@@ -212,12 +220,14 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     }
 
     return call.ticket.currentPhase === channel;
-  };
+  }, []);
 
   // Filter active call based on channel selection and strictly match ecosystem
-  const displayedActiveCall = isCallMatchingChannel(activeCall, selectedChannel, gatewaySelection)
-    ? activeCall
-    : null;
+  const displayedActiveCall = React.useMemo(() => {
+    return isCallMatchingChannel(activeCall, selectedChannel, gatewaySelection)
+      ? activeCall
+      : null;
+  }, [activeCall, selectedChannel, gatewaySelection, isCallMatchingChannel]);
 
   // Persistent tracking of the latest called ticket so the giant call view stays active on the TV screen
   const [latestCall, setLatestCall] = useState<{ ticket: Ticket; cubicle: Cubicle } | null>(() => {
@@ -241,57 +251,50 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     }
   }, [displayedActiveCall]);
 
-  // When selectedChannel changes, clear latestCall or revalidate it, and filter callHistory
-  useEffect(() => {
-    if (latestCall) {
-      const liveTicket = ecosystemTickets.find(t => t.id === latestCall.ticket.id);
-      const isStillMatching = isCallMatchingChannel(
-        liveTicket ? { ticket: liveTicket, cubicle: latestCall.cubicle } : latestCall,
-        selectedChannel,
-        gatewaySelection
-      );
-      
-      // If the ticket in latestCall has advanced to another phase (e.g. from CAJA to TRIADA)
-      // or if it was completed, or doesn't match the current channel, clear it
-      if (!isStillMatching || (liveTicket && liveTicket.currentPhase !== latestCall.ticket.currentPhase)) {
-        setLatestCall(null);
+  // Validated latestCall against current live ecosystem tickets
+  const validatedLatestCall = React.useMemo(() => {
+    if (!latestCall) return null;
+    const liveTicket = ecosystemTickets.find(t => t.id === latestCall.ticket.id);
+    if (liveTicket) {
+      if (liveTicket.status === TicketStatus.COMPLETED || liveTicket.status === TicketStatus.MISSED) {
+        return null;
       }
+      if (isCallMatchingChannel({ ticket: liveTicket, cubicle: latestCall.cubicle }, selectedChannel, gatewaySelection)) {
+        return { ticket: liveTicket, cubicle: latestCall.cubicle };
+      }
+      return null;
     }
-    // Re-filter callHistory to ensure no leaked calls from other channels remain
-    setCallHistory(prev => prev.filter(item => isCallMatchingChannel(item, selectedChannel, gatewaySelection)));
-  }, [selectedChannel, gatewaySelection, ecosystemTickets, latestCall]);
+    return isCallMatchingChannel(latestCall, selectedChannel, gatewaySelection) ? latestCall : null;
+  }, [latestCall, ecosystemTickets, selectedChannel, gatewaySelection, isCallMatchingChannel]);
 
-  // Fallback: If latestCall is null, check for any ticket currently in explicit CALLING or ATTENDING state
-  // that STRICTLY matches the current channel and ecosystem
-  useEffect(() => {
-    if (!latestCall) {
-      const activeTickets = ecosystemTickets
-        .filter(t => {
-          const isCallingOrAttending = (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING) && !!t.assignedCubicleId;
-          if (!isCallingOrAttending) return false;
-          
-          if (selectedChannel === "general") return true;
-          if (selectedChannel === "OR") return t.procedure === "OR";
-          if (selectedChannel === "OHV") return t.procedure === "OHV";
-          if (selectedChannel === "RC_OTROS") return t.procedure !== "OR" && t.procedure !== "OHV";
-          return t.currentPhase === selectedChannel;
-        })
-        .sort((a, b) => (b.calledAt || 0) - (a.calledAt || 0));
-      
-      if (activeTickets.length > 0) {
-        const topTicket = activeTickets[0];
-        const topCubicle = cubicles.find(c => c.id === topTicket.assignedCubicleId);
-        if (topCubicle && isCallMatchingChannel({ ticket: topTicket, cubicle: topCubicle }, selectedChannel, gatewaySelection)) {
-          setLatestCall({ ticket: topTicket, cubicle: topCubicle });
-        }
+  // Fallback: If no displayed active call or validated latestCall, check for any ticket currently in explicit CALLING or ATTENDING state
+  const fallbackActiveCall = React.useMemo(() => {
+    if (displayedActiveCall || validatedLatestCall) return null;
+    const activeTickets = ecosystemTickets
+      .filter(t => {
+        const isCallingOrAttending = (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING) && !!t.assignedCubicleId;
+        if (!isCallingOrAttending) return false;
+        
+        if (selectedChannel === "general") return true;
+        if (selectedChannel === "OR") return t.procedure === "OR";
+        if (selectedChannel === "OHV") return t.procedure === "OHV";
+        if (selectedChannel === "RC_OTROS") return t.procedure !== "OR" && t.procedure !== "OHV";
+        return t.currentPhase === selectedChannel;
+      })
+      .sort((a, b) => (b.calledAt || 0) - (a.calledAt || 0));
+    
+    if (activeTickets.length > 0) {
+      const topTicket = activeTickets[0];
+      const topCubicle = cubicles.find(c => c.id === topTicket.assignedCubicleId);
+      if (topCubicle && isCallMatchingChannel({ ticket: topTicket, cubicle: topCubicle }, selectedChannel, gatewaySelection)) {
+        return { ticket: topTicket, cubicle: topCubicle };
       }
     }
-  }, [ecosystemTickets, cubicles, latestCall, selectedChannel, gatewaySelection]);
+    return null;
+  }, [displayedActiveCall, validatedLatestCall, ecosystemTickets, cubicles, selectedChannel, gatewaySelection, isCallMatchingChannel]);
 
   // Effective call to show prominently in large format on the screen (strictly validated for current channel)
-  const primaryCallToDisplay = displayedActiveCall || (
-    latestCall && isCallMatchingChannel(latestCall, selectedChannel, gatewaySelection) ? latestCall : null
-  );
+  const primaryCallToDisplay = displayedActiveCall || validatedLatestCall || fallbackActiveCall;
 
   // Audio announcement ref to keep track of the last announced ticket and calledAt
   const lastAnnouncedRef = useRef<{ id: string; calledAt: number } | null>(null);

@@ -165,7 +165,7 @@ export default function App() {
     localStorage.setItem("current_active_user_id", currentActiveUserId);
     const targetUser = users.find(u => u.id === currentActiveUserId);
     if (targetUser && targetUser.officeId) {
-      setCurrentOfficeId(targetUser.officeId);
+      setCurrentOfficeId(prev => prev !== targetUser.officeId ? targetUser.officeId : prev);
     }
   }, [currentActiveUserId, users, setCurrentOfficeId]);
 

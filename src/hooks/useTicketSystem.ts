@@ -636,9 +636,13 @@ const EMPTY_TICKETS: Ticket[] = [];
 const DEFAULT_CUBICLES_CACHE: Record<string, Cubicle[]> = {};
 
 export function getDefaultCubiclesForOffice(officeId: string): Cubicle[] {
+  if (DEFAULT_CUBICLES_CACHE[officeId]) {
+    return DEFAULT_CUBICLES_CACHE[officeId];
+  }
+
   const specList = REGIONAL_OFFICES_MODULES_SPEC[officeId];
   if (specList) {
-    return specList.map(spec => {
+    const list = specList.map(spec => {
       const isPref = spec.isPreferential;
       const areaLabel = spec.area;
       const typeLabel = isPref ? "Preferencial" : "Regular";
@@ -668,11 +672,11 @@ export function getDefaultCubiclesForOffice(officeId: string): Cubicle[] {
         area: spec.area
       };
     });
+    DEFAULT_CUBICLES_CACHE[officeId] = list;
+    return list;
   }
 
-  if (!DEFAULT_CUBICLES_CACHE[officeId]) {
-    DEFAULT_CUBICLES_CACHE[officeId] = INITIAL_CUBICLES.map(c => migrateCubicleState(c, officeId));
-  }
+  DEFAULT_CUBICLES_CACHE[officeId] = INITIAL_CUBICLES.map(c => migrateCubicleState(c, officeId));
   return DEFAULT_CUBICLES_CACHE[officeId];
 }
 
