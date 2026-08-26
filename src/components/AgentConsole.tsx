@@ -34,7 +34,14 @@ import {
   ShieldAlert,
   DollarSign,
   Camera,
-  Receipt
+  Receipt,
+  Timer,
+  Send,
+  Sparkles,
+  X,
+  Bell,
+  RefreshCw,
+  Trash2
 } from "lucide-react";
 
 const DEFAULT_FALLBACK_USER: SystemUser = {
@@ -89,9 +96,9 @@ export function getUserDisplayDetails(u: SystemUser, isRc: boolean) {
 interface AgentConsoleProps {
   tickets: Ticket[];
   cubicles: Cubicle[];
-  onCallNext: (cubicleId: string) => Promise<void>;
+  onCallNext: (cubicleId: string, specificTicketId?: string) => Promise<void>;
   onStartAttending: (cubicleId: string) => void;
-  onComplete: (cubicleId: string, outcome?: "administrative" | "emission_physical") => void;
+  onComplete: (cubicleId: string, outcome?: "administrative" | "emission_physical", procedure?: string) => void;
   onTransferToCajaRC?: (cubicleId: string) => void;
   onMiss: (cubicleId: string) => void;
   onRecall: (cubicleId: string) => void;
@@ -102,6 +109,8 @@ interface AgentConsoleProps {
   currentActiveUserId: string;
   setCurrentActiveUserId: React.Dispatch<React.SetStateAction<string>>;
   gatewaySelection?: "select" | "cedulacion" | "registro_civil";
+  onRefresh?: () => Promise<void> | void;
+  onResetSystem?: () => Promise<void> | void;
 }
 
 export default function AgentConsole({
@@ -115,6 +124,8 @@ export default function AgentConsole({
   onRecall,
   onChangeStatus,
   onUpdateCubicleConfig,
+  onRefresh,
+  onResetSystem,
   currentOfficeId = "OFF-1",
   users = [],
   currentActiveUserId,
@@ -242,6 +253,41 @@ export default function AgentConsole({
   const [usernameInput, setUsernameInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [loginError, setFormLoginError] = useState("");
+  const [locallyAttendingTicketIds, setLocallyAttendingTicketIds] = useState<Record<string, boolean>>({});
+  const [attentionStartTime, setAttentionStartTime] = useState<Record<string, number>>({});
+  const [currentTime, setCurrentTime] = useState(Date.now());
+  const [cajaTransferNotification, setCajaTransferNotification] = useState<{
+    ticketCode: string;
+    name: string;
+    procedure: string;
+    timestamp: number;
+  } | null>(null);
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
+
+  const handleManualRefresh = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      if (onRefresh) {
+        await onRefresh();
+      }
+      setLastRefreshedAt(Date.now());
+    } finally {
+      setTimeout(() => {
+        setIsRefreshing(false);
+      }, 400);
+    }
+  };
+
+  // Live timer interval for attention chronometer
+  React.useEffect(() => {
+    const timerInterval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+    return () => clearInterval(timerInterval);
+  }, []);
 
   React.useEffect(() => {
     if (sessionUser) {
@@ -388,14 +434,14 @@ export default function AgentConsole({
 
   // Ensure current cubicle is valid based on selection
   let currentCubicle = cubicles.find(c => c.id === activeCubicleId);
-  if (gatewaySelection !== "registro_civil" && !hasSelectedCubicle) {
+  if (gatewaySelection !== "registro_civil") {
     const isMatched = filteredRoleCubicles.some(c => c.id === activeCubicleId);
     if (!isMatched && filteredRoleCubicles.length > 0) {
       currentCubicle = filteredRoleCubicles[0];
     }
   }
   if (!currentCubicle) {
-    currentCubicle = cubicles[0];
+    currentCubicle = filteredRoleCubicles.length > 0 ? filteredRoleCubicles[0] : cubicles[0];
   }
 
   const activeTicket = tickets.find(t =>
@@ -425,6 +471,24 @@ export default function AgentConsole({
     if (!a.priority && b.priority) return 1;
     return a.createdAt - b.createdAt;
   });
+
+  // Computed chronometer timer for active ticket in attention
+  const isAttendingActive = !!(
+    activeTicket &&
+    (activeTicket.status === TicketStatus.ATTENDING || locallyAttendingTicketIds[activeTicket.id])
+  );
+
+  const startAttTime = activeTicket
+    ? (attentionStartTime[activeTicket.id] || activeTicket.attendedAt || activeTicket.calledAt || activeTicket.createdAt)
+    : 0;
+
+  const elapsedSeconds = (isAttendingActive && startAttTime)
+    ? Math.max(0, Math.floor((currentTime - startAttTime) / 1000))
+    : 0;
+
+  const timerMins = Math.floor(elapsedSeconds / 60);
+  const timerSecs = elapsedSeconds % 60;
+  const formattedAttentionTimer = `${String(timerMins).padStart(2, "0")}:${String(timerSecs).padStart(2, "0")}`;
 
   const handleTogglePhase = (_phaseId: TicketPhase) => {
     // Fases estrictamente bloqueadas por rol: Caja es estrictamente Caja y Tríada es estrictamente Tríada.
@@ -1420,15 +1484,46 @@ export default function AgentConsole({
               </span>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setHasSelectedCubicle(false);
-            }}
-            className="py-2.5 px-4 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-250 hover:border-slate-350 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm shrink-0"
-          >
-            Cambiar de Módulo 🔄
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              id="btn-manual-refresh-agent"
+              type="button"
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              className="py-2.5 px-3.5 bg-white hover:bg-blue-50 text-[#003087] border border-blue-200 hover:border-blue-400 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm shrink-0 flex items-center gap-1.5 active:scale-95"
+              title="Sincronizar turnos manualmente con la base de datos"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-[#003087]" : "text-[#003087]"}`} />
+              <span>{isRefreshing ? "Actualizando..." : "Actualizar Turnos"}</span>
+            </button>
+
+            {onResetSystem && (
+              <button
+                id="btn-clear-tickets-agent"
+                type="button"
+                onClick={async () => {
+                  if (window.confirm("¿Deseas vaciar todos los turnos de la base de datos y memoria local para empezar pruebas desde 0?")) {
+                    await onResetSystem();
+                  }
+                }}
+                className="py-2.5 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-900 border border-rose-200 hover:border-rose-300 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm shrink-0 flex items-center gap-1.5 active:scale-95"
+                title="Limpiar base de datos y memoria de tickets a 0"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>Vaciar Turnos (0)</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setHasSelectedCubicle(false);
+              }}
+              className="py-2.5 px-4 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-250 hover:border-slate-350 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm shrink-0"
+            >
+              Cambiar de Módulo 🔄
+            </button>
+          </div>
         </div>
 
         {/* AGENT STATE CARD & CONFIGURATOR */}
@@ -1572,6 +1667,41 @@ export default function AgentConsole({
           </div>
         </div>
 
+        {/* NOTIFICACIÓN DE DERIVACIÓN EXITOSA A TRÍADA Y FOTOGRAFÍA */}
+        {cajaTransferNotification && (
+          <div className="bg-gradient-to-r from-emerald-700 via-teal-800 to-[#122e70] text-white p-5 rounded-2xl shadow-lg border-2 border-emerald-400 flex items-start justify-between gap-4 animate-in fade-in slide-in-from-top duration-300">
+            <div className="flex items-start gap-3.5">
+              <div className="w-11 h-11 rounded-xl bg-white/20 border border-white/30 flex items-center justify-center shrink-0 mt-0.5 shadow-inner">
+                <Send className="w-6 h-6 text-emerald-300 animate-pulse" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="bg-emerald-300 text-emerald-950 text-[10px] font-mono font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                    ✓ DERIVACIÓN CONFIRMADA
+                  </span>
+                  <span className="text-emerald-200 text-xs font-mono font-bold">
+                    {new Date(cajaTransferNotification.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                </div>
+                <h4 className="text-lg font-black uppercase text-white leading-tight">
+                  ¡Ticket {cajaTransferNotification.ticketCode} enviado a Tríada y Fotografía!
+                </h4>
+                <p className="text-xs text-emerald-100 font-medium leading-relaxed max-w-2xl">
+                  El pago del trámite <strong>{getProcedureName(cajaTransferNotification.procedure)}</strong> ({cajaTransferNotification.procedure}) fue registrado exitosamente. El ciudadano <strong>{cajaTransferNotification.name}</strong> ha sido transferido a la cola de <strong>Tríada / Fotografía</strong> y está listo para ser llamado por las ventanillas de biometría y fotografía.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCajaTransferNotification(null)}
+              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer shrink-0"
+              title="Cerrar notificación"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        )}
+
         {/* ACTIVE TICKET IN PROGRESS CARD */}
         <div className="space-y-2 pt-2">
           <div className="flex items-center justify-between">
@@ -1587,7 +1717,7 @@ export default function AgentConsole({
           {activeTicket ? (
             <div className="bg-blue-50/20 border-2 border-[#122e70] p-6 rounded-2xl space-y-4 relative overflow-hidden shadow-sm">
               <div className="absolute top-0 right-0 p-4 text-[10px] uppercase text-[#122e70] font-black tracking-widest font-mono">
-                {activeTicket.status === TicketStatus.CALLING ? "🛎️ LLAMANDO CLIENTE" : "🎙️ ATENDIENDO CLIENTE"}
+                {activeTicket.status === TicketStatus.CALLING && !locallyAttendingTicketIds[activeTicket.id] ? "🛎️ LLAMANDO CLIENTE" : "🎙️ ATENDIENDO CLIENTE"}
               </div>
 
               <div className="flex items-start gap-4 pt-4">
@@ -1619,8 +1749,58 @@ export default function AgentConsole({
                 </div>
               </div>
 
+              {/* CRONÓMETRO DE ATENCIÓN EN VIVO */}
+              {isAttendingActive ? (
+                <div className="bg-slate-950 border-2 border-emerald-500/60 p-4 rounded-xl shadow-md text-white flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400 flex items-center justify-center shrink-0">
+                      <Timer className="w-5 h-5 text-emerald-400 animate-pulse" />
+                    </div>
+                    <div className="text-left">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                        <span className="text-xs font-black uppercase tracking-wider text-emerald-400">
+                          Cronómetro de Atención Activa
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 font-medium">
+                        Registrando tiempo de servicio en tiempo real ({activeTicket.currentPhase === TicketPhase.CAJA ? "Caja y Recaudación" : "Tríada y Captura"})
+                      </p>
+                    </div>
+                  </div>
+                  <div className="bg-black/80 border border-emerald-500/40 px-5 py-2 rounded-xl text-center shadow-inner flex items-baseline gap-2">
+                    <span className="font-mono text-3xl font-black text-emerald-400 tracking-wider">
+                      {formattedAttentionTimer}
+                    </span>
+                    <span className="text-[10px] uppercase font-bold text-slate-400">min : seg</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-amber-50 border border-amber-300 p-3.5 rounded-xl flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0">
+                      <Volume2 className="w-4 h-4 animate-bounce" />
+                    </div>
+                    <div className="text-left">
+                      <span className="text-xs font-black uppercase text-amber-950 block">
+                        Ciudadano Llamado al Módulo
+                      </span>
+                      <span className="text-[11px] text-amber-800 font-medium">
+                        Presione "Iniciar Atención" para activar el cronómetro y habilitar el proceso de {activeTicket.currentPhase === TicketPhase.CAJA ? "cobro" : "atención"}.
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono font-black uppercase px-2.5 py-1 bg-amber-200 text-amber-950 rounded-md border border-amber-300">
+                    Llamando
+                  </span>
+                </div>
+              )}
+
               {/* SELECCIÓN DE TRÁMITES DE CAJA (7 BOTONES: CPV, REN, DUP, CJ, CRP, REG, COE) */}
-              {currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) && (
+              {(activeTicket.currentPhase === TicketPhase.CAJA ||
+                currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ||
+                currentCubicle.name.toLowerCase().includes("caja") ||
+                activeRoleFilter === TicketPhase.CAJA) && (
                 <div className="bg-white border border-blue-200 p-4 rounded-xl space-y-2.5 shadow-sm">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                     <span className="text-[11px] font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
@@ -1729,12 +1909,17 @@ export default function AgentConsole({
 
               {/* ACTION TOOLBARS */}
               <div className="space-y-3 pt-3 border-t border-blue-100">
-                {activeTicket.status === TicketStatus.CALLING ? (
+                {activeTicket.status === TicketStatus.CALLING && !locallyAttendingTicketIds[activeTicket.id] ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
                       id="btn-action-start"
                       type="button"
-                      onClick={() => onStartAttending(currentCubicle.id)}
+                      onClick={() => {
+                        const now = Date.now();
+                        setAttentionStartTime(prev => ({ ...prev, [activeTicket.id]: now }));
+                        setLocallyAttendingTicketIds(prev => ({ ...prev, [activeTicket.id]: true }));
+                        onStartAttending(currentCubicle.id);
+                      }}
                       className="py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
                     >
                       <Play className="w-4 h-4 text-white" />
@@ -1755,7 +1940,19 @@ export default function AgentConsole({
                     <button
                       id="btn-action-miss"
                       type="button"
-                      onClick={() => onMiss(currentCubicle.id)}
+                      onClick={() => {
+                        setLocallyAttendingTicketIds(prev => {
+                          const updated = { ...prev };
+                          delete updated[activeTicket.id];
+                          return updated;
+                        });
+                        setAttentionStartTime(prev => {
+                          const updated = { ...prev };
+                          delete updated[activeTicket.id];
+                          return updated;
+                        });
+                        onMiss(currentCubicle.id);
+                      }}
                       className="sm:col-span-2 w-full py-2.5 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 font-extrabold text-[11px] uppercase tracking-wider rounded-xl border border-slate-200 cursor-pointer flex items-center justify-center gap-2 transition-all"
                       title="Marca cliente como ausente"
                     >
@@ -1771,7 +1968,19 @@ export default function AgentConsole({
                         <button
                           id="btn-action-complete-rc"
                           type="button"
-                          onClick={() => onComplete(currentCubicle.id)}
+                          onClick={() => {
+                            setLocallyAttendingTicketIds(prev => {
+                              const updated = { ...prev };
+                              delete updated[activeTicket.id];
+                              return updated;
+                            });
+                            setAttentionStartTime(prev => {
+                              const updated = { ...prev };
+                              delete updated[activeTicket.id];
+                              return updated;
+                            });
+                            onComplete(currentCubicle.id);
+                          }}
                           className="sm:col-span-2 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
                           title="Trámite concluido con éxito"
                         >
@@ -1779,11 +1988,42 @@ export default function AgentConsole({
                           <span>Finalizar Atención (Trámite Concluido)</span>
                         </button>
                       </div>
-                    ) : currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ? (
+                    ) : (activeTicket.currentPhase === TicketPhase.CAJA ||
+                         currentCubicle.supportedPhases?.includes(TicketPhase.CAJA) ||
+                         currentCubicle.name.toLowerCase().includes("caja") ||
+                         activeRoleFilter === TicketPhase.CAJA) ? (
                       (() => {
                         const effectiveProcId = selectedCajaProc || activeTicket.procedure || "CPV";
                         const procMeta = CAJA_PROCEDURES.find(p => p.id === effectiveProcId);
                         const requiresPhoto = procMeta ? procMeta.requiresPhoto : (effectiveProcId !== "REG" && effectiveProcId !== "COE");
+
+                        const handleCajaFinish = (outcome: "administrative" | "emission_physical") => {
+                          const currentTicketCode = activeTicket.numberCode;
+                          const currentTicketName = activeTicket.name;
+                          const currentTicketId = activeTicket.id;
+
+                          setLocallyAttendingTicketIds(prev => {
+                            const updated = { ...prev };
+                            delete updated[currentTicketId];
+                            return updated;
+                          });
+                          setAttentionStartTime(prev => {
+                            const updated = { ...prev };
+                            delete updated[currentTicketId];
+                            return updated;
+                          });
+                          activeTicket.procedure = effectiveProcId;
+                          onComplete(currentCubicle.id, outcome, effectiveProcId);
+
+                          if (outcome === "emission_physical") {
+                            setCajaTransferNotification({
+                              ticketCode: currentTicketCode,
+                              name: currentTicketName,
+                              procedure: effectiveProcId,
+                              timestamp: Date.now()
+                            });
+                          }
+                        };
 
                         return (
                           <div className="space-y-2.5">
@@ -1792,24 +2032,18 @@ export default function AgentConsole({
                               <button
                                 id="btn-action-caja-triada"
                                 type="button"
-                                onClick={() => {
-                                  activeTicket.procedure = effectiveProcId;
-                                  onComplete(currentCubicle.id, "emission_physical");
-                                }}
+                                onClick={() => handleCajaFinish("emission_physical")}
                                 className="w-full py-3.5 bg-gradient-to-r from-[#003087] to-[#122e70] hover:from-blue-800 hover:to-blue-900 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
                                 title={`Cobro de ${effectiveProcId} registrado. Enviar ciudadano a la fila de Tríada / Fotografía.`}
                               >
                                 <Camera className="w-4 h-4 text-amber-400 shrink-0" />
-                                <span>Registrar Pago ({effectiveProcId}) ➔ Pasar a Tríada</span>
+                                <span>Registrar Pago ({effectiveProcId}) ➔ Enviar a Tríada</span>
                               </button>
                             ) : (
                               <button
                                 id="btn-action-caja-adm"
                                 type="button"
-                                onClick={() => {
-                                  activeTicket.procedure = effectiveProcId;
-                                  onComplete(currentCubicle.id, "administrative");
-                                }}
+                                onClick={() => handleCajaFinish("administrative")}
                                 className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
                                 title={`Cobro de ${effectiveProcId} registrado. Trámite administrativo/certificación concluido.`}
                               >
@@ -1823,24 +2057,18 @@ export default function AgentConsole({
                               <button
                                 id="btn-action-force-triada"
                                 type="button"
-                                onClick={() => {
-                                  activeTicket.procedure = effectiveProcId;
-                                  onComplete(currentCubicle.id, "emission_physical");
-                                }}
+                                onClick={() => handleCajaFinish("emission_physical")}
                                 className="py-2.5 px-3 bg-blue-50 hover:bg-blue-100 text-[#122e70] border border-blue-200 font-black text-[10px] uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-all"
                                 title="Enviar a Tríada y Fotografía"
                               >
                                 <Camera className="w-3.5 h-3.5 text-blue-700" />
-                                <span>Pasar a Tríada</span>
+                                <span>Enviar a Tríada</span>
                               </button>
 
                               <button
                                 id="btn-action-force-finish"
                                 type="button"
-                                onClick={() => {
-                                  activeTicket.procedure = effectiveProcId;
-                                  onComplete(currentCubicle.id, "administrative");
-                                }}
+                                onClick={() => handleCajaFinish("administrative")}
                                 className="py-2.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-black text-[10px] uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-all"
                                 title="Finalizar trámite aquí en caja"
                               >
@@ -1856,7 +2084,19 @@ export default function AgentConsole({
                         <button
                           id="btn-action-complete"
                           type="button"
-                          onClick={() => onComplete(currentCubicle.id)}
+                          onClick={() => {
+                            setLocallyAttendingTicketIds(prev => {
+                              const updated = { ...prev };
+                              delete updated[activeTicket.id];
+                              return updated;
+                            });
+                            setAttentionStartTime(prev => {
+                              const updated = { ...prev };
+                              delete updated[activeTicket.id];
+                              return updated;
+                            });
+                            onComplete(currentCubicle.id);
+                          }}
                           className="w-full py-3.5 bg-[#122e70] hover:bg-blue-800 text-white font-black text-xs uppercase tracking-widest rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-md transition-all active:scale-[0.99]"
                         >
                           <Check className="w-5 h-5 text-white" />
@@ -1899,7 +2139,10 @@ export default function AgentConsole({
               <button
                 id="btn-call-next-ticket"
                 disabled={currentCubicle.status === CubicleStatus.BREAK || currentCubicle.status === CubicleStatus.OFFLINE || sortedCandidates.length === 0}
-                onClick={() => onCallNext(currentCubicle.id)}
+                onClick={() => {
+                  const targetId = sortedCandidates.length > 0 ? sortedCandidates[0].id : undefined;
+                  onCallNext(currentCubicle.id, targetId);
+                }}
                 className={`px-6 py-4.5 w-full font-black text-sm uppercase tracking-widest rounded-xl border transition-all flex items-center justify-center gap-2 shadow-md ${
                   currentCubicle.status === CubicleStatus.BREAK || currentCubicle.status === CubicleStatus.OFFLINE
                     ? "bg-slate-200 text-slate-400 border-slate-200 cursor-not-allowed shadow-none"
@@ -1997,7 +2240,19 @@ export default function AgentConsole({
         <div className="space-y-2">
           <div className="flex justify-between items-center text-[10px] uppercase font-black text-slate-450 tracking-wider">
             <span>COLA COMPATIBLE CON ESTE MÓDULO ({sortedCandidates.length})</span>
-            {sortedCandidates.length > 0 && <span className="text-xs px-2 py-0.5 bg-slate-900 text-white font-mono rounded-lg font-bold">TURNOS</span>}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleManualRefresh}
+                disabled={isRefreshing}
+                className="inline-flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-slate-100 text-[#003087] border border-blue-200 rounded-lg text-[10px] font-bold uppercase transition-all shadow-xs cursor-pointer active:scale-95"
+                title="Refrescar cola de turnos manualmente"
+              >
+                <RefreshCw className={`w-3 h-3 ${isRefreshing ? "animate-spin text-blue-600" : "text-[#003087]"}`} />
+                <span>{isRefreshing ? "Actualizando..." : "Refrescar Cola"}</span>
+              </button>
+              {sortedCandidates.length > 0 && <span className="text-xs px-2 py-0.5 bg-slate-900 text-white font-mono rounded-lg font-bold">TURNOS</span>}
+            </div>
           </div>
 
           {sortedCandidates.length > 0 ? (
@@ -2006,10 +2261,14 @@ export default function AgentConsole({
                 const secondsWaiting = Math.round((Date.now() - item.createdAt) / 1000);
                 const isOverdue = secondsWaiting > 60;
                 return (
-                  <div key={item.id} className={`p-3 border rounded-xl flex items-center justify-between text-xs transition-all duration-300 ${
+                  <div 
+                    key={item.id} 
+                    onClick={() => onCallNext(currentCubicle.id, item.id)}
+                    title="Click para llamar a este turno"
+                    className={`p-3 border rounded-xl flex items-center justify-between text-xs transition-all duration-300 cursor-pointer hover:ring-2 hover:ring-indigo-400 ${
                     isOverdue 
                       ? "border-amber-350 bg-amber-50 shadow-sm animate-pulse" 
-                      : "border-slate-200 bg-white shadow-xs"
+                      : "border-slate-200 bg-white hover:bg-blue-50/50 shadow-xs"
                   }`}>
                     <div className="flex items-center gap-3">
                       <span className={`font-bold font-mono px-2.5 py-1 rounded-lg text-xs shadow-xs ${

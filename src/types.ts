@@ -117,6 +117,7 @@ export interface Ticket {
   phaseHistory: TicketPhaseHistory[];
   createdAt: number;
   calledAt?: number;
+  attendedAt?: number;
   completedAt?: number;
   assignedCubicleId?: string;
   priority: boolean; // Priority ticket (pregnant, elderly, disabled)

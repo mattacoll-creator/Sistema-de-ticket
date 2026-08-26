@@ -770,14 +770,29 @@ export default function SuperAdminConsole({
     }, 850);
   };
 
-  // Clear data of all offices
-  const handleClearAllOfficeTickets = () => {
-    if (confirm("¿Está seguro que desea purgar todas las colas e historiales de las 16 oficinas de Panamá en limpio? Esta acción es irreversible.")) {
+  // Clear data of all offices and purge full database to 0
+  const handleClearAllOfficeTickets = async () => {
+    if (confirm("⚠️ ¿ESTÁ COMPLETAMENTE SEGURO (SUPER ADMINISTRADOR)?\n\nEsta acción vaciará TODOS los registros de la base de datos (turnos de las 16 oficinas de Panamá, citas agendadas, expedientes y colas en vivo). La base de datos quedará en 0 y limpia para iniciar operaciones en producción.")) {
+      try {
+        await fetch('/api/admin/purge-all-database', { method: 'POST' });
+      } catch (err) {
+        console.error("Error al llamar al endpoint de purga:", err);
+      }
       const cleared: Record<string, Ticket[]> = {};
       OFFICES_CONFIG.forEach(o => {
         cleared[o.id] = [];
       });
       setOfficeTickets(cleared);
+      localStorage.removeItem("office_tickets_state_v1");
+      localStorage.removeItem("ticket_system_office_tickets_v1");
+      localStorage.removeItem("ticket_system_tickets_v1");
+      localStorage.removeItem("citas_locales_v1");
+      localStorage.removeItem("citas_tribunal_electoral_v2");
+      localStorage.removeItem("registro_civil_historico");
+      localStorage.removeItem("active_call_ticket");
+      localStorage.removeItem("ticket_system_active_call_v1");
+      alert("✅ Base de datos nacional purgada con éxito a 0.");
+      window.location.reload();
     }
   };
 

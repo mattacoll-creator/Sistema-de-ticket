@@ -84,30 +84,108 @@ async function initPostgresSchema() {
         CREATE INDEX IF NOT EXISTS idx_appts_estado ON appointments (estado);
       `);
 
-      // 3. TICKETS DE TURNO (KIOSKO Y SALA DE ESPERA)
+      // 3. TICKETS DE TURNO (KIOSKO Y SALA DE ESPERA - ACTIVOS)
       await client.query(`
         CREATE TABLE IF NOT EXISTS tickets (
           id VARCHAR(100) PRIMARY KEY,
-          numero_ticket VARCHAR(20) NOT NULL,
+          numero_ticket VARCHAR(50) NOT NULL,
           tipo_tramite VARCHAR(100) NOT NULL,
           sub_tramite VARCHAR(255),
-          identificacion VARCHAR(50),
+          identificacion VARCHAR(100),
           nombre VARCHAR(255),
+          correo VARCHAR(255),
+          telefono VARCHAR(50),
           es_prioritario BOOLEAN DEFAULT FALSE,
+          es_cita BOOLEAN DEFAULT FALSE,
+          cita_id VARCHAR(100),
           sucursal_id VARCHAR(100) NOT NULL,
           estado VARCHAR(50) DEFAULT 'espera',
+          fase_actual VARCHAR(50) DEFAULT 'caja',
           modulo_asignado VARCHAR(50),
+          modulo_asignado_nombre VARCHAR(150),
           agente_asignado VARCHAR(100),
+          agente_asignado_nombre VARCHAR(255),
           hora_emision TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
           hora_llamado TIMESTAMP WITH TIME ZONE,
           hora_inicio_atencion TIMESTAMP WITH TIME ZONE,
           hora_fin_atencion TIMESTAMP WITH TIME ZONE,
-          tiempo_espera_segundos INTEGER,
-          tiempo_atencion_segundos INTEGER
+          tiempo_espera_segundos INTEGER DEFAULT 0,
+          tiempo_atencion_segundos INTEGER DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_tickets_estado ON tickets (estado);
         CREATE INDEX IF NOT EXISTS idx_tickets_sucursal_fecha ON tickets (sucursal_id, hora_emision);
         CREATE INDEX IF NOT EXISTS idx_tickets_numero ON tickets (numero_ticket);
+
+        -- Migraciones automáticas de columnas para tablas existentes en PostgreSQL
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS sub_tramite VARCHAR(255);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS identificacion VARCHAR(100);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS nombre VARCHAR(255);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS correo VARCHAR(255);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS telefono VARCHAR(50);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS es_prioritario BOOLEAN DEFAULT FALSE;
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS es_cita BOOLEAN DEFAULT FALSE;
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS cita_id VARCHAR(100);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS sucursal_id VARCHAR(100) DEFAULT 'OFF-1';
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS estado VARCHAR(50) DEFAULT 'espera';
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS fase_actual VARCHAR(50) DEFAULT 'caja';
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS modulo_asignado VARCHAR(50);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS modulo_asignado_nombre VARCHAR(150);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS agente_asignado VARCHAR(100);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS agente_asignado_nombre VARCHAR(255);
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS hora_emision TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS hora_llamado TIMESTAMP WITH TIME ZONE;
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS hora_inicio_atencion TIMESTAMP WITH TIME ZONE;
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS hora_fin_atencion TIMESTAMP WITH TIME ZONE;
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS tiempo_espera_segundos INTEGER DEFAULT 0;
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS tiempo_atencion_segundos INTEGER DEFAULT 0;
+      `);
+
+      // 4. HISTÓRICO DE TICKETS (TURNOS COMPLETADOS Y REPORTES)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tickets_historico (
+          id VARCHAR(120) PRIMARY KEY,
+          number_code VARCHAR(50) NOT NULL,
+          office_id VARCHAR(50) NOT NULL DEFAULT 'OFF-1',
+          service_type VARCHAR(50) NOT NULL,
+          status VARCHAR(30) NOT NULL,
+          current_phase VARCHAR(50),
+          priority BOOLEAN DEFAULT FALSE,
+          is_appointment BOOLEAN DEFAULT FALSE,
+          appointment_id VARCHAR(120),
+          name VARCHAR(255) NOT NULL,
+          id_number VARCHAR(100),
+          email VARCHAR(255),
+          phone VARCHAR(50),
+          procedure VARCHAR(50),
+          photo_preference VARCHAR(100),
+          assigned_cubicle_id VARCHAR(100),
+          assigned_cubicle_name VARCHAR(150),
+          agent_id VARCHAR(100),
+          agent_name VARCHAR(255),
+          wait_time_seconds INTEGER DEFAULT 0,
+          service_time_seconds INTEGER DEFAULT 0,
+          rating INTEGER,
+          feedback TEXT,
+          created_at BIGINT NOT NULL,
+          called_at BIGINT,
+          attended_at BIGINT,
+          completed_at BIGINT,
+          fecha_registro TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_tickets_hist_office_id ON tickets_historico(office_id);
+        CREATE INDEX IF NOT EXISTS idx_tickets_hist_created_at ON tickets_historico(created_at);
+        CREATE INDEX IF NOT EXISTS idx_tickets_hist_service_type ON tickets_historico(service_type);
+        CREATE INDEX IF NOT EXISTS idx_tickets_hist_status ON tickets_historico(status);
+        CREATE INDEX IF NOT EXISTS idx_tickets_hist_id_number ON tickets_historico(id_number);
+
+        -- Migraciones automáticas para tickets_historico
+        ALTER TABLE tickets_historico ADD COLUMN IF NOT EXISTS office_id VARCHAR(50) DEFAULT 'OFF-1';
+        ALTER TABLE tickets_historico ADD COLUMN IF NOT EXISTS is_appointment BOOLEAN DEFAULT FALSE;
+        ALTER TABLE tickets_historico ADD COLUMN IF NOT EXISTS appointment_id VARCHAR(120);
+        ALTER TABLE tickets_historico ADD COLUMN IF NOT EXISTS attended_at BIGINT;
+        ALTER TABLE tickets_historico ADD COLUMN IF NOT EXISTS current_phase VARCHAR(50);
+        ALTER TABLE tickets_historico ADD COLUMN IF NOT EXISTS assigned_cubicle_name VARCHAR(150);
+        ALTER TABLE tickets_historico ADD COLUMN IF NOT EXISTS agent_name VARCHAR(255);
       `);
 
       // 4. MÓDULOS / VENTANILLAS DE ATENCIÓN (ESTADO EN VIVO)
@@ -1185,6 +1263,17 @@ async function startServer() {
       res.setHeader("Content-Type", "image/png");
       res.send(transparentPixel);
     }
+  });
+
+  // Build Version endpoint for automated client cache invalidation and gateway sync
+  const CURRENT_APP_VERSION = "2026.08.26-v2.1.0";
+  app.get(["/api/version", "/api/app-version"], (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.json({
+      version: CURRENT_APP_VERSION,
+      timestamp: Date.now(),
+      redirectGateway: true
+    });
   });
 
   // Endpoints for Admin authentication session creation
@@ -2278,6 +2367,71 @@ async function startServer() {
     }
   });
 
+  // API to purge all database records (appointments, tickets, logs, extranjeria, tardia)
+  app.post("/api/admin/purge-all-database", async (req, res) => {
+    try {
+      console.log("[DB Admin] Purgando todos los registros de la base de datos a petición...");
+      
+      // 1. Limpiar appointments en JSON directamente
+      try {
+        fs.writeFileSync(DB_PATH, JSON.stringify([], null, 2), "utf8");
+      } catch (errDb) {
+        console.error("Error al vaciar DB_PATH:", errDb);
+      }
+
+      // 2. Limpiar extranjería en JSON
+      try {
+        if (fs.existsSync(EXTRANJERIA_DB_PATH)) {
+          fs.writeFileSync(EXTRANJERIA_DB_PATH, JSON.stringify([], null, 2), "utf8");
+        }
+      } catch (errExt) {
+        console.error("Error al vaciar EXTRANJERIA_DB_PATH:", errExt);
+      }
+
+      // 3. Si PostgreSQL está configurado, vaciar tablas existentes una a una para que no falle si alguna no existe
+      if (isPgConfigured && pgPool) {
+        const tablesToClear = [
+          "appointments",
+          "tickets",
+          "tickets_historico",
+          "modulos_atencion",
+          "tracking_sesiones_moviles",
+          "notificaciones_moviles",
+          "push_subscriptions_movil",
+          "extranjeria_records",
+          "tardia_records",
+          "logs_auditoria",
+          "auditoria_atencion"
+        ];
+
+        for (const table of tablesToClear) {
+          try {
+            await pgPool.query(`TRUNCATE TABLE ${table} RESTART IDENTITY CASCADE;`);
+            console.log(`[Azure PostgreSQL] Tabla '${table}' purgada.`);
+          } catch (tErr: any) {
+            // Si la tabla no existe aún en PostgreSQL, intentar DELETE o ignorar
+            try {
+              await pgPool.query(`DELETE FROM ${table};`);
+            } catch (ignoreErr) {
+              console.log(`[Azure PostgreSQL] Info: No se pudo truncar '${table}': ${tErr.message}`);
+            }
+          }
+        }
+      }
+
+      // 4. Limpiar store en memoria de tickets para que no resuciten
+      memoryTicketsStore.clear();
+
+      return res.json({
+        success: true,
+        message: "Base de datos restablecida a 0 exitosamente. Todos los tickets, citas, expedientes y registros han sido eliminados."
+      });
+    } catch (e: any) {
+      console.error("Error al purgar la base de datos:", e);
+      return res.status(500).json({ success: false, error: "Error al purgar la base de datos: " + e.message });
+    }
+  });
+
   // HTTP Endpoint to Confirm Attendance via Email Links
   app.get("/api/appointment/confirm", async (req, res) => {
     const code = req.query.code as string;
@@ -3105,6 +3259,8 @@ async function startServer() {
       const sucursalId = (req.query.office as string) || (req.query.sucursal_id as string) || "OFF-1";
       
       let dbTickets: any[] = [];
+      let dbQueryExecuted = false;
+
       if (isPgConfigured && pgPool) {
         try {
           const query = sucursalId === "ALL" 
@@ -3112,6 +3268,7 @@ async function startServer() {
             : `SELECT * FROM tickets WHERE sucursal_id = $1 ORDER BY hora_emision ASC`;
           const params = sucursalId === "ALL" ? [] : [sucursalId];
           const dbRes = await pgPool.query(query, params);
+          dbQueryExecuted = true;
           
           if (dbRes.rows && dbRes.rows.length > 0) {
             dbTickets = dbRes.rows.map((r: any) => {
@@ -3120,6 +3277,7 @@ async function startServer() {
               const st = normalizeTicketStatus(r.estado);
               const cTime = r.hora_emision ? new Date(r.hora_emision).getTime() : Date.now();
               const callTime = r.hora_llamado ? new Date(r.hora_llamado).getTime() : undefined;
+              const attTime = r.hora_inicio_atencion ? new Date(r.hora_inicio_atencion).getTime() : undefined;
               const compTime = r.hora_fin_atencion ? new Date(r.hora_fin_atencion).getTime() : undefined;
 
               return {
@@ -3133,6 +3291,7 @@ async function startServer() {
                 phaseHistory: [{ phase, timestamp: cTime }],
                 createdAt: cTime,
                 calledAt: callTime,
+                attendedAt: attTime,
                 completedAt: compTime,
                 assignedCubicle: r.modulo_asignado || null,
                 assignedCubicleId: r.modulo_asignado || null,
@@ -3146,26 +3305,74 @@ async function startServer() {
           }
         } catch (pgErr: any) {
           console.warn("[PostgreSQL] Error fetching tickets from DB:", pgErr.message);
+          dbQueryExecuted = false;
         }
       }
 
-      // Merge memory cache with database
+      if (dbQueryExecuted) {
+        // PostgreSQL is authoritative. Sync memoryTicketsStore to reflect the true state of DB
+        if (sucursalId === "ALL") {
+          memoryTicketsStore.clear();
+          dbTickets.forEach(t => memoryTicketsStore.set(t.id, t));
+        } else {
+          for (const [id, t] of memoryTicketsStore.entries()) {
+            if ((t.sucursalId || "OFF-1") === sucursalId) {
+              memoryTicketsStore.delete(id);
+            }
+          }
+          dbTickets.forEach(t => memoryTicketsStore.set(t.id, t));
+        }
+
+        const finalTickets = dbTickets.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        return res.json({ success: true, tickets: finalTickets, serverTime: Date.now() });
+      }
+
+      // If PostgreSQL not configured or unreachable, use memory cache
       const allMemTickets = Array.from(memoryTicketsStore.values());
       const filteredMemTickets = sucursalId === "ALL"
         ? allMemTickets
         : allMemTickets.filter(t => (t.sucursalId || "OFF-1") === sucursalId);
 
-      const mergedMap = new Map<string, any>();
-      // First insert db tickets
-      dbTickets.forEach(t => mergedMap.set(t.id, t));
-      // Then overlay memory tickets (which may have newer local state)
-      filteredMemTickets.forEach(t => mergedMap.set(t.id, { ...(mergedMap.get(t.id) || {}), ...t }));
-
-      const finalTickets = Array.from(mergedMap.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-
+      const finalTickets = filteredMemTickets.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
       return res.json({ success: true, tickets: finalTickets, serverTime: Date.now() });
     } catch (e: any) {
       console.error("Error in GET /api/tickets:", e);
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // DELETE /api/tickets - Permite eliminar tickets de una o todas las sucursales
+  app.delete("/api/tickets", async (req, res) => {
+    try {
+      const sucursalId = (req.query.office as string) || (req.query.sucursal_id as string);
+      
+      if (isPgConfigured && pgPool) {
+        try {
+          if (sucursalId && sucursalId !== "ALL") {
+            await pgPool.query("DELETE FROM tickets WHERE sucursal_id = $1", [sucursalId]);
+            await pgPool.query("DELETE FROM tracking_sesiones_moviles WHERE ticket_id NOT IN (SELECT id FROM tickets)");
+          } else {
+            await pgPool.query("DELETE FROM tickets");
+            await pgPool.query("DELETE FROM tracking_sesiones_moviles");
+          }
+        } catch (pgErr: any) {
+          console.error("[PostgreSQL] Error deleting tickets:", pgErr.message);
+        }
+      }
+
+      if (sucursalId && sucursalId !== "ALL") {
+        for (const [id, t] of memoryTicketsStore.entries()) {
+          if ((t.sucursalId || "OFF-1") === sucursalId) {
+            memoryTicketsStore.delete(id);
+          }
+        }
+      } else {
+        memoryTicketsStore.clear();
+      }
+
+      return res.json({ success: true, message: "Tickets eliminados correctamente de la base de datos y memoria." });
+    } catch (e: any) {
+      console.error("Error in DELETE /api/tickets:", e);
       return res.status(500).json({ success: false, error: e.message });
     }
   });
@@ -3188,6 +3395,7 @@ async function startServer() {
         assignedCubicleId,
         assignedAgent,
         calledAt,
+        attendedAt,
         completedAt,
         phaseHistory,
         createdAt = Date.now()
@@ -3203,6 +3411,7 @@ async function startServer() {
       const cubId = assignedCubicleId || assignedCubicle || null;
       const tCreatedAt = typeof createdAt === "number" ? createdAt : (createdAt ? new Date(createdAt).getTime() : Date.now());
       const tCalledAt = calledAt ? (typeof calledAt === "number" ? calledAt : new Date(calledAt).getTime()) : undefined;
+      const tAttendedAt = attendedAt ? (typeof attendedAt === "number" ? attendedAt : new Date(attendedAt).getTime()) : undefined;
       const tCompletedAt = completedAt ? (typeof completedAt === "number" ? completedAt : new Date(completedAt).getTime()) : undefined;
 
       const ticketPayload = {
@@ -3222,6 +3431,7 @@ async function startServer() {
         assignedCubicleId: cubId,
         assignedAgent: assignedAgent || null,
         calledAt: tCalledAt,
+        attendedAt: tAttendedAt,
         completedAt: tCompletedAt,
         createdAt: tCreatedAt
       };
@@ -3233,21 +3443,24 @@ async function startServer() {
         try {
           await pgPool.query(
             `INSERT INTO tickets (
-               id, numero_ticket, tipo_tramite, sub_tramite, nombre, es_prioritario,
-               sucursal_id, estado, modulo_asignado, agente_asignado, hora_llamado, hora_fin_atencion, hora_emision
+               id, numero_ticket, tipo_tramite, sub_tramite, nombre, es_prioritario, es_cita,
+               sucursal_id, estado, fase_actual, modulo_asignado, agente_asignado, hora_llamado, hora_inicio_atencion, hora_fin_atencion, hora_emision
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
              ON CONFLICT (id) DO UPDATE SET
                numero_ticket = EXCLUDED.numero_ticket,
                tipo_tramite = EXCLUDED.tipo_tramite,
                sub_tramite = EXCLUDED.sub_tramite,
                nombre = EXCLUDED.nombre,
                es_prioritario = EXCLUDED.es_prioritario,
+               es_cita = EXCLUDED.es_cita,
                sucursal_id = EXCLUDED.sucursal_id,
                estado = EXCLUDED.estado,
+               fase_actual = EXCLUDED.fase_actual,
                modulo_asignado = EXCLUDED.modulo_asignado,
                agente_asignado = EXCLUDED.agente_asignado,
                hora_llamado = COALESCE(EXCLUDED.hora_llamado, tickets.hora_llamado),
+               hora_inicio_atencion = COALESCE(EXCLUDED.hora_inicio_atencion, tickets.hora_inicio_atencion),
                hora_fin_atencion = COALESCE(EXCLUDED.hora_fin_atencion, tickets.hora_fin_atencion)`,
             [
               id,
@@ -3256,11 +3469,14 @@ async function startServer() {
               procedure || "",
               name || "Ciudadano",
               !!priority,
+              !!isAppointment,
               sucursalId || "OFF-1",
               normStatus,
+              normPhase,
               cubId,
               assignedAgent || null,
               tCalledAt ? new Date(tCalledAt) : null,
+              tAttendedAt ? new Date(tAttendedAt) : null,
               tCompletedAt ? new Date(tCompletedAt) : null,
               new Date(tCreatedAt)
             ]
@@ -3328,12 +3544,14 @@ async function startServer() {
             try {
               await pgPool.query(
                 `INSERT INTO tickets (
-                   id, numero_ticket, tipo_tramite, sub_tramite, nombre, es_prioritario,
-                   sucursal_id, estado, modulo_asignado, agente_asignado, hora_llamado, hora_fin_atencion, hora_emision
+                   id, numero_ticket, tipo_tramite, sub_tramite, nombre, es_prioritario, es_cita,
+                   sucursal_id, estado, fase_actual, modulo_asignado, agente_asignado, hora_llamado, hora_fin_atencion, hora_emision
                  )
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                  ON CONFLICT (id) DO UPDATE SET
                    estado = EXCLUDED.estado,
+                   fase_actual = EXCLUDED.fase_actual,
+                   es_cita = EXCLUDED.es_cita,
                    modulo_asignado = EXCLUDED.modulo_asignado,
                    agente_asignado = EXCLUDED.agente_asignado,
                    hora_llamado = COALESCE(EXCLUDED.hora_llamado, tickets.hora_llamado),
@@ -3345,8 +3563,10 @@ async function startServer() {
                   t.procedure || t.sub_tramite || "",
                   t.name || t.nombre || "Ciudadano",
                   !!t.priority || !!t.es_prioritario,
+                  !!t.isAppointment || !!t.es_cita,
                   sucursalId,
                   normStatus,
+                  normPhase,
                   cubId,
                   t.assignedAgent || t.agente_asignado || null,
                   tCalledAt ? new Date(tCalledAt) : null,

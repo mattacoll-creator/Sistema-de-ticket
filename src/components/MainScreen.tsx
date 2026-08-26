@@ -17,11 +17,12 @@ interface MainScreenProps {
   activeCall: { ticket: Ticket; cubicle: Cubicle } | null;
   onClearActiveCall: () => void;
   onTestSpeaker: () => void;
+  onRefresh?: () => void;
   currentOfficeId?: string;
   gatewaySelection?: "select" | "cedulacion" | "registro_civil";
 }
 
-export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: MainScreenProps) {
+export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, onRefresh, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: MainScreenProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV" | "RC_OTROS">(() => {
@@ -41,6 +42,24 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   });
   const [layoutFocus, setLayoutFocus] = useState<"both" | "cubicles" | "queue" >("both");
   const [isImmersiveFullscreen, setIsImmersiveFullscreen] = useState(false);
+
+  // Auto-refresh interval specifically for the TV screen (polling live tickets & calls safely)
+  useEffect(() => {
+    if (!onRefresh) return;
+    
+    // Poll initially
+    onRefresh();
+
+    const interval = setInterval(() => {
+      // Avoid spamming requests if tab is minimized/hidden
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      onRefresh();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [onRefresh]);
 
   useEffect(() => {
     // Only reset to general if switching between major gateways (e.g. from cedulación to registro civil)
@@ -322,12 +341,24 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     }
 
     const isCaja = ticket.currentPhase === TicketPhase.CAJA || cubicle.name.toLowerCase().startsWith("caja");
+    const isTriada = ticket.currentPhase === TicketPhase.TRIADA || 
+      cubicle.name.toLowerCase().includes("tríada") || 
+      cubicle.name.toLowerCase().includes("triada") || 
+      cubicle.name.toLowerCase().includes("fotograf") || 
+      cubicle.name.toLowerCase().startsWith("módulo") || 
+      cubicle.name.toLowerCase().startsWith("modulo") ||
+      selectedChannel === TicketPhase.TRIADA;
+
     const destName = isCaja
       ? `Caja ${cubicle.name.replace(/\D/g, '') || cubicle.name}`
       : cubicle.name;
 
     // Play 2 consecutive calls (Primer llamado + Segundo llamado) with chime and voice
-    announceAndCall(ticket.numberCode, ticket.name, destName, 2).catch(err => {
+    announceAndCall(ticket.numberCode, ticket.name, destName, 2, { 
+      isCaja, 
+      isTriada, 
+      phase: ticket.currentPhase 
+    }).catch(err => {
       console.warn("Speech synthesis error on TV screen:", err);
     });
   }, [displayedActiveCall, soundEnabled, selectedChannel, gatewaySelection]);
@@ -420,23 +451,42 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       const procedureBadge = primaryCall.ticket.serviceType === ServiceType.REGISTRO ? "REGISTRO CIVIL" : "CEDULACIÓN";
       const phaseName = PHASES_CONFIG[primaryCall.ticket.currentPhase]?.name?.toUpperCase() || (isCaja ? "CAJA" : "TRÍADA");
 
+      const isTriada = primaryCall.ticket.currentPhase === TicketPhase.TRIADA || isTriadaChannel;
+
       return (
         <div 
           id="main-public-screen" 
-          className="fixed inset-0 z-[99999] bg-[#071a36] text-white flex flex-col justify-between items-center p-6 md:p-10 select-none overflow-hidden font-sans border-[8px] border-[#eab308] rounded-3xl m-2 md:m-3"
+          className={`fixed inset-0 z-[99999] flex flex-col justify-between items-center p-6 md:p-10 select-none overflow-hidden font-sans border-[8px] rounded-3xl m-2 md:m-3 transition-colors duration-300 ${
+            isTriada
+              ? "bg-white text-slate-900 border-[#003087]"
+              : "bg-[#071a36] text-white border-[#eab308]"
+          }`}
         >
-          {/* Deep ambient radial gradient */}
-          <div 
-            className="absolute inset-0 bg-no-repeat bg-cover pointer-events-none z-0" 
-            style={{
-              backgroundImage: "radial-gradient(circle at 50% 40%, #0d2c63 0%, #071a36 68%, #030d1c 100%)"
-            }} 
-          />
+          {/* Deep ambient background: White/light-gray for Triada, deep blue for Caja */}
+          {isTriada ? (
+            <div 
+              className="absolute inset-0 bg-no-repeat bg-cover pointer-events-none z-0" 
+              style={{
+                backgroundImage: "linear-gradient(135deg, #ffffff 0%, #f1f5f9 60%, #e2e8f0 100%)"
+              }} 
+            />
+          ) : (
+            <div 
+              className="absolute inset-0 bg-no-repeat bg-cover pointer-events-none z-0" 
+              style={{
+                backgroundImage: "radial-gradient(circle at 50% 40%, #0d2c63 0%, #071a36 68%, #030d1c 100%)"
+              }} 
+            />
+          )}
 
           {/* Exit Fullscreen discreet button in top right */}
           <button
             onClick={toggleImmersiveFullscreen}
-            className="absolute top-4 right-4 z-50 bg-white/10 hover:bg-white/20 text-white/80 hover:text-white px-4 py-1.5 rounded-full text-xs font-mono font-bold uppercase tracking-wider backdrop-blur-md transition-all cursor-pointer flex items-center gap-1.5 border border-white/15 shadow-sm"
+            className={`absolute top-4 right-4 z-50 px-4 py-1.5 rounded-full text-xs font-mono font-bold uppercase tracking-wider backdrop-blur-md transition-all cursor-pointer flex items-center gap-1.5 border shadow-sm ${
+              isTriada
+                ? "bg-slate-200/80 hover:bg-slate-300 text-slate-700 hover:text-slate-900 border-slate-300"
+                : "bg-white/10 hover:bg-white/20 text-white/80 hover:text-white border-white/15"
+            }`}
             title="Presione ESC o haga clic aquí para salir de pantalla completa"
           >
             <span>✕ Salir de Pantalla Completa</span>
@@ -448,23 +498,37 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
               <span>🔔 LLAMADO ACTIVO DE TURNO</span>
             </div>
-            <div className="bg-[#102550] border border-blue-400/40 text-blue-200 font-mono text-xs sm:text-sm font-bold px-6 py-2 rounded-full uppercase tracking-wider shadow-sm">
+            <div className={`font-mono text-xs sm:text-sm font-bold px-6 py-2 rounded-full uppercase tracking-wider shadow-sm border ${
+              isTriada
+                ? "bg-blue-50 border-blue-200 text-[#003087]"
+                : "bg-[#102550] border-blue-400/40 text-blue-200"
+            }`}>
               SISTEMA DE VOZ: 2 LLAMADOS
             </div>
           </div>
 
           {/* Citizen Name Section */}
           <div className="relative z-10 text-center w-full max-w-6xl px-4 my-auto flex flex-col items-center">
-            <span className="text-xs sm:text-sm md:text-base font-black tracking-[0.25em] text-[#00d0ff] uppercase font-mono mb-2">
+            <span className={`text-xs sm:text-sm md:text-base font-black tracking-[0.25em] uppercase font-mono mb-2 ${
+              isTriada ? "text-[#003087]" : "text-[#00d0ff]"
+            }`}>
               CIUDADANO(A)
             </span>
-            <h1 className="text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-black text-[#ffdc2b] font-sans tracking-tight uppercase leading-none drop-shadow-[0_10px_35px_rgba(0,0,0,0.9)] max-w-5xl">
+            <h1 className={`text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-black font-sans tracking-tight uppercase leading-none max-w-5xl ${
+              isTriada
+                ? "text-[#002244] drop-shadow-[0_4px_12px_rgba(0,0,0,0.15)]"
+                : "text-[#ffdc2b] drop-shadow-[0_10px_35px_rgba(0,0,0,0.9)]"
+            }`}>
               {primaryCall.ticket.name || "CIUDADANO SIN NOMBRE"}
             </h1>
           </div>
 
-          {/* Big White Card with Red Border */}
-          <div className="relative z-10 bg-white border-[10px] sm:border-[14px] border-[#e51a24] rounded-[28px] sm:rounded-[36px] px-8 sm:px-16 py-8 sm:py-12 text-center w-full max-w-4xl shadow-[0_25px_60px_rgba(0,0,0,0.8)] my-auto flex flex-col items-center justify-center">
+          {/* Big Destination Box with Red Border */}
+          <div className={`relative z-10 rounded-[28px] sm:rounded-[36px] px-8 sm:px-16 py-8 sm:py-12 text-center w-full max-w-4xl my-auto flex flex-col items-center justify-center border-[10px] sm:border-[14px] ${
+            isTriada
+              ? "bg-white border-[#e51a24] shadow-[0_20px_50px_rgba(0,0,0,0.15)]"
+              : "bg-white border-[#e51a24] shadow-[0_25px_60px_rgba(0,0,0,0.8)]"
+          }`}>
             <h2 className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black text-[#1b3d75] uppercase font-mono tracking-tight leading-none">
               {destinationText}
             </h2>
@@ -486,20 +550,36 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
           {/* Bottom Stat Badges */}
           <div className="relative z-10 flex flex-wrap items-center justify-center gap-4 sm:gap-6 pb-2">
-            <div className="bg-[#061838]/90 border border-cyan-500/40 px-8 py-3 rounded-2xl shadow-xl text-center min-w-[210px]">
-              <span className="text-[10px] sm:text-xs font-mono font-bold text-cyan-300 block uppercase tracking-wider">
+            <div className={`px-8 py-3 rounded-2xl shadow-xl text-center min-w-[210px] border ${
+              isTriada
+                ? "bg-white border-blue-200"
+                : "bg-[#061838]/90 border-cyan-500/40"
+            }`}>
+              <span className={`text-[10px] sm:text-xs font-mono font-bold block uppercase tracking-wider ${
+                isTriada ? "text-slate-500" : "text-cyan-300"
+              }`}>
                 CÓDIGO DE TURNO
               </span>
-              <span className="text-3xl sm:text-4xl md:text-5xl font-black font-mono text-white tracking-widest block mt-0.5">
+              <span className={`text-3xl sm:text-4xl md:text-5xl font-black font-mono tracking-widest block mt-0.5 ${
+                isTriada ? "text-[#003087]" : "text-white"
+              }`}>
                 {primaryCall.ticket.numberCode}
               </span>
             </div>
 
-            <div className="bg-[#061838]/90 border border-blue-500/40 px-8 py-3 rounded-2xl shadow-xl text-center min-w-[210px]">
-              <span className="text-[10px] sm:text-xs font-mono font-bold text-blue-300 block uppercase tracking-wider">
+            <div className={`px-8 py-3 rounded-2xl shadow-xl text-center min-w-[210px] border ${
+              isTriada
+                ? "bg-white border-blue-200"
+                : "bg-[#061838]/90 border-blue-500/40"
+            }`}>
+              <span className={`text-[10px] sm:text-xs font-mono font-bold block uppercase tracking-wider ${
+                isTriada ? "text-slate-500" : "text-blue-300"
+              }`}>
                 FASE DEL TRÁMITE
               </span>
-              <span className="text-xl sm:text-2xl md:text-3xl font-black font-mono uppercase text-white tracking-wider block mt-1">
+              <span className={`text-xl sm:text-2xl md:text-3xl font-black font-mono uppercase tracking-wider block mt-1 ${
+                isTriada ? "text-slate-900" : "text-white"
+              }`}>
                 {phaseName}
               </span>
             </div>
@@ -1226,13 +1306,23 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                
                {/* Sección Destacada: Últimos Turnos Llamados */}
                {callHistory.length > 0 && (
-                 <div className="bg-slate-900/60 border border-blue-500/20 p-3.5 rounded-2xl shadow-md">
-                   <div className="flex items-center justify-between pb-2 border-b border-white/5 mb-2.5">
-                     <span className="text-xs font-black font-mono tracking-widest text-[#00d0ff] uppercase flex items-center gap-2">
-                       <Clock className="w-4 h-4 text-cyan-400" />
+                 <div className={`p-3.5 rounded-2xl shadow-md border ${
+                   isTriadaChannel
+                     ? "bg-white border-slate-200"
+                     : "bg-slate-900/60 border-blue-500/20"
+                 }`}>
+                   <div className={`flex items-center justify-between pb-2 border-b mb-2.5 ${
+                     isTriadaChannel ? "border-slate-200" : "border-white/5"
+                   }`}>
+                     <span className={`text-xs font-black font-mono tracking-widest uppercase flex items-center gap-2 ${
+                       isTriadaChannel ? "text-[#003087]" : "text-[#00d0ff]"
+                     }`}>
+                       <Clock className={`w-4 h-4 ${isTriadaChannel ? "text-[#003087]" : "text-cyan-400"}`} />
                        ÚLTIMOS TURNOS LLAMADOS
                      </span>
-                     <span className="text-[10px] font-mono font-bold text-sky-300/70 uppercase">
+                     <span className={`text-[10px] font-mono font-bold uppercase ${
+                       isTriadaChannel ? "text-slate-500" : "text-sky-300/70"
+                     }`}>
                        {callHistory.length} EN HISTORIAL RECIENTE
                      </span>
                    </div>
@@ -1241,20 +1331,34 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                      {callHistory.slice(0, 3).map((item, idx) => (
                        <div
                          key={idx}
-                         className="bg-gradient-to-br from-[#072458] to-[#041638] border border-cyan-500/30 p-3 rounded-xl flex flex-col justify-between shadow-sm"
+                         className={`p-3 rounded-xl flex flex-col justify-between shadow-sm border ${
+                           isTriadaChannel
+                             ? "bg-slate-50 border-slate-200"
+                             : "bg-gradient-to-br from-[#072458] to-[#041638] border-cyan-500/30"
+                         }`}
                        >
                          <div className="flex items-center justify-between">
-                           <span className="text-xs font-black font-mono text-amber-300 bg-amber-950/60 border border-amber-500/40 px-2 py-0.5 rounded">
+                           <span className={`text-xs font-black font-mono px-2 py-0.5 rounded border ${
+                             isTriadaChannel
+                               ? "text-amber-800 bg-amber-100 border-amber-300"
+                               : "text-amber-300 bg-amber-950/60 border-amber-500/40"
+                           }`}>
                              {item.ticket.numberCode}
                            </span>
-                           <span className="text-[10px] font-mono font-black text-cyan-300">
+                           <span className={`text-[10px] font-mono font-black ${
+                             isTriadaChannel ? "text-[#003087]" : "text-cyan-300"
+                           }`}>
                              {item.cubicle.name}
                            </span>
                          </div>
-                         <p className="text-sm font-black text-white uppercase truncate mt-1.5">
+                         <p className={`text-sm font-black uppercase truncate mt-1.5 ${
+                           isTriadaChannel ? "text-slate-900" : "text-white"
+                         }`}>
                            {item.ticket.name}
                          </p>
-                         <span className="text-[9px] font-mono text-sky-300/60 mt-1">
+                         <span className={`text-[9px] font-mono mt-1 ${
+                           isTriadaChannel ? "text-slate-500" : "text-sky-300/60"
+                         }`}>
                            {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                          </span>
                        </div>
@@ -1298,38 +1402,50 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
                   // Text to display for Line 1: prioritized name, or code, or fallback
                   let mainText = "DISPONIBLE";
-                  let textStyle = "text-[#00d0ff]/70 font-semibold";
+                  let textStyle = isTriadaChannel ? "text-slate-500 font-semibold" : "text-[#00d0ff]/70 font-semibold";
 
                   if (isAttending && currentTicket) {
                     mainText = currentTicket.name && currentTicket.name.trim() !== ""
                       ? currentTicket.name
                       : currentTicket.numberCode;
-                    textStyle = "text-white font-black";
+                    textStyle = isTriadaChannel ? "text-slate-900 font-black" : "text-white font-black";
                   } else if (isBreak) {
                     mainText = "EN RECESO";
-                    textStyle = "text-amber-400 font-bold";
+                    textStyle = "text-amber-500 font-bold";
                   } else if (cubicle.status === "OFFLINE") {
                     mainText = "MÓDULO INACTIVO";
-                    textStyle = "text-slate-450 font-semibold opacity-40";
+                    textStyle = "text-slate-400 font-semibold opacity-60";
                   }
 
                   return (
                     <div
                       key={cubicle.id}
-                      className={`relative p-5 rounded-[22px] bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9] flex flex-col justify-center min-h-[92px] shadow-[0_5px_15px_rgba(0,0,0,0.25)] transition-all duration-300 ${
-                        isAttending 
-                          ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]" 
-                          : "opacity-95"
+                      className={`relative p-5 rounded-[22px] flex flex-col justify-center min-h-[92px] transition-all duration-300 ${
+                        isTriadaChannel
+                          ? `bg-white border-2 border-slate-200 border-b-[5px] border-r-[4px] border-b-[#003087] border-r-[#0047ab] shadow-[0_4px_12px_rgba(0,0,0,0.06)] ${
+                              isAttending
+                                ? "scale-[1.01] ring-2 ring-[#003087]/30 bg-blue-50/40"
+                                : "opacity-95 hover:border-slate-300"
+                            }`
+                          : `bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9] shadow-[0_5px_15px_rgba(0,0,0,0.25)] ${
+                              isAttending 
+                                ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]" 
+                                : "opacity-95"
+                            }`
                       }`}
                     >
                       {/* Bouncing call highlight backdrop */}
                       {isAttending && (
-                        <div className="absolute inset-0 bg-blue-400/5 animate-pulse rounded-[22px]" />
+                        <div className={`absolute inset-0 animate-pulse rounded-[22px] ${
+                          isTriadaChannel ? "bg-blue-600/5" : "bg-blue-400/5"
+                        }`} />
                       )}
 
                       {/* Line 1: Accent chevron and Main Text */}
                       <div className="flex items-center w-full truncate">
-                        <span className="text-[#00d0ff] text-base md:text-lg mr-2 leading-none select-none font-sans">
+                        <span className={`text-base md:text-lg mr-2 leading-none select-none font-sans ${
+                          isTriadaChannel ? "text-[#003087]" : "text-[#00d0ff]"
+                        }`}>
                           ▶
                         </span>
                         <span className={`uppercase font-sans tracking-wide text-sm md:text-base leading-tight truncate ${textStyle}`}>
@@ -1339,19 +1455,25 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
                       {/* Line 2: Indented bright blue pill containing designation */}
                       <div className="mt-2.5 flex items-center">
-                        <div className="inline-flex items-center gap-1.5 px-5 py-0.5 bg-[#0081f9] rounded-full text-white font-black text-xs md:text-sm tracking-wider shadow-[inset_0_2px_4px_rgba(0,0,0,0.15)] ml-5 select-none hover:bg-blue-500 transition-colors">
-                          <span className="text-[#aae3ff] text-[10px] leading-none select-none">▶</span>
+                        <div className={`inline-flex items-center gap-1.5 px-5 py-0.5 rounded-full text-white font-black text-xs md:text-sm tracking-wider shadow-[inset_0_2px_4px_rgba(0,0,0,0.15)] ml-5 select-none transition-colors ${
+                          isTriadaChannel ? "bg-[#003087] hover:bg-[#002266]" : "bg-[#0081f9] hover:bg-blue-500"
+                        }`}>
+                          <span className={`${isTriadaChannel ? "text-blue-200" : "text-[#aae3ff]"} text-[10px] leading-none select-none`}>▶</span>
                           <span>{cajaNumber}</span>
                         </div>
 
                         {/* Semantic indicators */}
                         {isFree && (
-                          <span className="ml-2.5 text-[8.5px] uppercase font-mono tracking-widest text-[#00d0ff]/65 font-bold animate-pulse">
+                          <span className={`ml-2.5 text-[8.5px] uppercase font-mono tracking-widest font-bold animate-pulse ${
+                            isTriadaChannel ? "text-emerald-700" : "text-[#00d0ff]/65"
+                          }`}>
                             ★ LIBRE
                           </span>
                         )}
                         {isBreak && (
-                          <span className="ml-2.5 text-[8.5px] uppercase font-mono tracking-widest text-amber-400/65 font-bold">
+                          <span className={`ml-2.5 text-[8.5px] uppercase font-mono tracking-widest font-bold ${
+                            isTriadaChannel ? "text-amber-700" : "text-amber-400/65"
+                          }`}>
                             ★ REC
                           </span>
                         )}
@@ -1985,50 +2107,68 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                         const cajaNumber = cubicle.name.replace(/\D/g, '') || cubicle.name;
 
                         let mainText = "DISPONIBLE";
-                        let textStyle = "text-[#00d0ff]/70 font-semibold";
+                        let textStyle = isTriadaChannel ? "text-slate-500 font-semibold" : "text-[#00d0ff]/70 font-semibold";
 
                         if (isAttending && currentTicket) {
                           mainText = currentTicket.name && currentTicket.name.trim() !== ""
                             ? currentTicket.name
                             : currentTicket.numberCode;
-                          textStyle = "text-white font-black";
+                          textStyle = isTriadaChannel ? "text-slate-900 font-black" : "text-white font-black";
                         } else if (isBreak) {
                           mainText = "EN RECESO";
-                          textStyle = "text-amber-400 font-bold";
+                          textStyle = "text-amber-500 font-bold";
                         } else if (cubicle.status === "OFFLINE") {
                           mainText = "MÓDULO INACTIVO";
-                          textStyle = "text-slate-450 font-semibold opacity-40";
+                          textStyle = "text-slate-400 font-semibold opacity-60";
                         }
 
                         return (
                           <div
                             key={cubicle.id}
-                            className={`relative p-5 rounded-[22px] bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9] flex flex-col justify-center min-h-[92px] shadow-[0_5px_15px_rgba(0,0,0,0.25)] ${
-                              isAttending ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]" : ""
+                            className={`relative p-5 rounded-[22px] flex flex-col justify-center min-h-[92px] transition-all duration-300 ${
+                              isTriadaChannel
+                                ? `bg-white border-2 border-slate-200 border-b-[5px] border-r-[4px] border-b-[#003087] border-r-[#0047ab] shadow-[0_4px_12px_rgba(0,0,0,0.06)] ${
+                                    isAttending
+                                      ? "scale-[1.01] ring-2 ring-[#003087]/30 bg-blue-50/40"
+                                      : "opacity-95"
+                                  }`
+                                : `bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9] shadow-[0_5px_15px_rgba(0,0,0,0.25)] ${
+                                    isAttending ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]" : ""
+                                  }`
                             }`}
                           >
                             {isAttending && (
-                              <div className="absolute inset-0 bg-blue-400/5 animate-pulse rounded-[22px]" />
+                              <div className={`absolute inset-0 animate-pulse rounded-[22px] ${
+                                isTriadaChannel ? "bg-blue-600/5" : "bg-blue-400/5"
+                              }`} />
                             )}
                             <div className="flex items-center w-full truncate">
-                              <span className="text-[#00d0ff] text-base mr-2 font-sans select-none">▶</span>
+                              <span className={`text-base mr-2 font-sans select-none ${
+                                isTriadaChannel ? "text-[#003087]" : "text-[#00d0ff]"
+                              }`}>▶</span>
                               <span className={`uppercase font-sans tracking-wide text-sm md:text-base leading-tight truncate ${textStyle}`}>
                                 {mainText}
                               </span>
                             </div>
 
                             <div className="mt-2.5 flex items-center">
-                              <div className="inline-flex items-center gap-1.5 px-5 py-0.5 bg-[#0081f9] rounded-full text-white font-black text-xs md:text-sm tracking-wider shadow-[inset_0_2px_4px_rgba(0,0,0,0.15)] ml-5">
-                                <span className="text-[#aae3ff] text-[10px] leading-none select-none font-sans">▶</span>
+                              <div className={`inline-flex items-center gap-1.5 px-5 py-0.5 rounded-full text-white font-black text-xs md:text-sm tracking-wider shadow-[inset_0_2px_4px_rgba(0,0,0,0.15)] ml-5 ${
+                                isTriadaChannel ? "bg-[#003087]" : "bg-[#0081f9]"
+                              }`}>
+                                <span className={`${isTriadaChannel ? "text-blue-200" : "text-[#aae3ff]"} text-[10px] leading-none select-none font-sans`}>▶</span>
                                 <span>{cajaNumber}</span>
                               </div>
                               {isFree && (
-                                <span className="ml-2.5 text-[8.5px] uppercase font-mono tracking-widest text-[#00d0ff]/65 font-bold animate-pulse">
+                                <span className={`ml-2.5 text-[8.5px] uppercase font-mono tracking-widest font-bold animate-pulse ${
+                                  isTriadaChannel ? "text-emerald-700" : "text-[#00d0ff]/65"
+                                }`}>
                                   ★ LIBRE
                                 </span>
                               )}
                               {isBreak && (
-                                <span className="ml-2.5 text-[8.5px] uppercase font-mono tracking-widest text-amber-400/65 font-bold">
+                                <span className={`ml-2.5 text-[8.5px] uppercase font-mono tracking-widest font-bold ${
+                                  isTriadaChannel ? "text-amber-700" : "text-amber-400/65"
+                                }`}>
                                   ★ REC
                                 </span>
                               )}

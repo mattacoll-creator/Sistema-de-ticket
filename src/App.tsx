@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { useTicketSystem } from "./hooks/useTicketSystem";
 import { ServiceType, SERVICES_CONFIG, OFFICES_CONFIG, UserRole, SystemUser, TicketStatus, TicketPhase, Ticket } from "./types";
 import { playCallingChime, speakCall, announceAndCall } from "./utils/audio";
+import { APP_BUILD_VERSION, STORAGE_VERSION_KEY } from "./version";
 
 
 // Import custom components
@@ -79,7 +80,8 @@ export default function App() {
     officeTickets,
     setOfficeTickets,
     officeCubicles,
-    setOfficeCubicles
+    setOfficeCubicles,
+    refreshTickets
   } = useTicketSystem(gatewaySelection);
 
   // --- INTEGRACIÓN GESTIÓN DE ROLES Y USUARIOS ---
@@ -178,8 +180,37 @@ export default function App() {
   const [copiedDirectKey, setCopiedDirectKey] = useState<string | null>(null);
 
   // Listen to URL search parameters for direct linking (?view=citas, ?view=ticket, ?view=unificado, etc.)
+  // and handle automatic cache flush + redirect to unified gateway on new builds/updates safely without reload loops
   React.useEffect(() => {
     if (typeof window === "undefined") return;
+
+    // 1. Verificación de Versión de Compilación y Limpieza de Caché Automática (Segura, sin bucles de recarga)
+    try {
+      const installedVersion = localStorage.getItem(STORAGE_VERSION_KEY);
+      if (installedVersion !== APP_BUILD_VERSION) {
+        console.log(`[Version Sync] Nueva versión instalada (${installedVersion} -> ${APP_BUILD_VERSION}). Limpiando cachés...`);
+        
+        // Limpiar cachés del navegador (CacheStorage API)
+        if ("caches" in window) {
+          caches.keys().then((names) => {
+            names.forEach((name) => caches.delete(name));
+          }).catch(() => {});
+        }
+
+        // Limpiar sessionStorage
+        sessionStorage.clear();
+
+        // Actualizar la versión guardada en el cliente
+        localStorage.setItem(STORAGE_VERSION_KEY, APP_BUILD_VERSION);
+
+        // Forzar vista al Portal de Inicio Unificado
+        setGatewaySelection("select");
+        setActiveTab("kiosk");
+      }
+    } catch (e) {
+      console.warn("Error en sincronización de versión:", e);
+    }
+
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get("view") || params.get("tab") || params.get("modo") || params.get("screen");
     const ticketParam = params.get("ticket");
@@ -1139,6 +1170,7 @@ export default function App() {
               activeCall={activeCall}
               onClearActiveCall={() => setActiveCall(null)}
               onTestSpeaker={handleTestSpeaker}
+              onRefresh={refreshTickets}
               currentOfficeId={currentOfficeId}
               gatewaySelection={gatewaySelection}
             />
@@ -1158,6 +1190,8 @@ export default function App() {
               onRecall={recallCurrentTicket}
               onChangeStatus={changeCubicleStatus}
               onUpdateCubicleConfig={updateCubicleConfig}
+              onRefresh={refreshTickets}
+              onResetSystem={resetSystem}
               currentOfficeId={currentOfficeId}
               users={users}
               currentActiveUserId={currentActiveUserId}

@@ -234,6 +234,33 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     setUserSuccess('');
   };
 
+  const handlePurgeAllDatabase = async () => {
+    if (!window.confirm("⚠️ ¿ESTÁ COMPLETAMENTE SEGURO?\n\nEsta acción eliminará TODOS los registros de la base de datos (citas, tickets, expedientes y registros). La base de datos quedará en 0 y limpia para iniciar producción.")) {
+      return;
+    }
+    
+    try {
+      const res = await fetch('/api/admin/purge-all-database', { method: 'POST' });
+      const data = await res.json();
+      
+      // Limpiar también almacenamiento local del navegador
+      localStorage.removeItem("office_tickets_state_v1");
+      localStorage.removeItem("citas_locales_v1");
+      localStorage.removeItem("citas_tribunal_electoral_v2");
+      localStorage.removeItem("registro_civil_historico");
+      localStorage.removeItem("active_call_ticket");
+      
+      if (res.ok && data.success) {
+        alert("✅ Base de datos vaciada con éxito. El sistema está en 0.");
+        window.location.reload();
+      } else {
+        alert("⚠️ Error: " + (data.error || "No se pudo vaciar la base de datos"));
+      }
+    } catch (err) {
+      alert("Error de conexión con el servidor al intentar vaciar la base de datos.");
+    }
+  };
+
   // Simulated config capacity state
   const [maxSlotsPerHour, setMaxSlotsPerHour] = useState(15);
   const [enableEmailAlerts, setEnableEmailAlerts] = useState(true);
@@ -2685,14 +2712,27 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                     )}
                   </div>
 
-                  <button
-                    onClick={handleExportCSV}
-                    disabled={filteredCitas.length === 0}
-                    className="w-full sm:w-auto bg-slate-800 hover:bg-slate-750 text-slate-200 font-extrabold text-[10px] uppercase tracking-wider px-3.5 py-1.5 rounded transition flex items-center justify-center gap-1.5 border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    <FileSpreadsheet className="w-3.5 h-3.5" />
-                    <span>Exportar Registros a CSV</span>
-                  </button>
+                  <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <button
+                      onClick={handleExportCSV}
+                      disabled={filteredCitas.length === 0}
+                      className="w-full sm:w-auto bg-slate-800 hover:bg-slate-750 text-slate-200 font-extrabold text-[10px] uppercase tracking-wider px-3.5 py-1.5 rounded transition flex items-center justify-center gap-1.5 border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>Exportar CSV</span>
+                    </button>
+
+                    {currentRole === 'superadmin' && (
+                      <button
+                        onClick={handlePurgeAllDatabase}
+                        className="w-full sm:w-auto bg-red-950/80 hover:bg-red-900 text-red-300 hover:text-white font-extrabold text-[10px] uppercase tracking-wider px-3.5 py-1.5 rounded transition flex items-center justify-center gap-1.5 border border-red-800/80 cursor-pointer shadow"
+                        title="Solo Super Admin: Eliminar absolutamente todos los registros de la base de datos para comenzar desde 0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                        <span>Vaciar BD a 0 (SuperAdmin)</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* MASTER EXCEL TABLE GRID */}

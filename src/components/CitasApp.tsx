@@ -188,13 +188,13 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       const citizenName = datosPersonales.nombreCompleto || 
         `${datosPersonales.primerNombre || ''} ${datosPersonales.primerApellido || ''}`.trim() || 'Ciudadano Cita';
 
-      // Automatically issue ticket directly to TV Queue with Priority and Appointment flag
-      const isPriorityCitizen = true; // All online appointments have priority queuing
+      // Only mark as preferential if citizen specifically indicated disability or priority
+      const isPriorityCitizen = Boolean(datosPersonales.tieneDiscapacidad);
       const ticket = onCreateTicket(
         `${citizenName} (${datosPersonales.identificacion || 'Cédula'})`,
         serviceType,
         isPriorityCitizen,
-        true, // isAppointment = true -> Displays 📅 CITA PREVIA on TV with Priority!
+        true, // isAppointment = true -> Displays 📅 CITA PREVIA
         procedureCode
       );
       ticketTurnoCode = ticket.numberCode;

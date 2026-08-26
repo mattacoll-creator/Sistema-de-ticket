@@ -429,9 +429,7 @@ export default function WelcomeKiosk({
                 <div className="flex justify-between gap-2">
                   <span className="text-slate-400 uppercase tracking-widest text-[9px] font-bold shrink-0">TRÁMITE:</span>
                   <span className="font-bold text-right uppercase text-slate-900 truncate">
-                    {printedTicket.procedure 
-                      ? getProcedureName(printedTicket.procedure)
-                      : SERVICES_CONFIG[printedTicket.serviceType].name}
+                    {SERVICES_CONFIG[printedTicket.serviceType]?.name || "CEDULACIÓN"}
                   </span>
                 </div>
                 <div className="flex justify-between">
@@ -597,9 +595,7 @@ export default function WelcomeKiosk({
             <div className="meta-row">
               <span className="meta-label">Trámite:</span>
               <span className="meta-value font-bold uppercase">
-                {printedTicket.procedure 
-                  ? getProcedureName(printedTicket.procedure)
-                  : SERVICES_CONFIG[printedTicket.serviceType].name}
+                {SERVICES_CONFIG[printedTicket.serviceType]?.name || "CEDULACIÓN"}
               </span>
             </div>
             <div className="meta-row">

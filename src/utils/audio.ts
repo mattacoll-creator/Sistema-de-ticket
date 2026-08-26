@@ -60,25 +60,64 @@ export function playCallingChime(): Promise<void> {
   });
 }
 
+export interface SpeakCallOptions {
+  isSecondCall?: boolean;
+  isCaja?: boolean;
+  isTriada?: boolean;
+  phase?: string;
+  customRate?: number;
+  customPitch?: number;
+}
+
 /**
- * Utiliza la API de Síntesis de voz del navegador para anunciar un ticket por su nombre.
+ * Utiliza la API de Síntesis de voz del navegador para anunciar un ticket por su nombre,
+ * aplicando perfiles vocales diferenciados (Caja vs Tríada / Fotografía).
  */
-export function speakCall(ticketCode: string, name: string, cubicleName: string, isSecondCall: boolean = false): Promise<void> {
+export function speakCall(
+  ticketCode: string, 
+  name: string, 
+  cubicleName: string, 
+  isSecondCallOrOptions: boolean | SpeakCallOptions = false,
+  phaseOrType?: string
+): Promise<void> {
   return new Promise((resolve) => {
     if (!("speechSynthesis" in window)) {
       console.warn("La síntesis de voz no está soportada en este navegador.");
       resolve();
+      return;
     }
+
+    const options: SpeakCallOptions = typeof isSecondCallOrOptions === "boolean"
+      ? { isSecondCall: isSecondCallOrOptions, phase: phaseOrType }
+      : (isSecondCallOrOptions || {});
+
+    const isSecondCall = !!options.isSecondCall;
 
     // Clean up cubicle name for a more natural voice announcement
     // e.g. "Módulo 1 (Tríada / Fotografía)" -> "Módulo 1"
     const cleanCubicleName = cubicleName.replace(/\s*\(.*?\)\s*/g, '').trim();
+    const lowerCubicle = cleanCubicleName.toLowerCase();
+
+    // Determinar si es llamado para Caja o para Tríada / Fotografía / Módulo
+    const isCaja = options.isCaja !== undefined
+      ? options.isCaja
+      : (lowerCubicle.startsWith("caja") || options.phase?.toLowerCase() === "caja");
+
+    const isTriada = options.isTriada !== undefined
+      ? options.isTriada
+      : (!isCaja && (
+          lowerCubicle.includes("tríada") || 
+          lowerCubicle.includes("triada") || 
+          lowerCubicle.includes("fotograf") || 
+          lowerCubicle.startsWith("módulo") || 
+          lowerCubicle.startsWith("modulo") ||
+          options.phase?.toLowerCase() === "triada"
+        ));
 
     // Formatear código dígito a dígito para pronunciación nítida (ej: "C 0 0 1")
     const parsedCode = ticketCode.split("").join(" ");
     
     let targetPrep = "al";
-    const lowerCubicle = cleanCubicleName.toLowerCase();
     if (lowerCubicle.startsWith("caja") || lowerCubicle.startsWith("ventanilla") || lowerCubicle.startsWith("sala") || lowerCubicle.startsWith("recepcion") || lowerCubicle.startsWith("recepción")) {
       targetPrep = "a la";
     }
@@ -102,42 +141,82 @@ export function speakCall(ticketCode: string, name: string, cubicleName: string,
     
     const rateStr = localStorage.getItem("ticket_tts_rate");
     const pitchStr = localStorage.getItem("ticket_tts_pitch");
-    const voicePref = localStorage.getItem("ticket_tts_voice_pref") || "female";
+    const voicePref = localStorage.getItem("ticket_tts_voice_pref");
 
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.lang = "es-ES";
-    utterance.rate = rateStr ? parseFloat(rateStr) : 0.95;
-    utterance.pitch = pitchStr ? parseFloat(pitchStr) : 1.05;
 
-    // Buscar una voz en español
+    // Modulación acústica diferenciada (Tríada tiene un pitch más grave/profundo y cadencia ágil; Caja es más clara y aguda)
+    if (options.customRate) {
+      utterance.rate = options.customRate;
+    } else if (rateStr) {
+      utterance.rate = parseFloat(rateStr);
+    } else {
+      utterance.rate = isTriada ? 0.98 : 0.93;
+    }
+
+    if (options.customPitch) {
+      utterance.pitch = options.customPitch;
+    } else if (pitchStr) {
+      utterance.pitch = isTriada ? Math.max(0.75, parseFloat(pitchStr) - 0.22) : parseFloat(pitchStr);
+    } else {
+      utterance.pitch = isTriada ? 0.85 : 1.10;
+    }
+
+    // Selección de voz inteligente: Voz Femenina/Clara para Caja vs Voz Masculina/Distinta para Tríada
     const setVoice = () => {
       const voices = window.speechSynthesis.getVoices();
       const spanishVoices = voices.filter(voice => voice.lang.toLowerCase().startsWith("es"));
       
       if (spanishVoices.length > 0) {
         let preferredVoice;
-        if (voicePref === "female") {
-          preferredVoice = spanishVoices.find(voice => 
-            voice.name.includes("Sabina") || 
-            voice.name.includes("Helena") || 
-            voice.name.includes("Zira") ||
-            voice.name.toLowerCase().includes("woman") ||
-            voice.name.toLowerCase().includes("female")
-          );
-        } else if (voicePref === "male") {
-          preferredVoice = spanishVoices.find(voice => 
-            voice.name.toLowerCase().includes("pablo") || 
-            voice.name.toLowerCase().includes("andres") || 
-            voice.name.toLowerCase().includes("diego") ||
-            voice.name.toLowerCase().includes("man") ||
-            voice.name.toLowerCase().includes("male")
-          );
+
+        if (isTriada) {
+          // Tríada / Fotografía: Prioridad a voces masculinas o profundas (Pablo, Jorge, Diego, Andres, Raul, David, etc.)
+          preferredVoice = spanishVoices.find(voice => {
+            const vName = voice.name.toLowerCase();
+            return vName.includes("pablo") || 
+                   vName.includes("jorge") || 
+                   vName.includes("diego") || 
+                   vName.includes("andres") || 
+                   vName.includes("andrés") ||
+                   vName.includes("raul") || 
+                   vName.includes("raúl") || 
+                   vName.includes("carlos") || 
+                   vName.includes("juan") ||
+                   vName.includes("male") ||
+                   vName.includes("hombre");
+          });
+
+          // Si no hay voz masculina explícita, seleccionar una voz secundaria diferente a la de Caja
+          if (!preferredVoice && spanishVoices.length > 1) {
+            preferredVoice = spanishVoices[spanishVoices.length - 1];
+          }
+        } else {
+          // Caja: Prioridad a voces femeninas e institucionales (Helena, Sabina, Laura, Monica, Paulina, Zira, etc.)
+          preferredVoice = spanishVoices.find(voice => {
+            const vName = voice.name.toLowerCase();
+            return vName.includes("sabina") || 
+                   vName.includes("helena") || 
+                   vName.includes("laura") || 
+                   vName.includes("monica") || 
+                   vName.includes("mónica") || 
+                   vName.includes("paulina") || 
+                   vName.includes("lucia") || 
+                   vName.includes("lucía") || 
+                   vName.includes("conchita") || 
+                   vName.includes("zira") ||
+                   vName.includes("female") ||
+                   vName.includes("mujer");
+          });
         }
         
+        // Fallback a voces naturales de Google/Microsoft si no hubo coincidencia específica
         if (!preferredVoice) {
           preferredVoice = spanishVoices.find(voice => 
             voice.name.includes("Google") || 
-            voice.name.includes("Natural")
+            voice.name.includes("Natural") ||
+            voice.name.includes("Online")
           );
         }
         
@@ -190,19 +269,36 @@ export function isVibrationSupported(): boolean {
 
 /**
  * Llama al timbre y luego hace la lectura de voz del turno consecutivamente.
- * Realiza 2 llamados completos (Primer llamado + Segundo llamado) tal como solicitado.
+ * Realiza 2 llamados completos (Primer llamado + Segundo llamado) tal como solicitado,
+ * adaptando el timbre de voz según el área (Tríada/Fotografía vs Caja).
  */
-export async function announceAndCall(ticketCode: string, name: string, cubicleName: string, repeatCalls: number = 2) {
+export async function announceAndCall(
+  ticketCode: string, 
+  name: string, 
+  cubicleName: string, 
+  repeatCalls: number = 2,
+  options?: SpeakCallOptions
+) {
   // Cancelar cualquier lectura anterior para que el nuevo llamado tome prioridad inmediata
   if ("speechSynthesis" in window) {
     window.speechSynthesis.cancel();
   }
 
+  const firstCallOptions: SpeakCallOptions = {
+    ...(options || {}),
+    isSecondCall: false
+  };
+
+  const secondCallOptions: SpeakCallOptions = {
+    ...(options || {}),
+    isSecondCall: true
+  };
+
   // 1er LLAMADO
   triggerHapticVibration([400, 200, 400]);
   await playCallingChime();
   await new Promise(r => setTimeout(r, 350));
-  await speakCall(ticketCode, name, cubicleName, false);
+  await speakCall(ticketCode, name, cubicleName, firstCallOptions);
 
   // Si se solicitó repetir (2 llamados)
   if (repeatCalls >= 2) {
@@ -210,7 +306,7 @@ export async function announceAndCall(ticketCode: string, name: string, cubicleN
     await new Promise(r => setTimeout(r, 1100));
     await playCallingChime();
     await new Promise(r => setTimeout(r, 350));
-    await speakCall(ticketCode, name, cubicleName, true);
+    await speakCall(ticketCode, name, cubicleName, secondCallOptions);
   }
 }
 
