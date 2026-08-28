@@ -1182,6 +1182,7 @@ export default function App() {
             <AgentConsole
               tickets={tickets}
               cubicles={cubicles}
+              isAutoAssignActive={isAutoAssignActive}
               onCallNext={callNextTicket}
               onStartAttending={startAttendingTicket}
               onComplete={completeTicket}

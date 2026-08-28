@@ -6,7 +6,7 @@
 import React, { useState } from "react";
 import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES, CAJA_PROCEDURES, getProcedureName } from "./WelcomeKiosk";
 import { Ticket, Cubicle, TicketStatus, CubicleStatus, SERVICES_CONFIG, ServiceType, TicketPhase, PHASES_CONFIG, SystemUser, UserRole, OFFICES_CONFIG } from "../types";
-import { canCubicleServeProcedure } from "../hooks/useTicketSystem";
+import { canCubicleServeProcedure, isPreferentialCubicle, isPreferentialTicket } from "../hooks/useTicketSystem";
 import { 
   UserCheck, 
   HelpCircle, 
@@ -96,6 +96,7 @@ export function getUserDisplayDetails(u: SystemUser, isRc: boolean) {
 interface AgentConsoleProps {
   tickets: Ticket[];
   cubicles: Cubicle[];
+  isAutoAssignActive?: boolean;
   onCallNext: (cubicleId: string, specificTicketId?: string) => Promise<void>;
   onStartAttending: (cubicleId: string) => void;
   onComplete: (cubicleId: string, outcome?: "administrative" | "emission_physical", procedure?: string) => void;
@@ -116,6 +117,7 @@ interface AgentConsoleProps {
 export default function AgentConsole({
   tickets,
   cubicles,
+  isAutoAssignActive,
   onCallNext,
   onStartAttending,
   onComplete,
@@ -298,7 +300,7 @@ export default function AgentConsole({
     }
   }, [sessionUser, setCurrentActiveUserId]);
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormLoginError("");
 
@@ -308,65 +310,102 @@ export default function AgentConsole({
     }
 
     const cleanUser = usernameInput.trim().toLowerCase();
-    const foundUser = users.find(u => u.username.toLowerCase() === cleanUser);
-
-    if (!foundUser) {
-      setFormLoginError("Nombre de usuario no registrado.");
-      return;
-    }
-
-    // Contraseña: si está especificada en el usuario, validar contra ella. De lo contrario, usar valores predeterminados.
     const cleanPassword = passwordInput.trim();
-    const isPasswordValid = foundUser.password 
-      ? (cleanPassword === foundUser.password)
-      : (cleanPassword === foundUser.username || cleanPassword === "123456" || cleanPassword === "admin");
 
-    if (!isPasswordValid) {
-      setFormLoginError(
-        foundUser.password 
-          ? "Contraseña incorrecta. Utilice la contraseña generada para este usuario."
-          : "Contraseña incorrecta. Pruebe usando su propio usuario o '123456' como contraseña."
-      );
-      return;
-    }
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: cleanUser, password: cleanPassword })
+      });
+      const data = await res.json();
+      
+      if (!data.success) {
+        setFormLoginError(data.error || "Credenciales incorrectas.");
+        return;
+      }
 
-    // VALIDACIÓN ESTRICTA DE ROLES: CAJA NO PUEDE ENTRAR A TRÍADA Y TRÍADA NO PUEDE ENTRAR A CAJA
-    if (gatewaySelection !== "registro_civil") {
-      if (preLoginRole === "caja") {
-        if (foundUser.role === UserRole.AGENT_TRIADA) {
-          setFormLoginError(`🚫 Acceso Denegado: El usuario @${foundUser.username} (${foundUser.fullName}) está asignado exclusivamente al área de TRÍADA Y FOTOGRAFÍA. No tiene autorización para ingresar ni operar en el área de CAJA.`);
-          return;
-        }
-        if (foundUser.role !== UserRole.AGENT_CAJA && foundUser.role !== UserRole.SUPERADMIN && foundUser.role !== UserRole.SUPERVISOR) {
-          setFormLoginError("🚫 Acceso Denegado: Este usuario no cuenta con credenciales para operar en Caja.");
-          return;
-        }
-      } else if (preLoginRole === "triada") {
-        if (foundUser.role === UserRole.AGENT_CAJA) {
-          setFormLoginError(`🚫 Acceso Denegado: El usuario @${foundUser.username} (${foundUser.fullName}) está asignado exclusivamente al área de CAJA. No tiene autorización para ingresar ni operar en el área de TRÍADA Y FOTOGRAFÍA.`);
-          return;
-        }
-        if (foundUser.role !== UserRole.AGENT_TRIADA && foundUser.role !== UserRole.SUPERADMIN && foundUser.role !== UserRole.SUPERVISOR) {
-          setFormLoginError("🚫 Acceso Denegado: Este usuario no cuenta con credenciales para operar en Tríada / Fotografía.");
+      const loggedUser = data.user;
+      
+      let mappedRole = UserRole.SUPERVISOR;
+      if (loggedUser.role === "agent_caja") mappedRole = UserRole.AGENT_CAJA;
+      else if (loggedUser.role === "agent_triada") mappedRole = UserRole.AGENT_TRIADA;
+      else if (loggedUser.role === "agent_registro_civil") mappedRole = UserRole.AGENT_REGISTRO_CIVIL;
+      else if (loggedUser.role === "super") mappedRole = UserRole.SUPERADMIN;
+      // You can add more mappings if needed for other roles logging into Agent Console
+
+      const foundUser: SystemUser = {
+        id: loggedUser.username,
+        username: loggedUser.username,
+        fullName: loggedUser.nombre,
+        role: mappedRole,
+        officeId: currentOfficeId
+      };
+
+      // VALIDACIÓN DE REGIONAL
+      if (mappedRole !== UserRole.SUPERADMIN) {
+        if (loggedUser.sucursalId && loggedUser.sucursalId !== currentOfficeId) {
+          const expectedOffice = OFFICES_CONFIG.find(o => o.id === loggedUser.sucursalId)?.name || loggedUser.sucursalId;
+          const currentOfficeName = OFFICES_CONFIG.find(o => o.id === currentOfficeId)?.name || currentOfficeId;
+          setFormLoginError(`🚫 Acceso Denegado: Este usuario está asignado a la regional "${expectedOffice}". No puede operar en la regional "${currentOfficeName}".`);
           return;
         }
       }
-    }
 
-    // Todo correcto -> Iniciar sesión
-    if (foundUser.role === UserRole.AGENT_CAJA) {
-      setActiveRoleFilter(TicketPhase.CAJA);
-      setPreLoginRole("caja");
-    } else if (foundUser.role === UserRole.AGENT_TRIADA) {
-      setActiveRoleFilter(TicketPhase.TRIADA);
-      setPreLoginRole("triada");
-    }
+      // VALIDACIÓN ESTRICTA DE ROLES: CAJA NO PUEDE ENTRAR A TRÍADA Y TRÍADA NO PUEDE ENTRAR A CAJA, Y NINGUNO PUEDE ENTRAR A REGISTRO CIVIL
+      if (gatewaySelection === "registro_civil") {
+        if (foundUser.role === UserRole.AGENT_CAJA || foundUser.role === UserRole.AGENT_TRIADA) {
+          setFormLoginError(`🚫 Acceso Denegado: El usuario @${foundUser.username} (${foundUser.fullName}) está asignado a Cedulación. No tiene autorización para operar en la Consola de Registro Civil.`);
+          return;
+        }
+        if (foundUser.role !== UserRole.AGENT_REGISTRO_CIVIL && foundUser.role !== UserRole.SUPERADMIN && foundUser.role !== UserRole.SUPERVISOR) {
+          setFormLoginError("🚫 Acceso Denegado: Este usuario no cuenta con credenciales para operar en Registro Civil.");
+          return;
+        }
+      } else {
+        if (foundUser.role === UserRole.AGENT_REGISTRO_CIVIL) {
+          setFormLoginError(`🚫 Acceso Denegado: El usuario @${foundUser.username} (${foundUser.fullName}) está asignado a Registro Civil. No tiene autorización para operar en Cedulación.`);
+          return;
+        }
 
-    setSessionUser(foundUser);
-    setHasSelectedCubicle(false);
-    setFormLoginError("");
-    setUsernameInput("");
-    setPasswordInput("");
+        if (preLoginRole === "caja") {
+          if (foundUser.role === UserRole.AGENT_TRIADA) {
+            setFormLoginError(`🚫 Acceso Denegado: El usuario @${foundUser.username} (${foundUser.fullName}) está asignado exclusivamente al área de TRÍADA Y FOTOGRAFÍA. No tiene autorización para ingresar ni operar en el área de CAJA.`);
+            return;
+          }
+          if (foundUser.role !== UserRole.AGENT_CAJA && foundUser.role !== UserRole.SUPERADMIN && foundUser.role !== UserRole.SUPERVISOR) {
+            setFormLoginError("🚫 Acceso Denegado: Este usuario no cuenta con credenciales para operar en Caja.");
+            return;
+          }
+        } else if (preLoginRole === "triada") {
+          if (foundUser.role === UserRole.AGENT_CAJA) {
+            setFormLoginError(`🚫 Acceso Denegado: El usuario @${foundUser.username} (${foundUser.fullName}) está asignado exclusivamente al área de CAJA. No tiene autorización para ingresar ni operar en el área de TRÍADA Y FOTOGRAFÍA.`);
+            return;
+          }
+          if (foundUser.role !== UserRole.AGENT_TRIADA && foundUser.role !== UserRole.SUPERADMIN && foundUser.role !== UserRole.SUPERVISOR) {
+            setFormLoginError("🚫 Acceso Denegado: Este usuario no cuenta con credenciales para operar en Tríada / Fotografía.");
+            return;
+          }
+        }
+      }
+
+      // Todo correcto -> Iniciar sesión
+      if (foundUser.role === UserRole.AGENT_CAJA) {
+        setActiveRoleFilter(TicketPhase.CAJA);
+        setPreLoginRole("caja");
+      } else if (foundUser.role === UserRole.AGENT_TRIADA) {
+        setActiveRoleFilter(TicketPhase.TRIADA);
+        setPreLoginRole("triada");
+      }
+
+      setSessionUser(foundUser);
+      setHasSelectedCubicle(false);
+      setFormLoginError("");
+      setUsernameInput("");
+      setPasswordInput("");
+    } catch (e: any) {
+      setFormLoginError("Error de conexión con el servidor.");
+    }
   };
 
   // --- COMPORTAMIENTO DE ACCESO, ROLES SECURITY Y REGIONALES ---
@@ -450,6 +489,8 @@ export default function AgentConsole({
   );
 
   // Filter candidates waiting that can be processed by this agent (supports current phase or RC specialty)
+  const isAgentCubiclePref = isPreferentialCubicle(currentCubicle);
+
   const candidateWaitingTickets = ecosystemTickets.filter(t => {
     if (t.status !== TicketStatus.WAITING) return false;
     
@@ -460,15 +501,25 @@ export default function AgentConsole({
     }
     
     // Check if booth supports the current phase of the ticket
-    return currentCubicle.supportedPhases?.includes(t.currentPhase);
+    if (!currentCubicle.supportedPhases?.includes(t.currentPhase)) return false;
+
+    // Regla estricta: Si este cubículo es Preferencial (Caja 0, Caja 8, Módulo 16, Módulo 17), SÓLO ve y atiende turnos preferenciales
+    if (isAgentCubiclePref) {
+      if (!isPreferentialTicket(t)) return false;
+    } else {
+      // Si este cubículo es Regular, NO atiende turnos preferenciales (se atienden en Caja 0/8 y Módulos 16/17)
+      if (isPreferentialTicket(t)) return false;
+    }
+
+    return true;
   });
 
   const needsCubicleSelection = !hasSelectedCubicle;
 
-  // Sort queue showing priorities first
+  // Sort queue showing appointments first, then FIFO
   const sortedCandidates = [...candidateWaitingTickets].sort((a, b) => {
-    if (a.priority && !b.priority) return -1;
-    if (!a.priority && b.priority) return 1;
+    if (a.isAppointment && !b.isAppointment) return -1;
+    if (!a.isAppointment && b.isAppointment) return 1;
     return a.createdAt - b.createdAt;
   });
 
@@ -489,6 +540,40 @@ export default function AgentConsole({
   const timerMins = Math.floor(elapsedSeconds / 60);
   const timerSecs = elapsedSeconds % 60;
   const formattedAttentionTimer = `${String(timerMins).padStart(2, "0")}:${String(timerSecs).padStart(2, "0")}`;
+
+  // AUTO-ASSIGNMENT LOGIC ENCAPSULATED PER AGENT:
+  // Instead of a global hook looping over all cubicles (which causes a race condition between tabs),
+  // each AgentConsole tab only asks for the next ticket for ITS OWN selected cubicle if it's idle.
+  React.useEffect(() => {
+    if (
+      isAutoAssignActive &&
+      hasSelectedCubicle &&
+      currentCubicle?.status === CubicleStatus.ONLINE_AVAILABLE &&
+      sortedCandidates.length > 0 &&
+      !isAttendingActive
+    ) {
+      // Stagger auto-assignment slightly based on cubicle number to prevent 
+      // simultaneous exact-millisecond claims when a bulk of tickets arrive.
+      const cubicleNum = parseInt(currentCubicle.id.replace(/\D/g, "")) || 1;
+      const delay = 100 + (cubicleNum * 150); // CUB-1: 250ms, CUB-2: 400ms, etc.
+
+      const targetTicketId = sortedCandidates[0].id;
+
+      const timer = setTimeout(() => {
+        onCallNext(currentCubicle.id, targetTicketId);
+      }, delay);
+
+      return () => clearTimeout(timer);
+    }
+  }, [
+    isAutoAssignActive,
+    hasSelectedCubicle,
+    currentCubicle?.id,
+    currentCubicle?.status,
+    sortedCandidates,
+    isAttendingActive,
+    onCallNext
+  ]);
 
   const handleTogglePhase = (_phaseId: TicketPhase) => {
     // Fases estrictamente bloqueadas por rol: Caja es estrictamente Caja y Tríada es estrictamente Tríada.

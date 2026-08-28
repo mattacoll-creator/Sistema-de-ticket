@@ -399,10 +399,11 @@ async function getAuditLogsTableName(): Promise<string> { return "logs_auditoria
 interface ServerUser {
   username: string;
   password?: string;
-  role: 'sencillo' | 'super' | 'extranjeria' | 'pasado_edad' | 'extranjeria_supervisor' | 'extranjeria_atencion' | 'extranjeria_cubiculo' | 'pasado_edad_supervisor' | 'pasado_edad_admin';
+  role: 'sencillo' | 'super' | 'extranjeria' | 'pasado_edad' | 'extranjeria_supervisor' | 'extranjeria_atencion' | 'extranjeria_cubiculo' | 'pasado_edad_supervisor' | 'pasado_edad_admin' | 'agent_caja' | 'agent_triada' | 'agent_registro_civil';
   nombre: string;
   fechaCreacion: string;
   mustChangePassword?: boolean;
+  sucursalId?: string;
 }
 
 const DEFAULT_USERS: ServerUser[] = [
@@ -913,13 +914,14 @@ async function getDBUsers(): Promise<ServerUser[]> {
 
   if (isPgConfigured && pgPool) {
     try {
-      const res = await pgPool.query(`SELECT username, password, role, nombre, must_change_password, fecha_creacion FROM usuarios`);
+      const res = await pgPool.query(`SELECT username, password, role, nombre, sucursal_id, must_change_password, fecha_creacion FROM usuarios`);
       if (res.rows && res.rows.length > 0) {
         const pgUsers: ServerUser[] = res.rows.map((row: any) => ({
           username: row.username,
           password: row.password,
           role: row.role as any,
           nombre: row.nombre,
+          sucursalId: row.sucursal_id || undefined,
           fechaCreacion: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
           mustChangePassword: !!row.must_change_password
         }));
@@ -940,10 +942,10 @@ async function getDBUsers(): Promise<ServerUser[]> {
         for (const u of localUsers) {
           try {
             await pgPool.query(
-              `INSERT INTO usuarios (username, password, role, nombre, must_change_password)
-               VALUES ($1, $2, $3, $4, $5)
+              `INSERT INTO usuarios (username, password, role, nombre, sucursal_id, must_change_password)
+               VALUES ($1, $2, $3, $4, $5, $6)
                ON CONFLICT (username) DO NOTHING`,
-              [u.username.toLowerCase(), u.password, u.role, u.nombre, !!u.mustChangePassword]
+              [u.username.toLowerCase(), u.password, u.role, u.nombre, u.sucursalId || null, !!u.mustChangePassword]
             );
           } catch (e: any) {
             console.warn(`[Azure PostgreSQL Seeder Warning] Failed to seed user ${u.username}:`, e.message);
@@ -1303,6 +1305,7 @@ async function startServer() {
             username: foundUser.username,
             role: foundUser.role,
             nombre: foundUser.nombre,
+            sucursalId: foundUser.sucursalId,
             mustChangePassword: !!foundUser.mustChangePassword
           }
         });
@@ -3070,7 +3073,7 @@ async function startServer() {
 
   app.post("/api/users", verifyAdminSession, async (req, res) => {
     try {
-      const { username, password, role, nombre } = req.body;
+      const { username, password, role, nombre, sucursalId } = req.body;
       if (!username || !password || !role || !nombre) {
         return res.status(400).json({ success: false, error: "Datos incompletos para el usuario." });
       }
@@ -3089,6 +3092,7 @@ async function startServer() {
         password: String(password).trim(),
         role: role,
         nombre: String(nombre).trim(),
+        sucursalId: sucursalId || undefined,
         fechaCreacion: existingIdx >= 0 ? localUsers[existingIdx].fechaCreacion : new Date().toISOString()
       };
 
@@ -3098,17 +3102,18 @@ async function startServer() {
       } else {
         localUsers.push(newUser);
       }
+
       saveUsers(localUsers);
 
       // Save to Azure PostgreSQL if configured
       if (isPgConfigured && pgPool) {
         try {
           await pgPool.query(
-            `INSERT INTO usuarios (username, password, role, nombre, must_change_password)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO usuarios (username, password, role, nombre, sucursal_id, must_change_password)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (username) DO UPDATE SET
-               password = EXCLUDED.password, role = EXCLUDED.role, nombre = EXCLUDED.nombre`,
-            [cleanUsername, String(password).trim(), role, String(nombre).trim(), false]
+               password = EXCLUDED.password, role = EXCLUDED.role, nombre = EXCLUDED.nombre, sucursal_id = EXCLUDED.sucursal_id`,
+            [cleanUsername, String(password).trim(), role, String(nombre).trim(), sucursalId || null, false]
           );
         } catch (pgErr: any) {
           console.error("[Azure PostgreSQL] Error saving user:", pgErr.message);

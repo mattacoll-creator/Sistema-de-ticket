@@ -79,6 +79,26 @@ export function normalizeClientTicket(raw: any): Ticket {
   };
 }
 
+export function isPreferentialCubicle(cubicle: Cubicle): boolean {
+  if (!cubicle) return false;
+  if (cubicle.isPreferential === true) return true;
+  const lowerName = (cubicle.name || "").toLowerCase();
+  if (lowerName.includes("preferencial")) return true;
+  // Cajas 0 y 8 en sede central o en cualquier oficina
+  if (cubicle.id === "CUB-34" || cubicle.id === "CUB-42") return true;
+  // Módulos 16 y 17 de Tríada preferencial
+  if (cubicle.id === "CUB-30" || cubicle.id === "CUB-31") return true;
+  if (lowerName.includes("caja 0") || lowerName.includes("caja 8") || lowerName.includes("caja 00") || lowerName.includes("caja 08") || lowerName.includes("caja cero") || lowerName.includes("caja ocho")) return true;
+  return false;
+}
+
+export function isPreferentialTicket(ticket: Ticket): boolean {
+  if (!ticket) return false;
+  if (ticket.priority === true) return true;
+  if (ticket.numberCode && (ticket.numberCode.startsWith("P-") || ticket.numberCode.startsWith("PREF-") || ticket.numberCode.includes("PREF"))) return true;
+  return false;
+}
+
 export function canCubicleServeProcedure(cubicleId: string, procedure?: string): boolean {
   if (!procedure) return true; // Non-procedure tickets (like Cedulación) can be served normally
   
@@ -133,7 +153,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-1",
     name: "Cubículo 1 (OTR)",
     agentName: "Yesselin Samudio (10.0.31.32)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -142,7 +162,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-2",
     name: "Cubículo 2 (OR)",
     agentName: "OR (10.0.29.78)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -151,7 +171,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-3",
     name: "Cubículo 3 (OR)",
     agentName: "Lerquia Acosta (10.0.29.153)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -160,7 +180,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-4",
     name: "Cubículo 4 (OR)",
     agentName: "Juan Rivera (10.0.31.41)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -169,7 +189,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-5",
     name: "Cubículo 5 (OR)",
     agentName: "Erick Gonzalez (10.0.28.120)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -178,7 +198,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-6",
     name: "Cubículo 6 (OR)",
     agentName: "Abel Gonzalez (10.0.29.81)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -187,7 +207,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-7",
     name: "Cubículo 7 (OR)",
     agentName: "Ashtrid Mendieta (10.0.30.248)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -196,7 +216,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-8",
     name: "Cubículo 8 (OR)",
     agentName: "Oliver Ureña (10.0.29.53)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -205,7 +225,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-9",
     name: "Cubículo 9 (SI/OI)",
     agentName: "Kayna Asprilla (10.0.30.76)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -214,7 +234,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-10",
     name: "Cubículo 10 (ED)",
     agentName: "Mariela Tejada (10.0.29.171)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -223,7 +243,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-11",
     name: "Cubículo 11 (RS)",
     agentName: "Jesus Tuñon (10.0.29.255)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -232,7 +252,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-12",
     name: "Cubículo 12 (RMAT)",
     agentName: "Magleidys Lopez (10.0.31.71)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -241,7 +261,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-13",
     name: "Cubículo 13 (RMAT)",
     agentName: "Yenia Lindo (10.0.29.108)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -250,7 +270,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-14",
     name: "Cubículo 14 (RMAT)",
     agentName: "Dimas Cedeño (10.0.29.249)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -259,7 +279,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-15",
     name: "Cubículo 15 (SAU)",
     agentName: "Indira Pérez (10.0.29.3)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -268,7 +288,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-16",
     name: "Cubículo 16 (OHV)",
     agentName: "Peggy Corrales (10.0.29.52)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -277,7 +297,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-17",
     name: "Cubículo 17 (OHV)",
     agentName: "Arturo Sianca (10.0.28.135)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -286,7 +306,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-18",
     name: "Cubículo 18 (OHV)",
     agentName: "Rolando Paredes (10.0.30.33)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -295,7 +315,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-19",
     name: "Cubículo 19 (OHV)",
     agentName: "Por Ocupar (10.0.31.51)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -304,7 +324,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-20",
     name: "Cubículo 20 (OHV)",
     agentName: "Yamila Sanchez (10.0.30.182)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -313,7 +333,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-23",
     name: "Cubículo 23 (STR)",
     agentName: "Lianeth Alberda (10.0.28.76)",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [],
     supportedServices: [ServiceType.REGISTRO],
     totalAttendedCount: 0
@@ -322,7 +342,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-24",
     name: "Módulo 10 (Tríada / Fotografía)",
     agentName: "Diana Morales",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -331,7 +351,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-25",
     name: "Módulo 11 (Tríada / Fotografía)",
     agentName: "Esteban Castro",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -340,7 +360,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-26",
     name: "Módulo 12 (Tríada / Fotografía)",
     agentName: "Lucía Navarro",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -349,7 +369,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-27",
     name: "Módulo 13 (Tríada / Fotografía)",
     agentName: "Andrés Silva",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -358,7 +378,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-28",
     name: "Módulo 14 (Tríada / Fotografía)",
     agentName: "Mariana Rojas",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -367,7 +387,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-29",
     name: "Módulo 15 (Tríada / Fotografía)",
     agentName: "Javier Mendoza",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -376,7 +396,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-30",
     name: "Módulo 16 (Preferencial - Tríada / Fotografía)",
     agentName: "Valeria Herrera",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     isPreferential: true,
@@ -386,7 +406,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-31",
     name: "Módulo 17 (Preferencial - Tríada / Fotografía)",
     agentName: "Roberto Paredes",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.TRIADA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     isPreferential: true,
@@ -396,7 +416,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-34",
     name: "Caja 0 (Preferencial • Cedulación)",
     agentName: "Carlos Samudio",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     isPreferential: true,
@@ -406,7 +426,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-35",
     name: "Caja 1 (Cedulación)",
     agentName: "Karla Cedeño",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -415,7 +435,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-36",
     name: "Caja 2 (Cedulación)",
     agentName: "Julio Acosta",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -424,7 +444,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-37",
     name: "Caja 3 (Cedulación)",
     agentName: "Patricia Lindo",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -433,7 +453,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-38",
     name: "Caja 4 (Cedulación)",
     agentName: "Jorge Samudio",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -442,7 +462,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-39",
     name: "Caja 5 (Cedulación)",
     agentName: "Isabel González",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -451,7 +471,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-40",
     name: "Caja 6 (Cedulación)",
     agentName: "Alfonso Pérez",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -460,7 +480,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-41",
     name: "Caja 7 (Cedulación)",
     agentName: "Lerquia Acosta",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     totalAttendedCount: 0
@@ -469,7 +489,7 @@ const INITIAL_CUBICLES: Cubicle[] = [
     id: "CUB-42",
     name: "Caja 8 (Preferencial • Cedulación)",
     agentName: "Juan Rivera",
-    status: CubicleStatus.ONLINE_AVAILABLE,
+    status: CubicleStatus.OFFLINE,
     supportedPhases: [TicketPhase.CAJA],
     supportedServices: [ServiceType.CEDULACION, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA],
     isPreferential: true,
@@ -664,7 +684,7 @@ export function getDefaultCubiclesForOffice(officeId: string): Cubicle[] {
         id: `CUB-${officeId.replace("OFF-", "")}-${spec.moduleNumber}`,
         name,
         agentName,
-        status: CubicleStatus.ONLINE_AVAILABLE,
+        status: CubicleStatus.OFFLINE,
         supportedPhases: [spec.phase],
         supportedServices,
         totalAttendedCount: 0,
@@ -1180,14 +1200,21 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     const finalProcedure = procedure || undefined;
 
     // Target prefix for ticket code:
+    // P -> Prioridad / Preferencial (Atención exclusiva en Caja 0/8 y Módulos 16/17)
     // O -> Organización Electoral
     // C -> Cedulación
     // E -> Extranjería
     // REG -> Certificaciones de Registro Civil
-    const targetPrefix = config?.prefix || (serviceType === ServiceType.REGISTRO ? "REG" : "C");
+    const targetPrefix = priority 
+      ? "P" 
+      : (config?.prefix || (serviceType === ServiceType.REGISTRO ? "REG" : "C"));
+
     const sameProcedureTickets = ticketsRef.current.filter(t => {
+      if (priority) {
+        return t.priority === true || (t.numberCode && t.numberCode.startsWith("P-"));
+      }
       const tPrefix = SERVICES_CONFIG[t.serviceType]?.prefix || (t.serviceType === ServiceType.REGISTRO ? "REG" : "C");
-      return tPrefix === targetPrefix;
+      return !t.priority && tPrefix === targetPrefix && !t.numberCode?.startsWith("P-");
     });
     const orderNumber = sameProcedureTickets.length + 1;
     const formattedNumber = `${targetPrefix}-${orderNumber.toString().padStart(3, "0")}`;
@@ -1267,6 +1294,8 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       // Get all candidates that are in WAITING status and compatible with this cubicle
       const isRcBooth = targetCubicle.supportedServices?.includes(ServiceType.REGISTRO) && targetCubicle.supportedPhases.length === 0;
       
+      const isTargetPreferential = isPreferentialCubicle(targetCubicle);
+
       const candidates = tickets.filter(t => {
         if (t.status !== TicketStatus.WAITING) return false;
 
@@ -1281,24 +1310,36 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           if (!targetCubicle.supportedPhases.includes(t.currentPhase)) return false;
         }
 
-        return true;
+        if (targetCubicle.supportedServices && targetCubicle.supportedServices.length > 0) {
+          if (!targetCubicle.supportedServices.includes(t.serviceType)) return false;
+        }
+
+        // REGLA ESTRICTA DE PREFERENCIAL:
+        // Si el cubículo es Preferencial (Caja 0, Caja 8, Módulo 16, Módulo 17), SÓLO puede atender turnos preferenciales
+        if (isTargetPreferential) {
+          if (!isPreferentialTicket(t)) return false;
+        } else {
+          // Si el cubículo es Regular, NO atiende turnos preferenciales (se reservan exclusivamente a Caja 0, Caja 8, Módulos 16 y 17)
+          if (isPreferentialTicket(t)) return false;
+        }
+
+        return canCubicleServeProcedure(cubicleId, t.procedure);
       });
 
       if (candidates.length === 0) return;
 
-      const isTargetPreferential = targetCubicle.isPreferential === true ||
-        targetCubicle.name.toLowerCase().includes("preferencial") ||
-        targetCubicle.id === "CUB-30" ||
-        targetCubicle.id === "CUB-31" ||
-        targetCubicle.id === "CUB-34" ||
-        targetCubicle.id === "CUB-42";
-
-      // Sorting con ponderación inteligente sin bloqueos destructivos:
+      // Sorting con ponderación:
       candidates.sort((a, b) => {
-        const scoreA = (a.priority ? (isTargetPreferential ? 10 : 4) : 0) + (a.isAppointment ? (isTargetPreferential ? 5 : 6) : 0);
-        const scoreB = (b.priority ? (isTargetPreferential ? 10 : 4) : 0) + (b.isAppointment ? (isTargetPreferential ? 5 : 6) : 0);
-        if (scoreA !== scoreB) {
-          return scoreB - scoreA;
+        if (isTargetPreferential) {
+          // Cubículo preferencial: citas preferenciales primero, luego FIFO
+          const scoreA = (a.isAppointment ? 20 : 0);
+          const scoreB = (b.isAppointment ? 20 : 0);
+          if (scoreA !== scoreB) return scoreB - scoreA;
+        } else {
+          // Cubículo regular: turnos regulares con cita primero, luego orden FIFO
+          const scoreA = (a.isAppointment ? 50 : 0);
+          const scoreB = (b.isAppointment ? 50 : 0);
+          if (scoreA !== scoreB) return scoreB - scoreA;
         }
         return a.createdAt - b.createdAt;
       });
@@ -1948,166 +1989,6 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       return c;
     }));
   }, [setCubiclesForCurrentOffice]);
-
-  // Auto Assignment Engine Logic
-  const triggerAutoAssignment = useCallback(async (
-    currentTickets: Ticket[],
-    currentCubicles: Cubicle[]
-  ) => {
-    let updatedTickets = [...currentTickets];
-    let updatedCubicles = [...currentCubicles];
-    let assignedCount = 0;
-    const callsToTrigger: { ticket: Ticket; cubicle: Cubicle }[] = [];
-
-    // Iterate through all free cubicles
-    for (let cIndex = 0; cIndex < updatedCubicles.length; cIndex++) {
-      const cubicle = updatedCubicles[cIndex];
-      if (cubicle.status !== CubicleStatus.ONLINE_AVAILABLE) {
-        continue;
-      }
-
-      // Find all candidates that are in WAITING status and supported by this cubicle
-      const candidates = updatedTickets.filter(t => {
-        if (t.status !== TicketStatus.WAITING) return false;
-        if (!cubicle.supportedPhases || !cubicle.supportedPhases.includes(t.currentPhase)) return false;
-        if (cubicle.supportedServices && !cubicle.supportedServices.includes(t.serviceType)) return false;
-
-        // Preferential attention routing rules:
-        const isCubiclePreferential = cubicle.isPreferential === true ||
-          cubicle.name.toLowerCase().includes("preferencial") ||
-          cubicle.id === "CUB-30" ||
-          cubicle.id === "CUB-31" ||
-          cubicle.id === "CUB-34" ||
-          cubicle.id === "CUB-42";
-
-        if (isCubiclePreferential) {
-          const anyPreferredWaiting = updatedTickets.some(otherT =>
-            otherT.status === TicketStatus.WAITING &&
-            otherT.currentPhase === t.currentPhase &&
-            (t.serviceType === ServiceType.REGISTRO ? otherT.serviceType === ServiceType.REGISTRO : otherT.serviceType !== ServiceType.REGISTRO) &&
-            (otherT.priority || otherT.isAppointment) &&
-            cubicle.supportedServices.includes(otherT.serviceType) &&
-            canCubicleServeProcedure(cubicle.id, otherT.procedure)
-          );
-          if (anyPreferredWaiting && !t.priority && !t.isAppointment) {
-            return false;
-          }
-        } else {
-          const hasOfficePrefForPhase = currentCubicles.some(c =>
-            (c.isPreferential === true || c.name.toLowerCase().includes("preferencial")) &&
-            c.supportedPhases?.includes(t.currentPhase)
-          );
-          if (hasOfficePrefForPhase && t.priority) {
-            return false;
-          }
-
-          // In regular module, scheduled appointments have priority over spontaneous walk-ins
-          const anyAppointmentWaiting = updatedTickets.some(otherT =>
-            otherT.status === TicketStatus.WAITING &&
-            otherT.currentPhase === t.currentPhase &&
-            (t.serviceType === ServiceType.REGISTRO ? otherT.serviceType === ServiceType.REGISTRO : otherT.serviceType !== ServiceType.REGISTRO) &&
-            !otherT.priority &&
-            otherT.isAppointment &&
-            cubicle.supportedServices.includes(otherT.serviceType) &&
-            canCubicleServeProcedure(cubicle.id, otherT.procedure)
-          );
-          if (anyAppointmentWaiting && !t.isAppointment) {
-            return false;
-          }
-        }
-
-        return canCubicleServeProcedure(cubicle.id, t.procedure);
-      });
-
-      if (candidates.length === 0) continue;
-
-      // Sort candidates:
-      // 1. Preferential with appointment (Score 6)
-      // 2. Preferential (Score 4)
-      // 3. Regular with appointment (Score 2)
-      // 4. Regular walk-in (Score 0)
-      // Then FIFO by createdAt
-      candidates.sort((a, b) => {
-        const valA = (a.priority ? 4 : 0) + (a.isAppointment ? 2 : 0);
-        const valB = (b.priority ? 4 : 0) + (b.isAppointment ? 2 : 0);
-        if (valA !== valB) {
-          return valB - valA;
-        }
-        return a.createdAt - b.createdAt;
-      });
-
-      const chosenTicket = candidates[0];
-
-      // Mark chosen ticket as CALLING
-      updatedTickets = updatedTickets.map(t => {
-        if (t.id === chosenTicket.id) {
-          return {
-            ...t,
-            status: TicketStatus.CALLING,
-            calledAt: Date.now(),
-            assignedCubicleId: cubicle.id
-          };
-        }
-        return t;
-      });
-
-      // Mark cubicle as ATTENDING
-      updatedCubicles = updatedCubicles.map(c => {
-        if (c.id === cubicle.id) {
-          return {
-            ...c,
-            status: CubicleStatus.ATTENDING,
-            currentTicketId: chosenTicket.id
-          };
-        }
-        return c;
-      });
-
-      assignedCount++;
-      const updatedTicketRef = { 
-        ...chosenTicket, 
-        status: TicketStatus.CALLING, 
-        assignedCubicleId: cubicle.id,
-        calledAt: Date.now()
-      };
-      callsToTrigger.push({ ticket: updatedTicketRef, cubicle });
-    }
-
-    if (assignedCount > 0) {
-      setTicketsForCurrentOffice(updatedTickets);
-      setCubiclesForCurrentOffice(updatedCubicles);
-
-      if (callsToTrigger.length > 0) {
-        const latestCall = callsToTrigger[callsToTrigger.length - 1];
-        setActiveCall(latestCall);
-      }
-    }
-  }, [setTicketsForCurrentOffice, setCubiclesForCurrentOffice, setActiveCall]);
-
-  // Monitor tickets and cubicles to trigger automatic assignment with guardrails
-  useEffect(() => {
-    if (!isAutoAssignActive) return;
-
-    // Check if there is ANY free cubicle that can serve ANY waiting ticket
-    const freeCubicles = cubicles.filter(c => c.status === CubicleStatus.ONLINE_AVAILABLE);
-    if (freeCubicles.length === 0) return;
-
-    const waitingTickets = tickets.filter(t => t.status === TicketStatus.WAITING);
-    if (waitingTickets.length === 0) return;
-
-    const hasAnyMatch = freeCubicles.some(c => 
-      waitingTickets.some(t => 
-        (c.supportedPhases || []).includes(t.currentPhase) &&
-        (c.supportedServices ? c.supportedServices.includes(t.serviceType) : true) &&
-        canCubicleServeProcedure(c.id, t.procedure)
-      )
-    );
-
-    if (!hasAnyMatch) return;
-
-    // Trigger auto assignment
-    triggerAutoAssignment(tickets, cubicles);
-  }, [tickets, cubicles, isAutoAssignActive, triggerAutoAssignment]);
 
   // 7. Auto Simulation of arrivals
   useEffect(() => {

@@ -35,7 +35,7 @@ import {
   Tv,
   Database
 } from 'lucide-react';
-import { Cita, DatosPersonales, ServicioCategoriaId, TipoIdentificacion, Sucursal, CategoriaServicio, SubServicio, ExtranjeriaRecord, AdminRole, AdminUser } from '../types';
+import { Cita, DatosPersonales, ServicioCategoriaId, TipoIdentificacion, Sucursal, CategoriaServicio, SubServicio, ExtranjeriaRecord, AdminRole, AdminUser, OFFICES_CONFIG } from '../types';
 import { SUCURSALES_TE, SERVICIOS_TRIBUNAL, saveTramiteMutation, saveSucursalMutation } from '../data';
 import ExtranjeriaController from './ExtranjeriaController';
 import TardiaController from './TardiaController';
@@ -107,6 +107,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
   const [userFormPassword, setUserFormPassword] = useState('');
   const [userFormRole, setUserFormRole] = useState<AdminRole>('extranjeria');
   const [userFormNombre, setUserFormNombre] = useState('');
+  const [userFormSucursal, setUserFormSucursal] = useState('OFF-1');
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [userError, setUserError] = useState('');
   const [userSuccess, setUserSuccess] = useState('');
@@ -156,7 +157,8 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
         username: userFormUsername.trim().toLowerCase(),
         password: userFormPassword.trim(),
         role: userFormRole,
-        nombre: userFormNombre.trim()
+        nombre: userFormNombre.trim(),
+        sucursalId: userFormSucursal
       };
 
       const token = sessionStorage.getItem('admin_token') || '';
@@ -220,6 +222,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     setUserFormPassword(u.password || '');
     setUserFormNombre(u.nombre);
     setUserFormRole(u.role);
+    setUserFormSucursal(u.sucursalId || 'OFF-1');
     setUserError('');
     setUserSuccess('');
   };
@@ -230,6 +233,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     setUserFormPassword('');
     setUserFormNombre('');
     setUserFormRole('extranjeria');
+    setUserFormSucursal('OFF-1');
     setUserError('');
     setUserSuccess('');
   };
@@ -4194,9 +4198,31 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                           <option value="pasado_edad_supervisor">👑 Supervisor VID (Pasados de Edad)</option>
                           <option value="pasado_edad_admin">📋 Operador Seguimiento VID</option>
                           <option value="pasado_edad">🛡️ Administrador VID</option>
+
+                          {/* 5. Agentes de Atención (Ventanillas/Módulos) */}
+                          <option value="agent_caja">💵 Agente de Caja (Cédula/Pago)</option>
+                          <option value="agent_triada">📸 Agente de Tríada (Biometría/Foto)</option>
+                          <option value="agent_registro_civil">📑 Agente de Registro Civil (Eventos Vitales)</option>
                         </select>
                         <p className="text-[10px] text-slate-500 font-medium leading-normal pt-1">
                           El usuario ingresará con estas credenciales y tendrá restringidas o asignadas las pestañas correspondientes en base a su rol de gestión.
+                        </p>
+                      </div>
+
+                      {/* Asignar Regional (Sucursal) */}
+                      <div className="space-y-1.5">
+                        <label className="text-[9px] font-extrabold uppercase text-slate-400 tracking-wider block">Asignar Regional (Sucursal)</label>
+                        <select
+                          value={userFormSucursal}
+                          onChange={(e) => setUserFormSucursal(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-750 text-sm text-slate-300 p-2.5 rounded focus:outline-none focus:ring-1 focus:ring-purple-600 cursor-pointer font-bold"
+                        >
+                          {OFFICES_CONFIG.map(office => (
+                            <option key={office.id} value={office.id}>{office.name}</option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-slate-500 font-medium leading-normal pt-1">
+                          Para agentes de atención, el acceso estará restringido exclusivamente a la regional seleccionada.
                         </p>
                       </div>
 
@@ -4273,7 +4299,9 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                                         ? 'bg-amber-950/80 text-amber-400 border-amber-900/50'
                                         : u.role === 'pasado_edad' || u.role === 'pasado_edad_supervisor' || u.role === 'pasado_edad_admin'
                                           ? 'bg-blue-950/80 text-blue-400 border-blue-900/50'
-                                          : 'bg-emerald-950/80 text-emerald-400 border-emerald-900/50'
+                                          : String(u.role).startsWith('agent_')
+                                            ? 'bg-purple-950/80 text-purple-400 border-purple-900/50'
+                                            : 'bg-emerald-950/80 text-emerald-400 border-emerald-900/50'
                                   }`}>
                                     {u.role === 'super' 
                                       ? '⚡ Super Admin' 
@@ -4291,8 +4319,19 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                                                   ? '📋 Operador Seguimiento VID'
                                                   : u.role === 'pasado_edad' 
                                                     ? '🛡️ Administrador VID' 
-                                                    : '👤 Administrador Sencillo'}
+                                                    : u.role === 'agent_caja'
+                                                      ? '💵 Agente de Caja'
+                                                      : u.role === 'agent_triada'
+                                                        ? '📸 Agente de Tríada'
+                                                        : u.role === 'agent_registro_civil'
+                                                          ? '📑 Agente de Registro Civil'
+                                                          : '👤 Administrador Sencillo'}
                                   </span>
+                                  {u.sucursalId && (
+                                    <div className="text-[10px] text-slate-400 mt-2 font-medium">
+                                      📍 {OFFICES_CONFIG.find(o => o.id === u.sucursalId)?.name?.replace('Tribunal Electoral de ', '')?.replace('Dirección Regional de ', '') || u.sucursalId}
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="p-3.5">
                                   <div className="flex items-center justify-end gap-1.5 w-full">

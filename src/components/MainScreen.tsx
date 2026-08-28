@@ -56,7 +56,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         return;
       }
       onRefresh();
-    }, 3000);
+    }, 2500);
 
     return () => clearInterval(interval);
   }, [onRefresh]);
