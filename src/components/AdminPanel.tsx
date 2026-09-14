@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { jsPDF } from 'jspdf';
 import { 
   Shield, 
@@ -7,6 +7,7 @@ import {
   CheckSquare, 
   Trash2, 
   Edit3, 
+  Camera,
   Filter, 
   Search, 
   Download, 
@@ -25,6 +26,7 @@ import {
   CheckCircle,
   FileSpreadsheet,
   Building,
+  Building2,
   Info,
   Plus,
   Copy,
@@ -40,6 +42,8 @@ import { SUCURSALES_TE, SERVICIOS_TRIBUNAL, saveTramiteMutation, saveSucursalMut
 import ExtranjeriaController from './ExtranjeriaController';
 import TardiaController from './TardiaController';
 import AdminCmsEditor from './AdminCmsEditor';
+import CsvImporter from './CsvImporter';
+import TriadaSupervisorController from './TriadaSupervisorController';
 
 interface AdminPanelProps {
   citas: Cita[];
@@ -68,7 +72,14 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
   const [currentRole, setCurrentRole] = useState<AdminRole>(() => {
     return typeof window !== 'undefined' ? (sessionStorage.getItem('admin_role') as AdminRole || 'sencillo') : 'sencillo';
   });
-  const [activeSubTab, setActiveSubTab] = useState<'tabla' | 'stats' | 'config' | 'horarios' | 'tramites' | 'extranjeria' | 'pantalla' | 'usuarios'>('tabla');
+  const [activeSubTab, setActiveSubTab] = useState<'tabla' | 'stats' | 'config' | 'horarios' | 'tramites' | 'extranjeria' | 'pantalla' | 'usuarios' | 'pasado_edad' | 'importar_csv' | 'triada'>(() => {
+    const savedRole = typeof window !== 'undefined' ? (sessionStorage.getItem('admin_role') || 'sencillo') : 'sencillo';
+    if (savedRole.startsWith('extranjeria')) return 'extranjeria';
+    if (savedRole.startsWith('pasado_edad')) return 'pasado_edad';
+    if (savedRole === 'triada_supervisor') return 'triada';
+    if (savedRole === 'caja_supervisor') return 'stats';
+    return 'tabla';
+  });
   const [eyeTheme, setEyeTheme] = useState<'slate' | 'warm' | 'sepia' | 'forest' | 'light'>(() => {
     try {
       return (localStorage.getItem('admin_eye_theme') as any) || 'slate';
@@ -76,6 +87,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
       return 'slate';
     }
   });
+  const [extranjeriaTab, setExtranjeriaTab] = useState<'flujo' | 'calendario' | 'carga_expedientes' | 'configuracion'>('flujo');
 
   // Search and Filtering states
   const [searchQuery, setSearchQuery] = useState('');
@@ -99,6 +111,10 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
 
   // Bulk operation checks
   const [selectedCitaIds, setSelectedCitaIds] = useState<string[]>([]);
+
+  // List virtualization (windowing) states & refs for big historical datasets
+  const appointmentsTableContainerRef = useRef<HTMLDivElement>(null);
+  const [appointmentsScrollTop, setAppointmentsScrollTop] = useState(0);
 
   // User Management state for Super Admin
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -139,6 +155,18 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
   React.useEffect(() => {
     if (isAdminLoggedIn) {
       fetchUsers();
+      fetch('/api/extranjeria/config')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.success && data.config && data.config.ticketKioscoUrl) {
+            const url = data.config.ticketKioscoUrl.includes('sistema-de-ticket.vercel.app')
+              ? 'https://test.te.gob.pa:8443/kiosco'
+              : data.config.ticketKioscoUrl;
+            setExtranjeriaTicketKioscoUrl(url);
+            localStorage.setItem('extranjeria_ticket_kiosco_url', url);
+          }
+        })
+        .catch(() => {});
     }
   }, [isAdminLoggedIn]);
 
@@ -304,7 +332,17 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
       const stored = localStorage.getItem('te_panama_pasado_edad_link_base');
       if (stored) return stored;
     } catch {}
-    return typeof window !== 'undefined' ? window.location.origin : 'https://agendate.te.gob.pa';
+    return 'https://test.te.gob.pa:8443/citas';
+  });
+
+  const [extranjeriaTicketKioscoUrl, setExtranjeriaTicketKioscoUrl] = useState(() => {
+    try {
+      const stored = localStorage.getItem('extranjeria_ticket_kiosco_url');
+      if (stored && !stored.includes('sistema-de-ticket.vercel.app') && stored.trim()) {
+        return stored.trim();
+      }
+    } catch {}
+    return 'https://test.te.gob.pa:8443/kiosco';
   });
 
 
@@ -530,15 +568,16 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
       doc.setFont('Helvetica', 'normal');
       doc.setFontSize(7.5);
 
+      const dp: any = c.datosPersonales || {};
       const isExtrans = c.servicioCategoria === 'extranjeria';
       const name = isExtrans 
-        ? `${c.datosPersonales.primerNombre || ''} ${c.datosPersonales.primerApellido || ''}`.trim()
-        : (c.datosPersonales.nombreCompleto || '');
+        ? `${dp.primerNombre || ''} ${dp.primerApellido || ''}`.trim() || (c as any).nombre || ''
+        : (dp.nombreCompleto || (c as any).nombre || '');
       
-      const labelTx = c.codigoTransaccion.length > 13 ? c.codigoTransaccion.slice(0, 13) + '...' : c.codigoTransaccion;
-      const labelName = name.length > 25 ? name.slice(0, 24) + '...' : name;
-      const labelId = c.datosPersonales.identificacion || c.datosPersonales.pasaporte || 'N/D';
-      const labelCorreo = c.datosPersonales.correo.length > 20 ? c.datosPersonales.correo.slice(0, 19) + '..' : c.datosPersonales.correo;
+      const labelTx = c.codigoTransaccion.length > 17 ? c.codigoTransaccion.slice(0, 15) + '...' : c.codigoTransaccion;
+      const labelName = name.length > 32 ? name.slice(0, 30) + '...' : name;
+      const labelId = (dp.identificacion || dp.pasaporte || 'N/D').length > 16 ? (dp.identificacion || dp.pasaporte || 'N/D').slice(0, 14) + '...' : (dp.identificacion || dp.pasaporte || 'N/D');
+      const labelCorreo = (dp.correo || '').length > 26 ? (dp.correo || '').slice(0, 24) + '..' : (dp.correo || 'N/D');
       
       doc.text(labelTx, 12, currentY + 5);
       doc.text(`${c.fecha} - ${c.hora}`, 41, currentY + 5);
@@ -596,7 +635,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     doc.text('TRIBUNAL ELECTORAL DE PANAMÁ', 20, 16);
     doc.setFontSize(8);
     doc.setFont('Helvetica', 'normal');
-    doc.text('DIRECCIÓN NACIONAL DE CEDULACIÓN / REGISTRO CIVIL', 20, 21);
+    doc.text('DIRECCIÓN NACIONAL DE CEDULACIÓN', 20, 21);
 
     doc.setFont('Helvetica', 'bold');
     doc.setFontSize(14);
@@ -801,10 +840,11 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     ];
 
     const rows = filtered.map(c => {
+      const dp = c.datosPersonales;
       const isExtrans = c.servicioCategoria === 'extranjeria';
       const name = isExtrans 
-        ? `${c.datosPersonales.primerNombre || ''} ${c.datosPersonales.primerApellido || ''}`.trim()
-        : (c.datosPersonales.nombreCompleto || '');
+        ? `${dp?.primerNombre || ''} ${dp?.primerApellido || ''}`.trim()
+        : (dp?.nombreCompleto || '');
       
       const subservice = c.subServicioId === 'ced_pasados_edad' ? 'Pasados de Edad (VID)' : c.subServicioId;
       
@@ -815,10 +855,10 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
         c.fecha,
         c.hora,
         `"${name.replace(/"/g, '""')}"`,
-        c.datosPersonales.tipoIdentificacion,
-        c.datosPersonales.identificacion,
-        c.datosPersonales.correo,
-        c.datosPersonales.telefono,
+        dp?.tipoIdentificacion || 'N/A',
+        dp?.identificacion || 'N/A',
+        dp?.correo || 'N/A',
+        dp?.telefono || 'N/A',
         c.sucursalId,
         c.estado
       ];
@@ -869,7 +909,9 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
         sessionStorage.setItem('admin_token', data.token);
         sessionStorage.setItem('admin_role', data.user.role);
         sessionStorage.setItem('admin_username', data.user.username);
+        sessionStorage.setItem('admin_nombre', data.user.nombre || data.user.username);
         
+        setUsername(data.user.username);
         setCurrentRole(data.user.role);
         setIsAdminLoggedIn(true);
         setLoginError('');
@@ -878,6 +920,10 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
           setActiveSubTab('extranjeria');
         } else if (data.user.role.startsWith('pasado_edad')) {
           setActiveSubTab('pasado_edad' as any);
+        } else if (data.user.role === 'triada_supervisor') {
+          setActiveSubTab('triada');
+        } else if (data.user.role === 'caja_supervisor') {
+          setActiveSubTab('stats');
         } else {
           setActiveSubTab('tabla');
         }
@@ -922,8 +968,21 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
         sessionStorage.setItem('admin_token', pendingLoginData.token);
         sessionStorage.setItem('admin_role', pendingLoginData.role);
         sessionStorage.setItem('admin_username', pendingLoginData.username);
+        sessionStorage.setItem('admin_nombre', pendingLoginData.nombre || pendingLoginData.username);
 
+        setUsername(pendingLoginData.username);
         setCurrentRole(pendingLoginData.role);
+        if (pendingLoginData.role.startsWith('extranjeria')) {
+          setActiveSubTab('extranjeria');
+        } else if (pendingLoginData.role.startsWith('pasado_edad')) {
+          setActiveSubTab('pasado_edad' as any);
+        } else if (pendingLoginData.role === 'triada_supervisor') {
+          setActiveSubTab('triada');
+        } else if (pendingLoginData.role === 'caja_supervisor') {
+          setActiveSubTab('stats');
+        } else {
+          setActiveSubTab('tabla');
+        }
         setIsAdminLoggedIn(true);
         setShowForceChangePassModal(false);
         setPendingLoginData(null);
@@ -962,25 +1021,40 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
   // - Extranjería ('extranjeria'): sees extranjeria records
   // - Pasado de Edad ('pasado_edad'): sees Pasado de Edad records
   const roleFilteredCitas = useMemo(() => {
-    if (currentRole === 'super') return citas;
+    if (!Array.isArray(citas)) return [];
+    const cleanCitas = citas.filter(Boolean);
+    if (currentRole === 'super') return cleanCitas;
     if (currentRole === 'sencillo') {
-      return citas.filter(cita => 
-        cita.servicioCategoria === 'organizacion_electoral' ||
-        cita.servicioCategoria === 'registro_civil' ||
-        (cita.servicioCategoria === 'cedulacion' && cita.subServicioId !== 'ced_pasados_edad')
+      return cleanCitas.filter(cita => 
+        cita && (
+          cita.servicioCategoria === 'organizacion_electoral' ||
+          cita.servicioCategoria === 'registro_civil' ||
+          (
+            cita.servicioCategoria === 'cedulacion' && 
+            cita.subServicioId !== 'ced_pasados_edad' &&
+            !String(cita.id || '').includes('CSV') &&
+            !String(cita.creadoPor || '').toLowerCase().includes('csv')
+          )
+        )
       );
     }
     if (currentRole.startsWith('extranjeria')) {
-      return citas.filter(cita => 
-        cita.servicioCategoria === 'extranjeria' || 
-        cita.subServicioId?.includes('extranj') || 
-        cita.subServicioId?.startsWith('ext_')
+      return cleanCitas.filter(cita => 
+        cita && (
+          cita.servicioCategoria === 'extranjeria' || 
+          cita.subServicioId?.includes('extranj') || 
+          cita.subServicioId?.startsWith('ext_') ||
+          String(cita.id || '').startsWith('EXT-') ||
+          String(cita.id || '').includes('CSV') ||
+          String(cita.codigoTransaccion || '').startsWith('EXT-') ||
+          String(cita.creadoPor || '').toLowerCase().includes('csv')
+        )
       );
     }
     if (currentRole.startsWith('pasado_edad')) {
-      return citas.filter(cita => cita.subServicioId === 'ced_pasados_edad');
+      return cleanCitas.filter(cita => cita && cita.subServicioId === 'ced_pasados_edad');
     }
-    return citas;
+    return cleanCitas;
   }, [citas, currentRole]);
 
   // Reactive subset for simple admin on selected date range
@@ -1127,13 +1201,14 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
       doc.setFont('Helvetica', 'normal');
       doc.setFontSize(7);
 
-      const name = c.datosPersonales.nombreCompleto || 'N/D';
+      const dp = c.datosPersonales || {};
+      const name = dp.nombreCompleto || c.nombre || 'N/D';
       
-      const labelTx = c.codigoTransaccion.length > 13 ? c.codigoTransaccion.slice(0, 13) + '...' : c.codigoTransaccion;
+      const labelTx = c.codigoTransaccion.length > 17 ? c.codigoTransaccion.slice(0, 15) + '...' : c.codigoTransaccion;
       const labelCategory = getSubServicioName(c.subServicioId);
-      const labelCategoryDisplay = labelCategory.length > 25 ? labelCategory.slice(0, 23) + '...' : labelCategory;
-      const labelName = name.length > 24 ? name.slice(0, 22) + '...' : name;
-      const labelId = c.datosPersonales.identificacion || 'N/D';
+      const labelCategoryDisplay = labelCategory.length > 30 ? labelCategory.slice(0, 28) + '...' : labelCategory;
+      const labelName = name.length > 30 ? name.slice(0, 28) + '...' : name;
+      const labelId = (dp.identificacion || 'N/D').length > 16 ? (dp.identificacion || 'N/D').slice(0, 14) + '...' : (dp.identificacion || 'N/D');
       
       doc.text(labelTx, 12, currentY + 5);
       doc.text(labelCategoryDisplay, 40, currentY + 5);
@@ -1181,7 +1256,12 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     const porSucursal: Record<string, number> = {};
 
     list.forEach(c => {
-      porCategoria[c.servicioCategoria] = (porCategoria[c.servicioCategoria] || 0) + 1;
+      let catId = c.servicioCategoria;
+      const subId = (c.subServicioId || '').toLowerCase();
+      if (subId === 'ced_pasados_edad' || subId.includes('pasado') || subId.includes('edad')) {
+        catId = 'panamenos_extranjero';
+      }
+      porCategoria[catId] = (porCategoria[catId] || 0) + 1;
       porSucursal[c.sucursalId] = (porSucursal[c.sucursalId] || 0) + 1;
     });
 
@@ -1199,12 +1279,13 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     return roleFilteredCitas.filter(cita => {
       // Search
       let extraText = '';
+      const dp = cita.datosPersonales || {};
       if (cita.servicioCategoria === 'extranjeria') {
-        extraText = ` ${cita.datosPersonales.primerNombre || ''} ${cita.datosPersonales.segundoNombre || ''} ${cita.datosPersonales.primerApellido || ''} ${cita.datosPersonales.segundoApellido || ''} ${cita.datosPersonales.pasaporte || ''} ${cita.datosPersonales.numeroResolucion || ''} ${cita.datosPersonales.nacionalidad || ''}`;
+        extraText = ` ${dp.primerNombre || ''} ${dp.segundoNombre || ''} ${dp.primerApellido || ''} ${dp.segundoApellido || ''} ${dp.pasaporte || ''} ${dp.numeroResolucion || ''} ${dp.nacionalidad || ''}`;
       } else {
-        extraText = ` ${cita.datosPersonales.nombreCompleto || ''}`;
+        extraText = ` ${dp.nombreCompleto || ''}`;
       }
-      const text = `${cita.codigoTransaccion} ${cita.datosPersonales.identificacion} ${cita.datosPersonales.correo} ${cita.datosPersonales.telefono}${extraText}`.toLowerCase();
+      const text = `${cita.codigoTransaccion} ${dp.identificacion || ''} ${dp.correo || ''} ${dp.telefono || ''}${extraText}`.toLowerCase();
       const matchesSearch = text.includes(searchQuery.toLowerCase());
 
       // Category filter
@@ -1219,6 +1300,26 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
       return matchesSearch && matchesCategory && matchesSucursal && matchesEstado;
     });
   }, [roleFilteredCitas, searchQuery, filterCategoria, filterSucursal, filterEstado, mutableSucursales, mutableServicios]);
+
+  // Reset scrolling to top when filters are updated
+  useEffect(() => {
+    setAppointmentsScrollTop(0);
+    if (appointmentsTableContainerRef.current) {
+      appointmentsTableContainerRef.current.scrollTop = 0;
+    }
+  }, [searchQuery, filterCategoria, filterSucursal, filterEstado]);
+
+  // Virtualization variables
+  const appointmentsContainerHeight = appointmentsTableContainerRef.current ? appointmentsTableContainerRef.current.clientHeight : 500;
+  const appointmentRowHeight = 92; // Avg height of each appointment row in pixels
+  const appointmentBuffer = 10; // Items rendered outside viewport to prevent scroll gaps
+  
+  const appointmentStartIndex = Math.max(0, Math.floor(appointmentsScrollTop / appointmentRowHeight) - appointmentBuffer);
+  const appointmentEndIndex = Math.min(filteredCitas.length, Math.floor((appointmentsScrollTop + appointmentsContainerHeight) / appointmentRowHeight) + appointmentBuffer);
+
+  const visibleCitas = useMemo(() => {
+    return filteredCitas.slice(appointmentStartIndex, appointmentEndIndex);
+  }, [filteredCitas, appointmentStartIndex, appointmentEndIndex]);
 
   // Select all checkboxes toggle
   const toggleSelectAll = () => {
@@ -1283,13 +1384,22 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
   };
 
   // Action: Single Delete (Super Admin only)
-  const handleDeleteCita = (id: string) => {
+  const handleDeleteCita = async (id: string) => {
     if (window.confirm('¿Está completamente seguro de eliminar este registro permanentemente de la base de datos?')) {
       const updated = citas.filter(c => c.id !== id);
       onUpdateCitas(updated);
       setSelectedCitaIds(selectedCitaIds.filter(selectedId => selectedId !== id));
       if (editingCita?.id === id) {
         setEditingCita(null);
+      }
+      try {
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+        await fetch(`/api/appointments/${id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+      } catch (e) {
+        console.error('Error deleting appointment from server:', e);
       }
     }
   };
@@ -1325,10 +1435,10 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     const headers = ['Código', 'Identificación', 'Tipo ID', 'Correo', 'Teléfono', 'Categoría', 'Trámite', 'Sede', 'Fecha', 'Hora', 'Estado'];
     const rows = filteredCitas.map(c => [
       c.codigoTransaccion,
-      c.datosPersonales.identificacion,
-      c.datosPersonales.tipoIdentificacion,
-      c.datosPersonales.correo,
-      c.datosPersonales.telefono,
+      c.datosPersonales?.identificacion || 'N/D',
+      c.datosPersonales?.tipoIdentificacion || 'N/D',
+      c.datosPersonales?.correo || 'N/D',
+      c.datosPersonales?.telefono || 'N/D',
       getCategoriaName(c.servicioCategoria),
       getSubServicioName(c.subServicioId),
       getSucursalName(c.sucursalId),
@@ -1355,11 +1465,11 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     setEditFecha(cita.fecha);
     setEditHora(cita.hora);
     setEditEstado(cita.estado);
-    setEditTipoIdentificacion(cita.datosPersonales.tipoIdentificacion);
-    setEditIdentificacion(cita.datosPersonales.identificacion);
-    setEditTelefono(cita.datosPersonales.telefono);
-    setEditCorreo(cita.datosPersonales.correo);
-    setEditNombreCompleto(cita.datosPersonales.nombreCompleto || '');
+    setEditTipoIdentificacion(cita.datosPersonales?.tipoIdentificacion || 'Cedula');
+    setEditIdentificacion(cita.datosPersonales?.identificacion || '');
+    setEditTelefono(cita.datosPersonales?.telefono || '');
+    setEditCorreo(cita.datosPersonales?.correo || '');
+    setEditNombreCompleto(cita.datosPersonales?.nombreCompleto || '');
   };
 
   // --- OPERATIONS FOR REGIONAL BRANCHES (AVAILABLE FOR ALL ADMINS) ---
@@ -1852,7 +1962,9 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                    ? 'bg-amber-950 text-amber-100 border-amber-800'
                    : currentRole.startsWith('pasado_edad')
                      ? 'bg-blue-950 text-blue-100 border-blue-800'
-                     : 'bg-emerald-950 text-emerald-100 border-emerald-800'
+                     : currentRole === 'triada_supervisor'
+                       ? 'bg-purple-950 text-purple-100 border-purple-800'
+                       : 'bg-emerald-950 text-emerald-100 border-emerald-800'
              }`}>
                Perfil: {
                  currentRole === 'super' ? '⚡ SUPER ADMIN' : 
@@ -1862,37 +1974,47 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                  currentRole === 'extranjeria' ? '🛂 ADMIN EXTRANJERÍA' : 
                  currentRole === 'pasado_edad_supervisor' ? '👑 SUPERVISOR SEGUIMIENTO IT' : 
                  currentRole === 'pasado_edad_admin' ? '📋 OPERADOR SEGUIMIENTO IT' : 
-                 currentRole === 'pasado_edad' ? '🛡️ ADMINISTRADOR IT' : '👤 ADMIN SENCILLO'
+                 currentRole === 'pasado_edad' ? '🛡️ ADMINISTRADOR IT' : 
+                 currentRole === 'triada_supervisor' ? '👑 SUPERVISOR TRÍADA Y FOTO' : 
+                  currentRole === 'caja_supervisor' ? '👑 SUPERVISOR DE CAJA Y COBROS' : '👤 ADMIN SENCILLO'
                }
-             </span>
+              </span>
  
-             {/* Quick switcher during simulation */}
              <button
-               onClick={() => {
-                 const roles: AdminRole[] = ['sencillo', 'super', 'extranjeria_supervisor', 'extranjeria_atencion', 'extranjeria_cubiculo', 'extranjeria', 'pasado_edad_supervisor', 'pasado_edad_admin', 'pasado_edad'];
-                 const nextRole = roles[(roles.indexOf(currentRole) + 1) % roles.length];
-                 setCurrentRole(nextRole);
-                 setEditingCita(null); // Clear editing to prevent profile mismatch
-                 if (nextRole.startsWith('extranjeria')) {
-                   setActiveSubTab('extranjeria');
-                 } else if (nextRole.startsWith('pasado_edad')) {
-                   setActiveSubTab('pasado_edad' as any);
-                 } else {
-                   setActiveSubTab('tabla');
-                 }
-               }}
-               className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[10px] font-bold px-2 py-1 rounded tracking-wide transition"
-               title="Alternar perfiles para validar restricciones fácilmente"
-             >
-               Cambiar Perfil (Switch)
-             </button>
-
-            <button
-              type="button"
-              onClick={() => {
+               type="button"
+              onClick={async () => {
+                const currentAgentUser = sessionStorage.getItem('admin_username');
+                if (currentAgentUser) {
+                  try {
+                    const resMeta = await fetch('/api/extranjeria/metadata');
+                    if (resMeta.ok) {
+                      const json = await resMeta.json();
+                      if (json.success && json.metadata) {
+                        const updated = { ...json.metadata };
+                        let changed = false;
+                        for (let i = 1; i <= 8; i++) {
+                          const occKey = `booth_occupant_${i}`;
+                          if (updated[occKey]?.staffResponsable === currentAgentUser) {
+                            delete updated[occKey];
+                            changed = true;
+                          }
+                        }
+                        if (changed) {
+                          await fetch('/api/extranjeria/metadata', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ metadata: updated })
+                          });
+                        }
+                      }
+                    }
+                  } catch (e) {}
+                }
                 sessionStorage.removeItem('admin_token');
                 sessionStorage.removeItem('admin_role');
                 sessionStorage.removeItem('admin_username');
+                sessionStorage.removeItem('admin_nombre');
+                sessionStorage.removeItem('extranjeria_cubiculo_chosen_session');
                 setIsAdminLoggedIn(false);
               }}
               className="bg-red-600 hover:bg-red-700 text-white font-extrabold text-[10px] uppercase tracking-wider px-3 py-1 rounded transition"
@@ -2110,6 +2232,35 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
               </button>
             )}
 
+            {(currentRole === 'triada_supervisor' || currentRole === 'super') && (
+              <button
+                onClick={() => setActiveSubTab('triada')}
+                className={`flex-1 md:flex-initial flex items-center gap-2 px-3 py-2.5 rounded text-xs font-bold leading-none uppercase tracking-wide transition cursor-pointer text-left whitespace-nowrap ${
+                  activeSubTab === 'triada'
+                    ? 'bg-purple-600/15 text-purple-400 border border-purple-500/30 shadow-inner'
+                    : 'text-slate-400 hover:text-white border border-transparent'
+                }`}
+              >
+                <Camera className="w-4 h-4 shrink-0 text-purple-450" />
+                <span>Supervisión Tríada/Foto</span>
+              </button>
+            )}
+
+            {/* IMPORTAR CITAS CSV - EXCLUSIVO SUPER ADMIN */}
+            {currentRole === 'super' && (
+              <button
+                onClick={() => setActiveSubTab('importar_csv')}
+                className={`flex-1 md:flex-initial flex items-center gap-2 px-3 py-2.5 rounded text-xs font-bold leading-none uppercase tracking-wide transition cursor-pointer text-left whitespace-nowrap ${
+                  activeSubTab === 'importar_csv'
+                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/40'
+                    : 'text-slate-400 hover:text-white border border-transparent'
+                }`}
+              >
+                <FileSpreadsheet className="w-4 h-4 shrink-0 text-amber-500" />
+                <span>Importar CSV (Extranjería)</span>
+              </button>
+            )}
+
             {!currentRole.startsWith('extranjeria') && !currentRole.startsWith('pasado_edad') && (
               <>
                 <button
@@ -2176,7 +2327,6 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                     <Sliders className="w-3 h-3 text-blue-500" />
                     <span>Configuración TE</span>
                   </div>
-                  <div>Línea de Servicio: 311</div>
                   <div>Cupo Hora: {maxSlotsPerHour}</div>
                   <div>Regulación: PE 2026</div>
                 </div>
@@ -2739,8 +2889,12 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                   </div>
                 </div>
 
-                {/* MASTER EXCEL TABLE GRID */}
-                <div className="bg-slate-950 rounded-lg border border-slate-800 overflow-x-auto shadow-md">
+                {/* MASTER EXCEL TABLE GRID WITH LIST VIRTUALIZATION */}
+                <div 
+                  ref={appointmentsTableContainerRef}
+                  onScroll={(e) => setAppointmentsScrollTop(e.currentTarget.scrollTop)}
+                  className="bg-slate-950 rounded-lg border border-slate-800 overflow-x-auto overflow-y-auto max-h-[650px] shadow-md scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-slate-950"
+                >
                   <table className="w-full text-left" role="grid">
                     <thead>
                       <tr className="bg-slate-900 border-b border-slate-800 text-[10px] font-black uppercase tracking-widest text-slate-400">
@@ -2770,151 +2924,163 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                           </td>
                         </tr>
                       ) : (
-                        filteredCitas.map((cit) => (
-                          <tr key={cit.id} className="hover:bg-slate-900/60 transition-colors">
-                            <td className="p-3 text-center">
-                              <input
-                                type="checkbox"
-                                checked={selectedCitaIds.includes(cit.id)}
-                                onChange={() => toggleSelectCita(cit.id)}
-                                className="rounded cursor-pointer accent-blue-600"
-                                aria-label={`Seleccionar cita ${cit.codigoTransaccion}`}
-                              />
-                            </td>
-                            {/* CODE */}
-                            <td className="p-3">
-                              <span className="font-mono text-xs font-extrabold text-blue-400 bg-blue-950/40 px-1.5 py-0.5 rounded border border-blue-900/30">
-                                {cit.codigoTransaccion}
-                              </span>
-                            </td>
-                            
-                            {/* CITIZEN INFO */}
-                            <td className="p-3">
-                              <div className="flex flex-col">
-                                {cit.servicioCategoria === 'extranjeria' ? (
-                                  <>
-                                    <span className="text-[11px] font-extrabold text-blue-300 leading-tight">
-                                      {[cit.datosPersonales.primerNombre, cit.datosPersonales.segundoNombre, cit.datosPersonales.primerApellido, cit.datosPersonales.segundoApellido].filter(Boolean).join(' ')}
-                                    </span>
-                                    <span className="text-[10px] text-slate-400 font-mono tracking-tight leading-tight mt-0.5">
-                                      Pasaporte: <strong className="text-amber-200">{cit.datosPersonales.pasaporte}</strong> • {cit.datosPersonales.nacionalidad}
-                                    </span>
-                                    <span className="text-[9px] text-amber-500 font-bold leading-normal mt-1 bg-amber-950/30 border border-amber-900/30 px-1.5 py-0.5 rounded w-max">
-                                      Res: {cit.datosPersonales.numeroResolucion} ({cit.datosPersonales.fechaResolucion})
-                                    </span>
-                                  </>
-                                ) : (
-                                  <>
-                                    {cit.datosPersonales.nombreCompleto && (
-                                      <span className="text-[11px] font-extrabold text-slate-200 leading-tight">
-                                        {cit.datosPersonales.nombreCompleto.toUpperCase()}
+                        <>
+                          {appointmentStartIndex > 0 && (
+                            <tr style={{ height: `${appointmentStartIndex * appointmentRowHeight}px` }}>
+                              <td colSpan={8} className="p-0 border-0" style={{ height: `${appointmentStartIndex * appointmentRowHeight}px` }} />
+                            </tr>
+                          )}
+                          {visibleCitas.map((cit) => (
+                            <tr key={cit.id} className="hover:bg-slate-900/60 transition-colors" style={{ height: `${appointmentRowHeight}px` }}>
+                              <td className="p-3 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedCitaIds.includes(cit.id)}
+                                  onChange={() => toggleSelectCita(cit.id)}
+                                  className="rounded cursor-pointer accent-blue-600"
+                                  aria-label={`Seleccionar cita ${cit.codigoTransaccion}`}
+                                />
+                              </td>
+                              {/* CODE */}
+                              <td className="p-3">
+                                <span className="font-mono text-xs font-extrabold text-blue-400 bg-blue-950/40 px-1.5 py-0.5 rounded border border-blue-900/30">
+                                  {cit.codigoTransaccion}
+                                </span>
+                              </td>
+                              
+                              {/* CITIZEN INFO */}
+                              <td className="p-3">
+                                <div className="flex flex-col">
+                                  {cit.servicioCategoria === 'extranjeria' ? (
+                                    <>
+                                      <span className="text-[11px] font-extrabold text-blue-300 leading-tight">
+                                        {[cit.datosPersonales?.primerNombre, cit.datosPersonales?.segundoNombre, cit.datosPersonales?.primerApellido, cit.datosPersonales?.segundoApellido].filter(Boolean).join(' ')}
                                       </span>
-                                    )}
-                                    <span className="font-mono text-[10px] font-bold text-slate-400 mt-0.5">
-                                      {cit.datosPersonales.tipoIdentificacion === 'Cedula' ? 'Cédula' : cit.datosPersonales.tipoIdentificacion === 'CedulaJuvenil' ? 'Céd. Juvenil' : cit.datosPersonales.tipoIdentificacion === 'Extranjero' ? 'Céd. Ext' : 'Pasaporte'}: <span className="text-blue-300">{cit.datosPersonales.identificacion}</span>
-                                    </span>
-                                    <span className="text-[10px] text-slate-450 leading-tight">
-                                      Tel: {cit.datosPersonales.telefono}
-                                    </span>
-                                    {cit.datosPersonales.numeroSeguimiento && (
-                                      <span className="text-[10px] text-amber-400 font-mono font-bold leading-tight mt-0.5">
-                                        Seg: {cit.datosPersonales.numeroSeguimiento}
+                                      <span className="text-[10px] text-slate-400 font-mono tracking-tight leading-tight mt-0.5">
+                                        Pasaporte: <strong className="text-amber-200">{cit.datosPersonales?.pasaporte}</strong> • {cit.datosPersonales?.nacionalidad}
                                       </span>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            </td>
+                                      <span className="text-[9px] text-amber-500 font-bold leading-normal mt-1 bg-amber-955/30 border border-amber-900/30 px-1.5 py-0.5 rounded w-max">
+                                        Res: {cit.datosPersonales?.numeroResolucion} ({cit.datosPersonales?.fechaResolucion})
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      {cit.datosPersonales?.nombreCompleto && (
+                                        <span className="text-[11px] font-extrabold text-slate-200 leading-tight">
+                                          {cit.datosPersonales?.nombreCompleto.toUpperCase()}
+                                        </span>
+                                      )}
+                                      <span className="font-mono text-[10px] font-bold text-slate-400 mt-0.5">
+                                        {(cit.datosPersonales?.tipoIdentificacion || 'Cedula') === 'Cedula' ? 'Cédula' : cit.datosPersonales?.tipoIdentificacion === 'CedulaJuvenil' ? 'Céd. Juvenil' : cit.datosPersonales?.tipoIdentificacion === 'Extranjero' ? 'Céd. Ext' : 'Pasaporte'}: <span className="text-blue-300">{cit.datosPersonales?.identificacion || 'N/D'}</span>
+                                      </span>
+                                      <span className="text-[10px] text-slate-450 leading-tight">
+                                        Tel: {cit.datosPersonales?.telefono || 'N/D'}
+                                      </span>
+                                      {cit.datosPersonales?.numeroSeguimiento && (
+                                        <span className="text-[10px] text-amber-400 font-mono font-bold leading-tight mt-0.5">
+                                          Seg: {cit.datosPersonales?.numeroSeguimiento}
+                                        </span>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </td>
 
-                            {/* SERVICES info */}
-                            <td className="p-3 max-w-[150px] truncate" title={getSubServicioName(cit.subServicioId)}>
-                              <div className="flex flex-col">
-                                <span className="text-[11px] font-bold text-slate-300">
-                                  {getSubServicioName(cit.subServicioId)}
+                              {/* SERVICES info */}
+                              <td className="p-3 max-w-[150px] truncate" title={getSubServicioName(cit.subServicioId)}>
+                                <div className="flex flex-col">
+                                  <span className="text-[11px] font-bold text-slate-300">
+                                    {getSubServicioName(cit.subServicioId)}
+                                  </span>
+                                  <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">
+                                    {getCategoriaName(cit.servicioCategoria)}
+                                  </span>
+                                </div>
+                              </td>
+
+                              {/* LOCATION / SUCURSAL */}
+                              <td className="p-3">
+                                <span className="text-slate-350 text-[11px] font-medium block max-w-[120px] truncate" title={getSucursalName(cit.sucursalId)}>
+                                  {getSucursalName(cit.sucursalId)}
                                 </span>
-                                <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">
-                                  {getCategoriaName(cit.servicioCategoria)}
+                              </td>
+
+                              {/* DATE TIME STAMP */}
+                              <td className="p-3">
+                                <div className="flex flex-col text-[11px]">
+                                  <span className="font-mono text-slate-300 flex items-center gap-1">
+                                    <Calendar className="w-3 h-3 text-slate-450" />
+                                    {cit.fecha}
+                                  </span>
+                                  <span className="font-mono text-slate-400 font-medium flex items-center gap-1">
+                                    <Clock className="w-3 h-3 text-slate-450" />
+                                    {cit.hora}
+                                  </span>
+                                </div>
+                              </td>
+
+                              {/* STATUS BADGE */}
+                              <td className="p-3 text-center">
+                                <span className={`text-[10px] font-black uppercase inline-block px-2 py-0.5 rounded tracking-wider shadow-sm border ${
+                                  cit.estado === 'confirmada'
+                                    ? 'bg-emerald-950/70 text-emerald-400 border-emerald-900/60'
+                                    : cit.estado === 'asistire'
+                                      ? 'bg-blue-950/80 text-blue-400 border-blue-900/60'
+                                      : cit.estado === 'no_asistire'
+                                        ? 'bg-orange-950/70 text-orange-400 border-orange-900/60'
+                                        : 'bg-red-950/70 text-red-400 border-red-900/60'
+                                }`}>
+                                  {cit.estado === 'confirmada' 
+                                    ? 'Reservada' 
+                                    : cit.estado === 'asistire' 
+                                      ? '✓ Asistirá' 
+                                      : cit.estado === 'no_asistire' 
+                                        ? '✗ No Asistirá' 
+                                        : 'Cancelada'}
                                 </span>
-                              </div>
-                            </td>
+                              </td>
 
-                            {/* LOCATION / SUCURSAL */}
-                            <td className="p-3">
-                              <span className="text-slate-350 text-[11px] font-medium block max-w-[120px] truncate" title={getSucursalName(cit.sucursalId)}>
-                                {getSucursalName(cit.sucursalId)}
-                              </span>
-                            </td>
-
-                            {/* DATE TIME STAMP */}
-                            <td className="p-3">
-                              <div className="flex flex-col text-[11px]">
-                                <span className="font-mono text-slate-300 flex items-center gap-1">
-                                  <Calendar className="w-3 h-3 text-slate-450" />
-                                  {cit.fecha}
-                                </span>
-                                <span className="font-mono text-slate-400 font-medium flex items-center gap-1">
-                                  <Clock className="w-3 h-3 text-slate-450" />
-                                  {cit.hora}
-                                </span>
-                              </div>
-                            </td>
-
-                            {/* STATUS BADGE */}
-                            <td className="p-3 text-center">
-                              <span className={`text-[10px] font-black uppercase inline-block px-2 py-0.5 rounded tracking-wider shadow-sm border ${
-                                cit.estado === 'confirmada'
-                                  ? 'bg-emerald-950/70 text-emerald-400 border-emerald-900/60'
-                                  : cit.estado === 'asistire'
-                                    ? 'bg-blue-950/80 text-blue-400 border-blue-900/60'
-                                    : cit.estado === 'no_asistire'
-                                      ? 'bg-orange-950/70 text-orange-400 border-orange-900/60'
-                                      : 'bg-red-950/70 text-red-400 border-red-900/60'
-                              }`}>
-                                {cit.estado === 'confirmada' 
-                                  ? 'Reservada' 
-                                  : cit.estado === 'asistire' 
-                                    ? '✓ Asistirá' 
-                                    : cit.estado === 'no_asistire' 
-                                      ? '✗ No Asistirá' 
-                                      : 'Cancelada'}
-                              </span>
-                            </td>
-
-                            {/* INDIVIDUAL ACTIONS BLOCK */}
-                            <td className="p-3 text-right">
-                              <div className="flex items-center justify-end gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => openEditDialog(cit)}
-                                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 p-1 rounded transition"
-                                  title="Editar parámetros de la cita"
-                                >
-                                  <Edit3 className="w-3.5 h-3.5" />
-                                </button>
-
-                                {currentRole === 'super' ? (
+                              {/* INDIVIDUAL ACTIONS BLOCK */}
+                              <td className="p-3 text-right">
+                                <div className="flex items-center justify-end gap-1.5">
                                   <button
                                     type="button"
-                                    onClick={() => handleDeleteCita(cit.id)}
-                                    className="bg-red-950 hover:bg-red-900 text-red-400 border border-red-900/60 p-1 rounded transition"
-                                    title="Eliminar permanentemente del registro"
+                                    onClick={() => openEditDialog(cit)}
+                                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 p-1 rounded transition"
+                                    title="Editar parámetros de la cita"
                                   >
-                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <Edit3 className="w-3.5 h-3.5" />
                                   </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled
-                                    className="bg-slate-850 text-slate-600 border border-slate-800 p-1 rounded cursor-not-allowed opacity-40"
-                                    title="Requiere perfil SUPER ADMIN para borrar del historial"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))
+
+                                  {currentRole === 'super' ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteCita(cit.id)}
+                                      className="bg-red-950 hover:bg-red-900 text-red-400 border border-red-900/60 p-1 rounded transition"
+                                      title="Eliminar permanentemente del registro"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      className="bg-slate-850 text-slate-600 border border-slate-800 p-1 rounded cursor-not-allowed opacity-40"
+                                      title="Requiere perfil SUPER ADMIN para borrar del historial"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                          {appointmentEndIndex < filteredCitas.length && (
+                            <tr style={{ height: `${(filteredCitas.length - appointmentEndIndex) * appointmentRowHeight}px` }}>
+                              <td colSpan={8} className="p-0 border-0" style={{ height: `${(filteredCitas.length - appointmentEndIndex) * appointmentRowHeight}px` }} />
+                            </tr>
+                          )}
+                        </>
                       )}
                     </tbody>
                   </table>
@@ -3429,6 +3595,161 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                       </div>
                     </div>
 
+                    {/* EXTRANJERIA TICKET KIOSCO URL CUSTOMIZATION */}
+                    <div className="flex flex-col gap-2.5 bg-slate-900 p-3 rounded border border-slate-800">
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-extrabold uppercase text-slate-250 block">URL Sistema de Tickets Oficial de Caja / Kiosco (Extranjería)</span>
+                          {currentRole === 'super' && (
+                            <button
+                              type="button"
+                              onClick={() => setExtranjeriaTicketKioscoUrl('https://test.te.gob.pa:8443/kiosco')}
+                              className="text-[9.5px] text-amber-500 hover:text-amber-400 font-bold underline cursor-pointer"
+                              title="Restablecer enlace por defecto"
+                            >
+                              Restablecer por defecto
+                            </button>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-450">Dirección web oficial donde los ciudadanos obtienen su ticket de caja para recaudación tributaria de extranjería</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          disabled={currentRole !== 'super'}
+                          value={extranjeriaTicketKioscoUrl}
+                          onChange={(e) => setExtranjeriaTicketKioscoUrl(e.target.value)}
+                          placeholder="Ej: https://test.te.gob.pa:8443/kiosco"
+                          className="flex-1 bg-slate-950 border border-slate-800 text-slate-200 p-2 rounded text-xs px-3 focus:outline-none focus:border-amber-500 font-mono disabled:opacity-50"
+                        />
+                        {currentRole === 'super' && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const cleanUrl = (extranjeriaTicketKioscoUrl && !extranjeriaTicketKioscoUrl.includes('sistema-de-ticket.vercel.app'))
+                                  ? extranjeriaTicketKioscoUrl.trim()
+                                  : 'https://test.te.gob.pa:8443/kiosco';
+                                setExtranjeriaTicketKioscoUrl(cleanUrl);
+                                localStorage.setItem('extranjeria_ticket_kiosco_url', cleanUrl);
+                                const token = sessionStorage.getItem('admin_token') || '';
+                                await fetch('/api/extranjeria/config', {
+                                  method: 'POST',
+                                  headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${token}`
+                                  },
+                                  body: JSON.stringify({ ticketKioscoUrl: cleanUrl })
+                                });
+                                alert('El enlace oficial del Sistema de Tickets / Kiosco de Extranjería ha sido guardado exitosamente.');
+                              } catch (err) {
+                                alert('Error al guardar el enlace del kiosco.');
+                              }
+                            }}
+                            className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[11px] uppercase tracking-wider px-4 py-2 rounded transition shrink-0 cursor-pointer"
+                          >
+                            Guardar
+                          </button>
+                        )}
+                      </div>
+                      <div className="text-[9.5px] text-amber-400 bg-amber-950/20 p-2 rounded border border-amber-900/20 font-mono flex items-center justify-between">
+                        <span>Enlace activo: <strong>{extranjeriaTicketKioscoUrl}</strong></span>
+                        <a 
+                          href={extranjeriaTicketKioscoUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="text-amber-300 hover:text-amber-200 font-bold inline-flex items-center gap-1 underline ml-2 shrink-0"
+                          referrerPolicy="no-referrer"
+                        >
+                          <span>Probar Kiosco</span>
+                          <ExternalLink className="w-2.5 h-2.5" />
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* EXTRANJERIA CASILLEROS DE ATENCIÓN Y CONTROL HORARIOS & CUPOS */}
+                    <div className="flex flex-col gap-3 bg-slate-900 p-4 rounded-lg border border-slate-800">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="p-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                            <Building2 className="w-4 h-4" />
+                          </span>
+                          <div>
+                            <span className="text-[11px] font-black uppercase text-white tracking-wide block">
+                              Extranjería: Casilleros & Horarios de Atención
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              Gestión de cubículos de atención, cupos por slot y jornada oficial
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExtranjeriaTab('configuracion');
+                            setActiveSubTab('extranjeria');
+                          }}
+                          className="bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black uppercase px-3 py-1.5 rounded transition flex items-center gap-1.5 cursor-pointer shadow-sm shrink-0 self-start sm:self-auto"
+                        >
+                          <Settings className="w-3 h-3" />
+                          <span>Gestionar en Extranjería ➜</span>
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div className="bg-slate-950 p-3 rounded border border-slate-850 space-y-1 text-left">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-bold text-amber-400 flex items-center gap-1.5">
+                              <Building2 className="w-3.5 h-3.5" />
+                              <span>Casilleros de Atención</span>
+                            </span>
+                            <span className="text-[9px] font-mono bg-emerald-950/60 border border-emerald-500/40 text-emerald-400 px-1.5 py-0.5 rounded font-black">
+                              8 Puestos
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 leading-relaxed">
+                            4 puestos fijos asignados y 4 casilleros de reserva para absorber alta demanda.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setExtranjeriaTab('configuracion');
+                              setActiveSubTab('extranjeria');
+                            }}
+                            className="text-[9.5px] text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer pt-0.5 block"
+                          >
+                            Configurar casilleros activos ➜
+                          </button>
+                        </div>
+
+                        <div className="bg-slate-950 p-3 rounded border border-slate-850 space-y-1 text-left">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-bold text-blue-400 flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>Control Horarios & Cupos</span>
+                            </span>
+                            <span className="text-[9px] font-mono bg-blue-950/60 border border-blue-500/40 text-blue-300 px-1.5 py-0.5 rounded font-black">
+                              56 Cupos
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 leading-relaxed">
+                            Jornada oficial regulada de 07:00 AM a 01:45 PM cada 15 minutos.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setExtranjeriaTab('configuracion');
+                              setActiveSubTab('extranjeria');
+                            }}
+                            className="text-[9.5px] text-blue-400 hover:text-blue-300 font-bold underline cursor-pointer pt-0.5 block"
+                          >
+                            Modificar cupos y tiempos ➜
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
 
                     {/* COLOR THEME PERSONALIZATION FOR EYE PROTECTION */}
                     <div className="flex flex-col gap-3 bg-slate-900/60 p-4 rounded-lg border border-slate-800">
@@ -3582,7 +3903,9 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                       <Clock className="w-4 h-4 text-blue-400" />
                       <span>Sedes Regionales y Horarios Operativos</span>
                     </h3>
-                    <p className="text-[11px] text-slate-400">Actualice la jornada y horas de atención de las Direcciones y Comarcas Oficiales.</p>
+                    <p className="text-[11px] text-slate-400">
+                      Actualice la jornada, horas de atención o configure cuáles sedes admiten citas a nivel nacional (exclusivo para Super Admin).
+                    </p>
                   </div>
                   <button
                     onClick={handleResetBranches}
@@ -3612,6 +3935,44 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                       </div>
 
                       <div className="border-t border-slate-900 pt-3 flex flex-col gap-2.5">
+                        {/* Control de Citas Nacionales para Super Admin */}
+                        {currentRole === 'super' && (
+                          <div className="bg-slate-900/60 p-2 rounded border border-slate-850 flex items-center justify-between gap-2 text-left">
+                            <div className="space-y-0.5">
+                              <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 block">Citas Nacionales</span>
+                              <span className={`text-[9.5px] font-black ${suc.acceptsNationalAppointments !== false ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {suc.acceptsNationalAppointments !== false ? '🟢 ADMITE CITAS' : '🔴 BLOQUEADA'}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              id={`toggle-nacional-${suc.id}`}
+                              onClick={() => {
+                                const updated = mutableSucursales.map(s => {
+                                  if (s.id === suc.id) {
+                                    return { 
+                                      ...s, 
+                                      acceptsNationalAppointments: s.acceptsNationalAppointments === false ? true : false 
+                                    };
+                                  }
+                                  return s;
+                                });
+                                setMutableSucursales(updated);
+                                saveSucursalMutation(updated);
+                              }}
+                              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                suc.acceptsNationalAppointments !== false ? 'bg-emerald-500' : 'bg-slate-800'
+                              }`}
+                            >
+                              <span
+                                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                  suc.acceptsNationalAppointments !== false ? 'translate-x-4' : 'translate-x-0'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        )}
+
                         <div className="bg-slate-900 p-2 rounded border border-slate-850/80">
                           <span className="text-[9px] font-black uppercase tracking-wider text-slate-500 block">Horario de Atención</span>
                           <span className="text-xs font-mono font-bold text-emerald-400 block mt-0.5">🕒 {suc.horario}</span>
@@ -3873,7 +4234,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                               <option value="registro_civil">Registro Civil</option>
                               <option value="extranjeria">Trámites de Extranjería</option>
                               <option value="organizacion_electoral">Organización Electoral</option>
-                              <option value="panamenos_extranjero">Trámite de Panameños en el Extranjero</option>
+                              <option value="panamenos_extranjero">Pasado de edad</option>
                             </select>
                           </div>
                         )}
@@ -4073,10 +4434,17 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
               </div>
             )}
 
+            {/* TAB CONTENT: IMPORTAR CITAS CSV */}
+            {activeSubTab === 'importar_csv' && currentRole === 'super' && (
+              <div className="space-y-6 animate-fade-in font-sans">
+                <CsvImporter citasList={citas} onUpdateCitas={onUpdateCitas} />
+              </div>
+            )}
+
             {/* TAB CONTENT: EXTRANJERIA (Carga CSV y Control Estatus Migratorio) */}
             {activeSubTab === 'extranjeria' && (
               <div className="space-y-6 animate-fade-in font-sans">
-                <ExtranjeriaController currentRole={currentRole} />
+                <ExtranjeriaController currentRole={currentRole} initialSupervisorTab={extranjeriaTab} />
               </div>
             )}
 
@@ -4087,6 +4455,15 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                 onUpdateCitas={onUpdateCitas} 
                 currentRole={currentRole}
                 activeUsername={username}
+              />
+            )}
+
+            {/* TAB CONTENT: SUPERVISION DE TRIADA Y FOTOGRAFIA */}
+            {activeSubTab === 'triada' && (
+              <TriadaSupervisorController 
+                citas={citas} 
+                onUpdateCitas={onUpdateCitas} 
+                officeFilter="Todos"
               />
             )}
 
@@ -4199,7 +4576,11 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                           <option value="pasado_edad_admin">📋 Operador Seguimiento VID</option>
                           <option value="pasado_edad">🛡️ Administrador VID</option>
 
-                          {/* 5. Agentes de Atención (Ventanillas/Módulos) */}
+                          {/* 5. Tríada y Fotografía */}
+                          <option value="triada_supervisor">👑 Supervisor de Tríada / Fotografía Biométrica</option>
+                          <option value="caja_supervisor">👑 Supervisor de Caja / Pagos y Trámites</option>
+
+                          {/* 6. Agentes de Atención (Ventanillas/Módulos) */}
                           <option value="agent_caja">💵 Agente de Caja (Cédula/Pago)</option>
                           <option value="agent_triada">📸 Agente de Tríada (Biometría/Foto)</option>
                           <option value="agent_registro_civil">📑 Agente de Registro Civil (Eventos Vitales)</option>
@@ -4396,7 +4777,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
 
       {/* FOOTER BAR FOR CREDIT/SPECS */}
       <div className="bg-slate-950 p-2.5 border-t border-slate-850 text-center text-[10px] text-slate-500 font-mono tracking-wide leading-none flex flex-wrap gap-2 justify-center">
-        <span>Agendate 1.1.0</span>
+        <span>Agendate V5.15-TEST</span>
       </div>
 
       {/* EDIT MODAL OVERLAY */}

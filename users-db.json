@@ -1,5 +1,84 @@
 [
   {
+    "username": "login",
+    "password": "login",
+    "role": "super",
+    "nombre": "Usuario Inicial (Cambio Requerido)",
+    "sucursalId": "OFF-1",
+    "fechaCreacion": "2026-08-07T08:00:00Z",
+    "mustChangePassword": true
+  },
+  {
+    "username": "superadmin",
+    "password": "superadmin",
+    "role": "super",
+    "nombre": "Administrador Central",
+    "sucursalId": "OFF-1",
+    "fechaCreacion": "2026-08-01T08:00:00Z"
+  },
+  {
+    "username": "rsanchez",
+    "password": "rsanchez",
+    "role": "super",
+    "nombre": "Ricardo Sánchez (Supervisor Sede Ancón)",
+    "sucursalId": "OFF-1",
+    "fechaCreacion": "2026-08-01T08:00:00Z"
+  },
+  {
+    "username": "amora",
+    "password": "amora",
+    "role": "super",
+    "nombre": "Ana María Mora (Supervisor Regional Bocas)",
+    "sucursalId": "OFF-2",
+    "fechaCreacion": "2026-08-01T08:00:00Z"
+  },
+  {
+    "username": "mcruz",
+    "password": "mcruz",
+    "role": "agent_caja",
+    "nombre": "Mateo Cruz (Cajero Sede Ancón)",
+    "sucursalId": "OFF-1",
+    "fechaCreacion": "2026-08-01T08:00:00Z"
+  },
+  {
+    "username": "jgutierrez",
+    "password": "jgutierrez",
+    "role": "agent_triada",
+    "nombre": "Julia Gutiérrez (Tríada Sede Ancón)",
+    "sucursalId": "OFF-1",
+    "fechaCreacion": "2026-08-01T08:00:00Z"
+  },
+  {
+    "username": "frios",
+    "password": "frios",
+    "role": "agent_caja",
+    "nombre": "Felipe Ríos (Cajero Bocas del Toro)",
+    "sucursalId": "OFF-2",
+    "fechaCreacion": "2026-08-01T08:00:00Z"
+  },
+  {
+    "username": "spadilla",
+    "password": "spadilla",
+    "role": "agent_triada",
+    "nombre": "Silvia Padilla (Tríada Bocas del Toro)",
+    "sucursalId": "OFF-2",
+    "fechaCreacion": "2026-08-01T08:00:00Z"
+  },
+  {
+    "username": "oscargave3003",
+    "password": "Value1234",
+    "role": "super",
+    "nombre": "Oscar Super Admin",
+    "fechaCreacion": "2026-06-05T18:11:00Z"
+  },
+  {
+    "username": "oscargave3003@gmail.com",
+    "password": "Value1234",
+    "role": "super",
+    "nombre": "Oscar Super Admin (Email)",
+    "fechaCreacion": "2026-06-05T18:11:00Z"
+  },
+  {
     "username": "adminmini",
     "password": "admin1234",
     "role": "sencillo",

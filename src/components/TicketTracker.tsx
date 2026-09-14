@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Search,
   Smartphone,
@@ -32,6 +33,7 @@ import {
 import { Ticket, Cubicle, TicketStatus, TicketPhase, ServiceType, SERVICES_CONFIG, OFFICES_CONFIG, Office } from "../types";
 import { triggerHapticVibration, isVibrationSupported, playCallingChime } from "../utils/audio";
 import { getProcedureName } from "./WelcomeKiosk";
+import { usePushNotifications } from "../hooks/usePushNotifications";
 
 interface TicketTrackerProps {
   tickets: Ticket[];
@@ -54,11 +56,16 @@ export default function TicketTracker({
   officeCubicles = {},
   onSelectOffice
 }: TicketTrackerProps) {
+  const { ticketId: routeTicketId } = useParams<{ ticketId?: string }>();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  const push = usePushNotifications();
+
   // Active regional office state
   const [activeOfficeId, setActiveOfficeId] = useState<string>(() => {
     try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const officeParam = urlParams.get("office");
+      const officeParam = searchParams.get("office") || new URLSearchParams(window.location.search).get("office");
       if (officeParam && OFFICES_CONFIG.some((o) => o.id === officeParam)) {
         return officeParam;
       }
@@ -72,15 +79,27 @@ export default function TicketTracker({
     return currentOfficeId || "OFF-1";
   });
 
+  const effectiveInitialTicket = routeTicketId || initialTicketCode || searchParams.get("ticket") || "";
+
   const [isOfficeSelectorOpen, setIsOfficeSelectorOpen] = useState(false);
   const [crossOfficeFoundMsg, setCrossOfficeFoundMsg] = useState<string | null>(null);
 
-  const [searchInput, setSearchInput] = useState(initialTicketCode);
+  const [searchInput, setSearchInput] = useState(effectiveInitialTicket);
   const [selectedTicketCode, setSelectedTicketCode] = useState<string>(() => {
-    if (initialTicketCode) return initialTicketCode.trim().toUpperCase();
+    if (effectiveInitialTicket) return effectiveInitialTicket.trim().toUpperCase();
     const saved = localStorage.getItem("last_tracked_ticket_code");
     return saved ? saved.trim().toUpperCase() : "";
   });
+
+  // Sync route param or searchParam changes
+  useEffect(() => {
+    if (routeTicketId && routeTicketId.trim().toUpperCase() !== selectedTicketCode) {
+      const code = routeTicketId.trim().toUpperCase();
+      setSelectedTicketCode(code);
+      setSearchInput(code);
+    }
+  }, [routeTicketId]);
+
 
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
@@ -339,17 +358,19 @@ export default function TicketTracker({
     const wasNotCalling = prevTicketStatusRef.current !== TicketStatus.CALLING;
     const cubicleChanged = prevAssignedCubicleRef.current !== trackedTicket.assignedCubicleId;
 
-    if (isNowCalling && (wasNotCalling || cubicleChanged)) {
-      // Trigger mobile vibration!
-      if (vibrationEnabled) {
-        setIsVibratingNow(true);
-        triggerHapticVibration([500, 200, 500, 200, 800, 300, 800]);
-        setTimeout(() => setIsVibratingNow(false), 3000);
-      }
+    if (isNowCalling) {
+      if (wasNotCalling || cubicleChanged) {
+        // Trigger mobile vibration!
+        if (vibrationEnabled) {
+          setIsVibratingNow(true);
+          triggerHapticVibration([500, 200, 500, 200, 800, 300, 800]);
+          setTimeout(() => setIsVibratingNow(false), 3000);
+        }
 
-      // Play chime sound
-      if (soundEnabled) {
-        playCallingChime();
+        // Play chime sound
+        if (soundEnabled) {
+          playCallingChime();
+        }
       }
     }
 
@@ -378,7 +399,10 @@ export default function TicketTracker({
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchInput.trim()) {
-      setSelectedTicketCode(searchInput.trim().toUpperCase());
+      const code = searchInput.trim().toUpperCase();
+      setSelectedTicketCode(code);
+      const query = activeOfficeId ? `?office=${encodeURIComponent(activeOfficeId)}` : "";
+      navigate(`/seguimiento/${encodeURIComponent(code)}${query}`, { replace: true });
     }
   };
 
@@ -386,20 +410,15 @@ export default function TicketTracker({
     setSelectedTicketCode("");
     setSearchInput("");
     localStorage.removeItem("last_tracked_ticket_code");
-    try {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("ticket");
-      const newQuery = url.searchParams.toString();
-      window.history.replaceState({}, "", url.pathname + (newQuery ? `?${newQuery}` : ""));
-    } catch (e) {
-      console.warn("No se pudo limpiar URL:", e);
-    }
+    const query = activeOfficeId ? `?office=${encodeURIComponent(activeOfficeId)}` : "";
+    navigate(`/seguimiento${query}`, { replace: true });
   };
 
   const handleShareTicket = () => {
     if (!trackedTicket) return;
-    const origin = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
-    const shareUrl = `${origin}?ticket=${trackedTicket.numberCode}&office=${activeOfficeId}`;
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const officeQuery = activeOfficeId ? `?office=${encodeURIComponent(activeOfficeId)}` : "";
+    const shareUrl = `${origin}/seguimiento/${encodeURIComponent(trackedTicket.numberCode)}${officeQuery}`;
     if (navigator.clipboard) {
       navigator.clipboard.writeText(shareUrl);
       setCopiedLink(true);
@@ -656,6 +675,26 @@ export default function TicketTracker({
       {/* TRACKED TICKET DISPLAY */}
       {trackedTicket ? (
         <div className="space-y-6">
+          {/* Urgent Full-screen Mobile Calling Alert Banner */}
+          {trackedTicket.status === TicketStatus.CALLING && (
+            <div className="bg-rose-600 text-white p-5 rounded-3xl shadow-2xl border-4 border-amber-300 animate-pulse flex flex-col sm:flex-row items-center gap-4 text-center sm:text-left">
+              <div className="w-14 h-14 bg-amber-400 text-slate-950 rounded-2xl flex items-center justify-center shrink-0 shadow-lg animate-bounce">
+                <Volume2 className="w-8 h-8" />
+              </div>
+              <div className="space-y-1 flex-1">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-amber-400 text-slate-950 rounded-full text-[10px] font-black uppercase tracking-wider">
+                  ¡ES SU TURNO DE ATENCIÓN!
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black uppercase text-white leading-tight">
+                  Diríjase a: {assignedCubicle ? assignedCubicle.name : "su puesto asignado"}
+                </h3>
+                <p className="text-xs text-rose-100 font-bold">
+                  El operador {assignedCubicle?.agentName ? `(${assignedCubicle.agentName})` : ""} le está llamando en este momento.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Main Status & Destination Guidance Card */}
           <div
             className={`rounded-3xl p-6 sm:p-8 border-2 transition-all duration-300 shadow-lg relative overflow-hidden ${
@@ -695,10 +734,33 @@ export default function TicketTracker({
                   onClick={handleShareTicket}
                   className="px-3 py-1.5 bg-black/10 hover:bg-black/20 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition cursor-pointer"
                   title="Copiar enlace para seguir este ticket"
+                  disabled={push.isLoading}
                 >
                   <Share2 className="w-3 h-3" />
                   <span>{copiedLink ? "¡Enlace Copiado!" : "Compartir"}</span>
                 </button>
+
+                {push.isSupported && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (push.subscription) {
+                        push.unsubscribe();
+                      } else {
+                        push.subscribe(undefined, trackedTicket.id);
+                      }
+                    }}
+                    disabled={push.isLoading}
+                    className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition cursor-pointer shadow-2xs ${
+                      push.subscription 
+                        ? "bg-emerald-500/20 text-emerald-950 border border-emerald-500/40 hover:bg-emerald-500/30"
+                        : "bg-blue-500/20 text-blue-950 border border-blue-500/40 hover:bg-blue-500/30"
+                    }`}
+                  >
+                    <Bell className={`w-3 h-3 ${push.subscription ? "text-emerald-700" : "text-blue-700"}`} />
+                    <span>{push.subscription ? "Alertas Activadas" : "Activar Alertas"}</span>
+                  </button>
+                )}
 
                 <button
                   id="btn-clear-tracked-ticket"
@@ -797,64 +859,36 @@ export default function TicketTracker({
                     <div>
                       <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase leading-tight">
                         {trackedTicket.currentPhase === TicketPhase.CAJA
-                          ? `Área de Cajas (${regionalModuleBreakdown.cajaAllNames})`
-                          : `Área de Tríada y Fotografía (${regionalModuleBreakdown.triadaAllNames})`}
+                          ? "Área de Cajas"
+                          : "Área de Tríada y Fotografía"}
                       </h3>
                       <p className="text-xs font-medium text-slate-600 mt-1">
                         {trackedTicket.currentPhase === TicketPhase.CAJA
-                          ? "Al ser llamado pasará a la ventanilla de Caja asignada para cobro y revisión inicial."
-                          : "Al ser llamado pasará al módulo correspondiente para captura biométrica, toma de foto y firma."}
+                          ? "En espera de asignación de ventanilla de caja."
+                          : "En espera de asignación de módulo de tríada / fotografía."}
                       </p>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Instructions on where to walk */}
-              <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl text-xs space-y-2 font-medium text-slate-700">
-                <div className="flex items-center gap-2 font-bold text-[#003087] uppercase text-[11px]">
-                  <Navigation className="w-4 h-4 text-amber-500" />
-                  <span>Instrucciones de Orientación ({activeOffice.name}):</span>
+              {/* Assigned Cubicle Detail when called or attending */}
+              {assignedCubicle && (
+                <div className="bg-blue-50 border border-blue-200 p-4 rounded-2xl text-xs space-y-1.5 font-medium text-slate-800">
+                  <div className="flex items-center gap-2 font-bold text-[#003087] uppercase text-[11px]">
+                    <Navigation className="w-4 h-4 text-amber-500" />
+                    <span>Lugar Asignado: {assignedCubicle.name}</span>
+                  </div>
+                  <p className="text-slate-700">
+                    Atendido por: <strong>{assignedCubicle.agentName}</strong> ({activeOffice.name})
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    {trackedTicket.currentPhase === TicketPhase.CAJA
+                      ? "Presente sus documentos y comprobante de pago en la ventanilla asignada."
+                      : "Pase a la estación para su toma de fotografía, firma y huellas dactilares."}
+                  </p>
                 </div>
-                {trackedTicket.currentPhase === TicketPhase.CAJA ? (
-                  <div className="space-y-1.5 leading-relaxed">
-                    <p>
-                      💵 <strong>Ventanillas de Caja:</strong> {regionalModuleBreakdown.cajaAllNames}.
-                    </p>
-                    {regionalModuleBreakdown.cajaPrefNames !== "Ninguno" && (
-                      <p className="text-purple-900 font-bold">
-                        ♿ <strong>Módulos Preferenciales:</strong> {regionalModuleBreakdown.cajaPrefNames}.
-                      </p>
-                    )}
-                    {regionalModuleBreakdown.cajaRegNames !== "Ninguno" && (
-                      <p className="text-slate-600">
-                        📋 <strong>Módulos Regulares:</strong> {regionalModuleBreakdown.cajaRegNames}.
-                      </p>
-                    )}
-                    {trackedTicket.isAppointment && (
-                      <p className="text-blue-800 font-bold">
-                        📅 <strong>Atención de Citas:</strong> Su turno agendado es priorizado en sala.
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-1.5 leading-relaxed">
-                    <p>
-                      📷 <strong>Módulos de Tríada y Fotografía:</strong> {regionalModuleBreakdown.triadaAllNames}.
-                    </p>
-                    {regionalModuleBreakdown.triadaPrefNames !== "Ninguno" && (
-                      <p className="text-purple-900 font-bold">
-                        ♿ <strong>Módulos Preferenciales:</strong> {regionalModuleBreakdown.triadaPrefNames}.
-                      </p>
-                    )}
-                    {regionalModuleBreakdown.triadaRegNames !== "Ninguno" && (
-                      <p className="text-slate-600">
-                        📋 <strong>Módulos Regulares:</strong> {regionalModuleBreakdown.triadaRegNames}.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
+              )}
             </div>
 
             {/* Queue position & wait time if still waiting */}
@@ -929,7 +963,11 @@ export default function TicketTracker({
                 </div>
                 <div>
                   <h5 className="text-xs font-black uppercase text-slate-900">2. Caja y Cobro</h5>
-                  <p className="text-[11px] text-slate-600 font-medium">{regionalModuleBreakdown.cajaAllNames}</p>
+                  <p className="text-[11px] text-slate-600 font-medium">
+                    {trackedTicket.currentPhase === TicketPhase.CAJA && assignedCubicle 
+                      ? assignedCubicle.name 
+                      : "Ventanilla de Cobro"}
+                  </p>
                 </div>
               </div>
 
@@ -956,7 +994,11 @@ export default function TicketTracker({
                 </div>
                 <div>
                   <h5 className="text-xs font-black uppercase text-slate-900">3. Tríada y Foto</h5>
-                  <p className="text-[11px] text-slate-600 font-medium">{regionalModuleBreakdown.triadaAllNames}</p>
+                  <p className="text-[11px] text-slate-600 font-medium">
+                    {trackedTicket.currentPhase === TicketPhase.TRIADA && assignedCubicle 
+                      ? assignedCubicle.name 
+                      : "Módulo Biométrico"}
+                  </p>
                 </div>
               </div>
             </div>
@@ -988,90 +1030,6 @@ export default function TicketTracker({
           </div>
         </div>
       ) : null}
-
-      {/* DIRECTORY & CUBICLE REFERENCE MAP */}
-      <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm space-y-5">
-        <div className="space-y-1 border-b border-slate-100 pb-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-black uppercase tracking-wider text-slate-900 flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-[#003087]" />
-              <span>Guía de Ventanillas y Módulos — {activeOffice.name}</span>
-            </h3>
-            <span className="px-2.5 py-1 bg-blue-50 text-[#003087] border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-wider">
-              {regionalModuleBreakdown.cajaCount + regionalModuleBreakdown.triadaCount} Módulos Habilitados
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 font-medium">
-            Distribución oficial de módulos y ventanillas activas de atención.
-          </p>
-        </div>
-
-        {/* Priority & Appointment Banner */}
-        <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-2 text-xs text-amber-900">
-          <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-          <p className="font-medium">
-            <strong>Política de Prioridad:</strong> Las citas agendadas desde el portal web y los turnos de atención preferencial (embarazadas, personas de la tercera edad y personas con discapacidad) tienen prioridad en la cola de atención.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-          {/* Box 1: Cajas */}
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 font-black text-[#003087] uppercase text-xs">
-                <DollarSign className="w-4 h-4 text-emerald-600" />
-                <span>Área de Cajas</span>
-              </div>
-              <span className="text-[10px] font-bold text-slate-500">
-                {regionalModuleBreakdown.cajaCount} Módulos
-              </span>
-            </div>
-            <ul className="space-y-1.5 text-slate-600 font-medium pl-1">
-              {regionalModuleBreakdown.cajaPrefNames !== "Ninguno" && (
-                <li>
-                  • <strong className="text-purple-900">Preferenciales:</strong> {regionalModuleBreakdown.cajaPrefNames}.
-                </li>
-              )}
-              {regionalModuleBreakdown.cajaRegNames !== "Ninguno" && (
-                <li>
-                  • <strong className="text-slate-800">Regulares:</strong> {regionalModuleBreakdown.cajaRegNames}.
-                </li>
-              )}
-              <li className="text-[11px] text-slate-500 pt-1">
-                Pago de cédulas por primera vez, duplicados, certificaciones y validación previa.
-              </li>
-            </ul>
-          </div>
-
-          {/* Box 2: Tríada y Fotografía */}
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 font-black text-[#003087] uppercase text-xs">
-                <Camera className="w-4 h-4 text-cyan-600" />
-                <span>Tríada y Fotografía</span>
-              </div>
-              <span className="text-[10px] font-bold text-slate-500">
-                {regionalModuleBreakdown.triadaCount} Módulos
-              </span>
-            </div>
-            <ul className="space-y-1.5 text-slate-600 font-medium pl-1">
-              {regionalModuleBreakdown.triadaPrefNames !== "Ninguno" && (
-                <li>
-                  • <strong className="text-purple-900">Preferenciales:</strong> {regionalModuleBreakdown.triadaPrefNames}.
-                </li>
-              )}
-              {regionalModuleBreakdown.triadaRegNames !== "Ninguno" && (
-                <li>
-                  • <strong className="text-slate-800">Regulares:</strong> {regionalModuleBreakdown.triadaRegNames}.
-                </li>
-              )}
-              <li className="text-[11px] text-slate-500 pt-1">
-                Toma de fotografía oficial, captura biométrica de huellas y firma digital.
-              </li>
-            </ul>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

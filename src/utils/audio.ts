@@ -5,8 +5,31 @@
 
 // Utilidades para efectos de audio y síntesis de voz en español
 
+let activeAudioCtx: AudioContext | null = null;
+let currentCallSessionToken = 0;
+
 /**
- * Produce un timbre de alerta agradable usando la Web Audio API,
+ * Detiene inmediatamente cualquier audio, timbre o locución de voz en curso y limpia la cola.
+ */
+export function stopAllAudio(): void {
+  currentCallSessionToken++;
+  if (typeof window !== "undefined") {
+    if ("speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) {}
+    }
+  }
+  if (activeAudioCtx) {
+    try {
+      activeAudioCtx.close().catch(() => {});
+    } catch (e) {}
+    activeAudioCtx = null;
+  }
+}
+
+/**
+ * Produce un timbre de alerta agradable y ágil usando la Web Audio API,
  * imitando los timbres de llamada de oficinas y bancos.
  */
 export function playCallingChime(): Promise<void> {
@@ -19,11 +42,11 @@ export function playCallingChime(): Promise<void> {
       }
 
       const ctx = new AudioContextClass();
+      activeAudioCtx = ctx;
       if (ctx.state === "suspended") {
         ctx.resume();
       }
 
-      // Notas de un acorde de timbre clásico (F5, A5, C6)
       const now = ctx.currentTime;
       
       const playTone = (freq: number, startTime: number, duration: number) => {
@@ -33,8 +56,8 @@ export function playCallingChime(): Promise<void> {
         osc.type = "sine";
         osc.frequency.setValueAtTime(freq, startTime);
         
-        // Efecto envolvente: decaimiento suave
-        gain.gain.setValueAtTime(0.3, startTime);
+        // Efecto envolvente: decaimiento suave y nítido
+        gain.gain.setValueAtTime(0.35, startTime);
         gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
         
         osc.connect(gain);
@@ -44,17 +67,21 @@ export function playCallingChime(): Promise<void> {
         osc.stop(startTime + duration);
       };
 
-      // Tocar notas con pequeños retardos (arpegio de llamada clásica)
-      playTone(554.37, now, 1.2);       // C#5
-      playTone(659.25, now + 0.15, 1.0); // E5
-      playTone(880.00, now + 0.3, 1.5);  // A5
+      // Tocar notas ágiles (arpegio de llamada moderna de 3 notas)
+      playTone(554.37, now, 0.35);       // C#5
+      playTone(659.25, now + 0.08, 0.35); // E5
+      playTone(880.00, now + 0.16, 0.40);  // A5
       
+      // Resuelve rápido para que la voz empiece de inmediato (280ms para alta agilidad)
       setTimeout(() => {
-        ctx.close();
+        try {
+          ctx.close().catch(() => {});
+        } catch (e) {}
+        if (activeAudioCtx === ctx) activeAudioCtx = null;
         resolve();
-      }, 1800);
+      }, 280);
     } catch (e) {
-      console.warn("No se pudo reproducir el timbre. Interacción del usuario requerida o soporte de Audio API ausente.", e);
+      console.warn("No se pudo reproducir el timbre.", e);
       resolve();
     }
   });
@@ -127,32 +154,31 @@ export function speakCall(
     let message = "";
     if (isSecondCall) {
       if (trimmedName) {
-        message = `Segundo llamado: ${trimmedName}... Por favor, diríjase ${targetPrep} ${cleanCubicleName}... Ticket ${parsedCode}.`;
+        message = `Segundo llamado: ${trimmedName}, por favor diríjase ${targetPrep} ${cleanCubicleName}, turno ${parsedCode}.`;
       } else {
-        message = `Segundo llamado: Ticket ${parsedCode}... Por favor, diríjase ${targetPrep} ${cleanCubicleName}.`;
+        message = `Segundo llamado: Turno ${parsedCode}, por favor diríjase ${targetPrep} ${cleanCubicleName}.`;
       }
     } else {
       if (trimmedName) {
-        message = `Atención: ${trimmedName}... Por favor, diríjase ${targetPrep} ${cleanCubicleName}... Ticket ${parsedCode}.`;
+        message = `Atención: ${trimmedName}, por favor diríjase ${targetPrep} ${cleanCubicleName}, turno ${parsedCode}.`;
       } else {
-        message = `Atención: Ticket ${parsedCode}... Por favor, diríjase ${targetPrep} ${cleanCubicleName}.`;
+        message = `Atención: Turno ${parsedCode}, por favor diríjase ${targetPrep} ${cleanCubicleName}.`;
       }
     }
     
     const rateStr = localStorage.getItem("ticket_tts_rate");
     const pitchStr = localStorage.getItem("ticket_tts_pitch");
-    const voicePref = localStorage.getItem("ticket_tts_voice_pref");
 
     const utterance = new SpeechSynthesisUtterance(message);
     utterance.lang = "es-ES";
 
-    // Modulación acústica diferenciada (Tríada tiene un pitch más grave/profundo y cadencia ágil; Caja es más clara y aguda)
+    // Modulación acústica diferenciada y ágil
     if (options.customRate) {
       utterance.rate = options.customRate;
     } else if (rateStr) {
       utterance.rate = parseFloat(rateStr);
     } else {
-      utterance.rate = isTriada ? 0.98 : 0.93;
+      utterance.rate = isTriada ? 1.12 : 1.16; // Agilizado y nítido para áreas concurridas
     }
 
     if (options.customPitch) {
@@ -160,7 +186,7 @@ export function speakCall(
     } else if (pitchStr) {
       utterance.pitch = isTriada ? Math.max(0.75, parseFloat(pitchStr) - 0.22) : parseFloat(pitchStr);
     } else {
-      utterance.pitch = isTriada ? 0.85 : 1.10;
+      utterance.pitch = isTriada ? 0.90 : 1.08;
     }
 
     // Selección de voz inteligente: Voz Femenina/Clara para Caja vs Voz Masculina/Distinta para Tríada
@@ -172,14 +198,14 @@ export function speakCall(
         let preferredVoice;
 
         if (isTriada) {
-          // Tríada / Fotografía: Prioridad a voces masculinas o profundas (Pablo, Jorge, Diego, Andres, Raul, David, etc.)
+          // Tríada / Fotografía: Prioridad a voces masculinas o profundas
           preferredVoice = spanishVoices.find(voice => {
             const vName = voice.name.toLowerCase();
             return vName.includes("pablo") || 
                    vName.includes("jorge") || 
                    vName.includes("diego") || 
                    vName.includes("andres") || 
-                   vName.includes("andrés") ||
+                   vName.includes("andrés") || 
                    vName.includes("raul") || 
                    vName.includes("raúl") || 
                    vName.includes("carlos") || 
@@ -188,12 +214,11 @@ export function speakCall(
                    vName.includes("hombre");
           });
 
-          // Si no hay voz masculina explícita, seleccionar una voz secundaria diferente a la de Caja
           if (!preferredVoice && spanishVoices.length > 1) {
             preferredVoice = spanishVoices[spanishVoices.length - 1];
           }
         } else {
-          // Caja: Prioridad a voces femeninas e institucionales (Helena, Sabina, Laura, Monica, Paulina, Zira, etc.)
+          // Caja: Prioridad a voces femeninas e institucionales
           preferredVoice = spanishVoices.find(voice => {
             const vName = voice.name.toLowerCase();
             return vName.includes("sabina") || 
@@ -211,7 +236,6 @@ export function speakCall(
           });
         }
         
-        // Fallback a voces naturales de Google/Microsoft si no hubo coincidencia específica
         if (!preferredVoice) {
           preferredVoice = spanishVoices.find(voice => 
             voice.name.includes("Google") || 
@@ -231,20 +255,23 @@ export function speakCall(
       };
     }
 
-    utterance.onend = () => {
-      resolve();
+    let isResolved = false;
+    const finish = () => {
+      if (!isResolved) {
+        isResolved = true;
+        resolve();
+      }
     };
 
+    utterance.onend = finish;
     utterance.onerror = (err) => {
       console.warn("SpeechSynthesisUtterance event/error:", err);
-      resolve();
+      finish();
     };
 
     window.speechSynthesis.speak(utterance);
 
-    setTimeout(() => {
-      resolve();
-    }, 7000);
+    setTimeout(finish, 5000);
   });
 }
 
@@ -252,7 +279,7 @@ export function speakCall(
  * Dispara la vibración háptica en dispositivos móviles compatibles (Smartphones).
  * @param pattern Patrón de vibración en milisegundos [vibrar, pausa, vibrar...]
  */
-export function triggerHapticVibration(pattern: number | number[] = [600, 250, 600, 250, 1000, 300, 800]): boolean {
+export function triggerHapticVibration(pattern: number | number[] = [400, 150, 400]): boolean {
   try {
     if (typeof navigator !== "undefined" && "vibrate" in navigator) {
       return navigator.vibrate(pattern);
@@ -267,46 +294,68 @@ export function isVibrationSupported(): boolean {
   return typeof navigator !== "undefined" && "vibrate" in navigator;
 }
 
+// Cola secuencial de audios para evitar colisiones cuando múltiples agentes llaman al mismo tiempo
+let audioCallQueue: Promise<void> = Promise.resolve();
+
 /**
- * Llama al timbre y luego hace la lectura de voz del turno consecutivamente.
- * Realiza 2 llamados completos (Primer llamado + Segundo llamado) tal como solicitado,
- * adaptando el timbre de voz según el área (Tríada/Fotografía vs Caja).
+ * Llama al timbre y luego hace la lectura de voz del turno consecutivamente y de forma ágil.
  */
-export async function announceAndCall(
+export function announceAndCall(
   ticketCode: string, 
   name: string, 
   cubicleName: string, 
   repeatCalls: number = 2,
   options?: SpeakCallOptions
-) {
-  // Cancelar cualquier lectura anterior para que el nuevo llamado tome prioridad inmediata
-  if ("speechSynthesis" in window) {
-    window.speechSynthesis.cancel();
-  }
+): Promise<void> {
+  const sessionToken = ++currentCallSessionToken;
 
-  const firstCallOptions: SpeakCallOptions = {
-    ...(options || {}),
-    isSecondCall: false
-  };
+  // Encadenar en la cola secuencial
+  audioCallQueue = audioCallQueue.then(async () => {
+    try {
+      if (sessionToken !== currentCallSessionToken) return;
 
-  const secondCallOptions: SpeakCallOptions = {
-    ...(options || {}),
-    isSecondCall: true
-  };
+      const firstCallOptions: SpeakCallOptions = {
+        ...(options || {}),
+        isSecondCall: false
+      };
 
-  // 1er LLAMADO
-  triggerHapticVibration([400, 200, 400]);
-  await playCallingChime();
-  await new Promise(r => setTimeout(r, 350));
-  await speakCall(ticketCode, name, cubicleName, firstCallOptions);
+      const secondCallOptions: SpeakCallOptions = {
+        ...(options || {}),
+        isSecondCall: true
+      };
 
-  // Si se solicitó repetir (2 llamados)
-  if (repeatCalls >= 2) {
-    // Pausa breve entre el 1er y 2do llamado
-    await new Promise(r => setTimeout(r, 1100));
-    await playCallingChime();
-    await new Promise(r => setTimeout(r, 350));
-    await speakCall(ticketCode, name, cubicleName, secondCallOptions);
-  }
+      // 1er LLAMADO
+      triggerHapticVibration([300, 100, 300]);
+      await playCallingChime();
+      if (sessionToken !== currentCallSessionToken) return;
+
+      await new Promise(r => setTimeout(r, 40));
+      if (sessionToken !== currentCallSessionToken) return;
+
+      await speakCall(ticketCode, name, cubicleName, firstCallOptions);
+      if (sessionToken !== currentCallSessionToken) return;
+
+      // Si se solicitó repetir (2 llamados)
+      if (repeatCalls >= 2) {
+        // Pausa breve de 250ms entre el 1er y 2do llamado para agilidad
+        await new Promise(r => setTimeout(r, 250));
+        if (sessionToken !== currentCallSessionToken) return;
+
+        await playCallingChime();
+        if (sessionToken !== currentCallSessionToken) return;
+
+        await new Promise(r => setTimeout(r, 40));
+        if (sessionToken !== currentCallSessionToken) return;
+
+        await speakCall(ticketCode, name, cubicleName, secondCallOptions);
+      }
+    } catch (e) {
+      console.warn("Error en secuencia de audio de turno:", e);
+    }
+  }).catch(err => {
+    console.warn("Error en la cola de reproducción de audio:", err);
+  });
+
+  return audioCallQueue;
 }
 

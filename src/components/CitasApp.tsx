@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   CalendarCheck2, 
@@ -24,6 +25,7 @@ import {
   Settings
 } from 'lucide-react';
 import { DatosPersonales, ServicioCategoriaId, Cita, ServiceType, Ticket } from '../types';
+import { SERVICIOS_TRIBUNAL } from '../data';
 import FormularioDatos from './FormularioDatos';
 import SeleccionServicio from './SeleccionServicio';
 import AgendamientoCita from './AgendamientoCita';
@@ -36,7 +38,38 @@ interface CitasAppProps {
   onCreateTicket?: (name: string, serviceType: ServiceType, priority: boolean, isAppointment?: boolean, procedure?: string) => Ticket;
 }
 
+const standardizeDateString = (rawDate: string): string => {
+  if (!rawDate) return '';
+  let clean = rawDate.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+  if (/^\d{4}\/\d{2}\/\d{2}$/.test(clean)) return clean.replace(/\//g, '-');
+  
+  const parts = clean.split(/[/\-.]/);
+  if (parts.length === 3) {
+    const p0 = parts[0].trim();
+    const p1 = parts[1].trim();
+    const p2 = parts[2].trim();
+    if (p2.length === 4) {
+      const year = p2;
+      const val0 = parseInt(p0, 10);
+      const val1 = parseInt(p1, 10);
+      if (val0 > 12) {
+        return `${year}-${p1.padStart(2, '0')}-${p0.padStart(2, '0')}`;
+      } else if (val1 > 12) {
+        return `${year}-${p0.padStart(2, '0')}-${p1.padStart(2, '0')}`;
+      }
+      return `${year}-${p1.padStart(2, '0')}-${p0.padStart(2, '0')}`;
+    }
+    if (p0.length === 4) {
+      return `${p0}-${p1.padStart(2, '0')}-${p2.padStart(2, '0')}`;
+    }
+  }
+  return clean;
+};
+
 export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, onCreateTicket }: CitasAppProps) {
+  const navigate = useNavigate();
+  const { category, subService } = useParams<{ category?: string; subService?: string }>();
   const [activeTab, setActiveTab] = useState<'agendar' | 'admin'>(initialTab);
 
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
@@ -89,7 +122,7 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
   // Fetch appointments from API or fallback
   const fetchAppointments = async () => {
     try {
-      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || '';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -97,11 +130,79 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       if (res.ok) {
         const data = await res.json();
         const list = Array.isArray(data) ? data : (data?.appointments || []);
-        if (Array.isArray(list) && list.length > 0) {
-          setCitasList(list);
-          localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(list));
-          return;
-        }
+        
+        let mergedList = [...list];
+
+        // Heal and normalize all appointments with full citizen names and Extranjería CSV nomenclature
+        mergedList = mergedList.map((app: any) => {
+          if (!app) return app;
+          let updated = { ...app };
+          
+          if (updated.fecha) {
+            updated.fecha = standardizeDateString(updated.fecha);
+          }
+          
+          const isCsv = String(updated.id || '').includes('CSV') || 
+                        String(updated.codigoTransaccion || '').includes('CSV') || 
+                        String(updated.creadoPor || '').toLowerCase().includes('csv') || 
+                        String(updated.creadoPor || '').toLowerCase().includes('importaci') ||
+                        String(updated.id || '').startsWith('TE-CSV');
+
+          if (isCsv) {
+            if (String(updated.id || '').startsWith('TE-')) {
+              updated.id = updated.id.replace(/^TE-/, 'EXT-');
+            }
+            if (String(updated.codigoTransaccion || '').startsWith('TE-')) {
+              updated.codigoTransaccion = updated.codigoTransaccion.replace(/^TE-/, 'EXT-');
+            }
+            updated.servicioCategoria = 'extranjeria';
+            updated.categoriaNombre = 'Trámites de Extranjería';
+            updated.subServicioId = 'ext_primera_vez';
+            updated.subServicioNombre = 'Carné de residente permanente por primera vez';
+            updated.sucursalId = 'anc_main';
+            updated.sucursalNombre = 'Sede Principal de Ancón (Extranjería)';
+            updated.sucursalDireccion = 'Ciudad de Panamá, Ancón, Ave. Omar Torrijos Herrera';
+            updated.tipoIdentificacion = 'Pasaporte';
+            updated.creadoPor = 'Importación CSV Extranjería';
+            if (!updated.requisitos || updated.requisitos.length === 0 || !updated.requisitos.some((r: string) => r.includes('Migración'))) {
+              updated.requisitos = [
+                "Precio (efectivo) B/. 100.00",
+                "Requiere contar con cita programada",
+                "Nota del Servicio Nacional de Migración",
+                "Fotocopia del carné expedido por el Servicio Nacional de Migración",
+                "Fotocopia de la página de las generales del pasaporte"
+              ];
+            }
+          }
+
+          const dp = updated.datosPersonales ? { ...updated.datosPersonales } : {};
+          if (isCsv) {
+            dp.tipoIdentificacion = 'Pasaporte';
+            if (!dp.pasaporte) {
+              dp.pasaporte = dp.identificacion || updated.identificacion || 'PA-EXT';
+            }
+          }
+          const parts = [
+            dp.primerNombre || '',
+            dp.segundoNombre || '',
+            dp.primerApellido || '',
+            dp.segundoApellido || ''
+          ].map((s: any) => String(s || '').trim()).filter(Boolean);
+          const partsName = parts.length > 0 ? parts.join(' ') : '';
+          const resolvedName = dp.nombreCompleto || partsName || updated.nombre || (dp.pasaporte ? `Ciudadano (${dp.pasaporte})` : '');
+          if (resolvedName && !dp.nombreCompleto) {
+            dp.nombreCompleto = resolvedName;
+          }
+          return {
+            ...updated,
+            nombre: updated.nombre || resolvedName || 'Ciudadano',
+            datosPersonales: dp
+          };
+        });
+
+        setCitasList(mergedList);
+        localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(mergedList));
+        return;
       }
     } catch (e) {
       console.warn('Could not fetch appointments from server, loading local backup:', e);
@@ -110,7 +211,16 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
     const saved = localStorage.getItem('citas_tribunal_electoral_v2');
     if (saved) {
       try {
-        setCitasList(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const standardized = parsed.map(app => {
+            if (app && app.fecha) {
+              app.fecha = standardizeDateString(app.fecha);
+            }
+            return app;
+          });
+          setCitasList(standardized);
+        }
       } catch (err) {
         console.error('Error parsing local appointments:', err);
       }
@@ -121,13 +231,79 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
     fetchAppointments();
   }, []);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const tramiteParam = params.get('tramite');
+      const seguimientoParam = params.get('seguimiento');
+
+      if (tramiteParam === 'ced_pasados_edad') {
+        setSelectedCategoria('cedulacion');
+        setSelectedSubServicioId('ced_pasados_edad');
+        if (seguimientoParam) {
+          setDatosPersonales({
+            numeroSeguimiento: seguimientoParam,
+            tieneDiscapacidad: false,
+            tipoIdentificacion: 'Cedula',
+            identificacion: '',
+            fechaNacimiento: '',
+            telefono: '',
+            correo: '',
+            nombreCompleto: ''
+          });
+        }
+        setCurrentStep(2);
+      }
+    }
+  }, []);
+
+  // Sync route path parameters /citas/:category/:subService
+  useEffect(() => {
+    if (category && subService) {
+      const normalizeForRouting = (str: string): string => {
+        return str
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^a-z0-9]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      };
+
+      const normCategory = normalizeForRouting(decodeURIComponent(category));
+      const normSubService = normalizeForRouting(decodeURIComponent(subService));
+
+      const matchedCategory = SERVICIOS_TRIBUNAL.find(c => 
+        normalizeForRouting(c.id) === normCategory ||
+        normalizeForRouting(c.nombre) === normCategory
+      );
+
+      if (matchedCategory) {
+        const matchedSubService = matchedCategory.subServicios.find(s => 
+          normalizeForRouting(s.id) === normSubService ||
+          normalizeForRouting(s.nombre) === normSubService
+        );
+
+        if (matchedSubService) {
+          setSelectedCategoria(matchedCategory.id);
+          setSelectedSubServicioId(matchedSubService.id);
+          setCurrentStep(2); // Go directly to FormularioDatos
+        }
+      }
+    }
+  }, [category, subService]);
+
   const saveCitas = async (newList: Cita[]) => {
     setCitasList(newList);
     localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(newList));
     try {
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
       await fetch('/api/appointments', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify(newList)
       });
     } catch (err) {
@@ -156,15 +332,32 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       return;
     }
 
+    const sub = (selectedSubServicioId || '').toLowerCase();
+    const isPasadosDeEdad = selectedSubServicioId === 'ced_pasados_edad' || sub.includes('pasado') || sub.includes('edad');
+    const isExtranjeria = selectedCategoria === 'extranjeria' || sub.includes('extranjero') || sub.startsWith('ext_');
+
+    const hasCsvBlock = citasList.some(c => {
+      const isExt = c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_');
+      const isCsv = Boolean((c as any).isCsv) || String(c.id || '').includes('CSV') || String(c.codigoTransaccion || '').includes('CSV') || String(c.creadoPor || '').toLowerCase().includes('csv') || String(c.creadoPor || '').toLowerCase().includes('importaci');
+      return isExt && isCsv && c.fecha >= '2026-09-01' && c.fecha <= '2026-12-30';
+    });
+
+    if (isExtranjeria && (hasCsvBlock && fecha >= '2026-09-01' && fecha <= '2026-12-30')) {
+      alert("No es posible programar esta cita: Los cupos de atención presencial para trámites de Extranjería para el periodo actual han sido asignados en su totalidad. El agendamiento en línea se encuentra disponible únicamente a partir del 4 de enero de 2027.");
+      return;
+    }
+
     const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = '';
-    for (let i = 0; i < 6; i++) {
+    const codeLen = isPasadosDeEdad ? 7 : 5;
+    for (let i = 0; i < codeLen; i++) {
       code += alpha.charAt(Math.floor(Math.random() * alpha.length));
     }
-    const finalTxCode = `${fecha.replace(/-/g, '').substring(2)}-${code}`;
+    const prefix = isPasadosDeEdad ? 'PA' : (isExtranjeria ? 'EXT' : 'TE');
+    const finalTxCode = `${prefix}-${code}`;
+    const newId = `${prefix}-${Date.now()}`;
 
     let ticketTurnoCode: string | undefined = undefined;
-    const sub = (selectedSubServicioId || '').toLowerCase();
     const isTardia20Anos = sub.includes('ced_pasados_edad') || sub.includes('20') || sub.includes('pasado');
     const isExtranjeriaPrimeraVez = sub.includes('ext_primera_vez') || (selectedCategoria === 'extranjeria' && (sub.includes('primera') || sub.includes('residente permanente por primera vez')));
 
@@ -200,9 +393,32 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       ticketTurnoCode = ticket.numberCode;
     }
 
+    let numeroCitaDia: number | undefined = undefined;
+    if (selectedCategoria === 'extranjeria') {
+      const dayCount = citasList.filter(c => 
+        c.fecha === fecha && 
+        (c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_')) && 
+        c.estado !== 'cancelada'
+      ).length;
+      numeroCitaDia = dayCount + 1;
+    }
+
+    const citizenFullName = datosPersonales.nombreCompleto || [
+      datosPersonales.primerNombre,
+      datosPersonales.segundoNombre,
+      datosPersonales.primerApellido,
+      datosPersonales.segundoApellido
+    ].map(s => String(s || '').trim()).filter(Boolean).join(' ') || (datosPersonales.pasaporte ? `Ciudadano (${datosPersonales.pasaporte})` : 'Ciudadano');
+
+    const sanitizedDatosPersonales: DatosPersonales = {
+      ...datosPersonales,
+      nombreCompleto: datosPersonales.nombreCompleto || citizenFullName
+    };
+
     const nuevaCita: Cita = {
-      id: `TE-${Date.now()}`,
-      datosPersonales,
+      id: newId,
+      datosPersonales: sanitizedDatosPersonales,
+      nombre: citizenFullName,
       servicioCategoria: selectedCategoria,
       subServicioId: selectedSubServicioId,
       sucursalId,
@@ -213,6 +429,7 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       estado: 'confirmada',
       ticketTurnoCode,
       llegadaConfirmadaAuto: true,
+      numeroCitaDia,
     };
 
     const updated = [nuevaCita, ...citasList];
@@ -229,12 +446,21 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
     }
   };
 
-  const handleDeleteCita = (citaId: string) => {
+  const handleDeleteCita = async (citaId: string) => {
     const updated = citasList.filter(c => c.id !== citaId);
     saveCitas(updated);
     if (activeCita && activeCita.id === citaId) {
       setActiveCita(null);
       setCurrentStep(1);
+    }
+    try {
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+      await fetch(`/api/appointments/${citaId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+    } catch (e) {
+      console.error('Error deleting appointment from server:', e);
     }
   };
 
@@ -353,15 +579,6 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
             <p className="text-[11px]">
               {cmsConfig?.customTexts?.footerText || `© ${new Date().getFullYear()} – Portal oficial institucional de Citas Tecnológicas y Gestión de Turnos.`}
             </p>
-          </div>
-          <div className="flex flex-wrap gap-4 text-[11px] justify-center items-center">
-            <button 
-              type="button" 
-              onClick={() => setActiveTab(activeTab === 'admin' ? 'agendar' : 'admin')}
-              className="hover:text-white font-semibold cursor-pointer transition flex items-center gap-1 text-slate-300"
-            >
-              <span>{activeTab === 'admin' ? 'Regresar a Agendamiento' : 'Acceso Administrativo de Citas'}</span>
-            </button>
           </div>
         </div>
       </footer>

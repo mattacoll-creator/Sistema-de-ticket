@@ -38,17 +38,19 @@ export const CEDULACION_PROCEDURES = [
   { id: "CJ", name: "Cédula Juvenil", description: "Documento de identidad para menores de edad" },
   { id: "CRP", name: "Carné de Residente", description: "Carné de residente permanente extranjero" },
   { id: "RBM", name: "Registro Biométrico", description: "Enrolamiento de huellas, foto y firma oficial" },
+  { id: "CED_ADM", name: "Cedulación Admin", description: "Certificaciones de cedulación y trámites administrativos" },
   { id: "REG", name: "Certificación de REG", description: "Certificación de registro de cedulación" },
   { id: "COE", name: "Certificaciones de OE", description: "Certificación de Organización Electoral" }
 ];
 
-// Procedimientos específicos de Caja (Excluye RBM e incluye COE)
+// Procedimientos específicos de Caja (Excluye RBM e incluye COE y CED_ADM)
 export const CAJA_PROCEDURES = [
   { id: "CPV", name: "Cédula por Primera Vez", description: "Trámite de primera cédula para panameños", requiresPhoto: true },
   { id: "REN", name: "Renovación de Cédula", description: "Renovación por vencimiento de documento", requiresPhoto: true },
   { id: "DUP", name: "Duplicado de Cédula", description: "Reposición por pérdida, robo o deterioro", requiresPhoto: true },
   { id: "CJ", name: "Cédula Juvenil", description: "Documento de identidad para menores de edad", requiresPhoto: true },
   { id: "CRP", name: "Carné de Residente", description: "Carné de residente permanente extranjero", requiresPhoto: true },
+  { id: "CED_ADM", name: "Cedulación Admin", description: "Certificaciones de cedulación (Finaliza en Caja)", requiresPhoto: false },
   { id: "REG", name: "Certificación de REG", description: "Certificación de registro de cedulación", requiresPhoto: false },
   { id: "COE", name: "Certificaciones de OE", description: "Certificación de Organización Electoral", requiresPhoto: false }
 ];
@@ -133,20 +135,22 @@ export default function WelcomeKiosk({
     e.preventDefault();
     if (!selectedService) return;
 
+    // Emisión inmediata en alta concurrencia: el ticket se genera al instante (0ms)
+    const sanitizedName = name.trim() || "Ciudadano";
+    const ticket = onCreateTicket(sanitizedName, selectedService, priority, false, selectedProcedure || undefined);
+    setPrintedTicket(ticket);
     setIsPrinting(true);
-    
-    // Simular retraso físico de la impresora térmica de tickets
+
+    // Limpiar campos para la siguiente persona de inmediato
+    setName("");
+    setPriority(false);
+    setSelectedService(null);
+    setSelectedProcedure(null);
+
+    // Breve transición visual de impresión (250ms) sin bloquear la emisión en el sistema
     setTimeout(() => {
-      const sanitizedName = name.trim() || "Ciudadano";
-      const ticket = onCreateTicket(sanitizedName, selectedService, priority, false, selectedProcedure || undefined);
-      setPrintedTicket(ticket);
       setIsPrinting(false);
-      // Limpiar campos para la siguiente persona
-      setName("");
-      setPriority(false);
-      setSelectedService(null);
-      setSelectedProcedure(null);
-    }, 1250);
+    }, 250);
   };
 
   return (
@@ -631,7 +635,7 @@ export default function WelcomeKiosk({
               📱 Siga su turno en vivo con vibración en:
             </p>
             <p className="text-[7.5px] text-center font-mono font-black">
-              agendate.te.gob.pa/?ticket={printedTicket.numberCode}&office={currentOfficeId}
+              agendate.te.gob.pa/seguimiento/{printedTicket.numberCode}?office={currentOfficeId}
             </p>
             
             <p className="text-[8px] text-center font-serif font-black italic mt-2">

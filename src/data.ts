@@ -265,9 +265,9 @@ export const SERVICIOS_TRIBUNAL: CategoriaServicio[] = [
   },
   {
     id: 'panamenos_extranjero',
-    nombre: 'Trámite de Panameños en el Extranjero',
-    descripcion: 'Inscripción de hechos vitales y trámites consulares de identidad para ciudadanos residentes en el exterior.',
-    icono: 'Plane',
+    nombre: 'Pasado de edad',
+    descripcion: 'Inscripción extemporánea de nacimiento y de identidad civil para ciudadanos mayores de edad sin registro oficial.',
+    icono: 'UserPlus',
     subServicios: [
       {
         id: 'pe_nacimiento',
@@ -310,7 +310,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Tribunal Electoral de Panamá',
     direccion: 'Avenida Omar Torrijos Herrera, Ancón, frente a la terminal de Albrook, Ciudad de Panamá',
     telefono: '+507 507-8000',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'boc_office',
@@ -318,7 +318,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Bocas del Toro',
     direccion: 'Calle Principal, Isla Colón, Bocas del Toro',
     telefono: '+507 757-8100',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'coc_office',
@@ -326,7 +326,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Coclé',
     direccion: 'Vía Interamericana, entrada de Penonomé, frente a Plaza Iguana, Coclé',
     telefono: '+507 997-8100',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'col_office',
@@ -334,7 +334,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Colón',
     direccion: 'Calle 11 y Avenida Roosevelt, Ciudad de Colón',
     telefono: '+507 433-8200',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'chi_office',
@@ -342,7 +342,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Chiriquí',
     direccion: 'Calle F Sur y Avenida 3ra Oeste, David, Chiriquí',
     telefono: '+507 728-8100',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'dar_office',
@@ -350,7 +350,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Darién',
     direccion: 'Metetí, Carretera Panamericana, Darién',
     telefono: '+507 299-6350',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'her_office',
@@ -358,7 +358,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Herrera',
     direccion: 'Avenida Melitón Martín, Chitré, Herrera',
     telefono: '+507 913-8100',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'los_office',
@@ -366,7 +366,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Los Santos',
     direccion: 'Vía Circunvalación, frente al Estadio Flaco Bala Hernández, Las Tablas',
     telefono: '+507 926-8100',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'pac_office',
@@ -374,7 +374,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Panamá Centro',
     direccion: 'Centro Comercial El Dorado, Vía Ricardo J. Alfaro, Planta Alta, Ciudad de Panamá',
     telefono: '+507 507-8100',
-    horario: 'Martes a Sábado 9:00 AM - 5:00 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'pan_office',
@@ -382,7 +382,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Panamá Norte',
     direccion: 'Vía Transístmica, Centro Comercial Plaza Las Cumbres, Las Cumbres',
     telefono: '+507 507-8250',
-    horario: 'Lunes a Viernes 8:00 AM - 4:00 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'pae_office',
@@ -390,7 +390,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Panamá Este',
     direccion: 'Plaza Comercial El Cruce, Planta Alta, 24 de Diciembre',
     telefono: '+507 507-8280',
-    horario: 'Lunes a Viernes 8:00 AM - 4:00 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'pao_office',
@@ -398,7 +398,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Panamá Oeste',
     direccion: 'Avenida Las Américas, al lado del cuartel de bomberos, La Chorrera',
     telefono: '+507 507-8400',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'sm_office',
@@ -406,7 +406,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de San Miguelito',
     direccion: 'Centro Comercial Los Andes, Centro de Servicios Gubernamentales, San Miguelito',
     telefono: '+507 507-8300',
-    horario: 'Martes a Sábado 9:00 AM - 5:00 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'ver_office',
@@ -414,7 +414,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Veraguas',
     direccion: 'Avenida Héctor Alejandro Santacoloma, Santiago, Veraguas',
     telefono: '+507 950-8100',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'gun_office',
@@ -422,7 +422,7 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Dirección Regional de Guna Yala',
     direccion: 'Sede Comarcal, El Porvenir, Guna Yala',
     telefono: '+507 299-9130',
-    horario: 'Lunes a Viernes 7:30 AM - 3:30 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   },
   {
     id: 'arr_office',
@@ -430,24 +430,43 @@ export const SUCURSALES_TE: Sucursal[] = [
     nombre: 'Regional Especial de Arraiján',
     direccion: 'Vía Interamericana, Plaza Paseo Arraiján, Arraiján',
     telefono: '+507 507-8410',
-    horario: 'Lunes a Viernes 8:00 AM - 4:00 PM'
+    horario: 'Lunes a Viernes 7:00 AM - 3:00 PM'
   }
 ];
 
 export const HORAS_DISPONIBLES = [
+  '07:00 AM',
+  '07:15 AM',
+  '07:30 AM',
+  '07:45 AM',
   '08:00 AM',
+  '08:15 AM',
   '08:30 AM',
+  '08:45 AM',
   '09:00 AM',
+  '09:15 AM',
   '09:30 AM',
+  '09:45 AM',
   '10:00 AM',
+  '10:15 AM',
   '10:30 AM',
+  '10:45 AM',
   '11:00 AM',
+  '11:15 AM',
   '11:30 AM',
+  '11:45 AM',
+  '12:00 PM',
+  '12:15 PM',
+  '12:30 PM',
+  '12:45 PM',
   '01:00 PM',
+  '01:15 PM',
   '01:30 PM',
+  '01:45 PM',
   '02:00 PM',
+  '02:15 PM',
   '02:30 PM',
-  '03:00 PM'
+  '02:45 PM'
 ];
 
 // Dynamically synchronize with localStorage if customized by administration

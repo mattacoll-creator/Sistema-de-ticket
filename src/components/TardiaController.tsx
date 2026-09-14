@@ -31,6 +31,14 @@ import { jsPDF } from 'jspdf';
 import { Cita, AdminRole, TipoIdentificacion } from '../types';
 import { SUCURSALES_TE } from '../data';
 
+const getTodayDateStr = () => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 interface TardiaControllerProps {
   citas: Cita[];
   onUpdateCitas: (updatedList: Cita[]) => void;
@@ -46,8 +54,9 @@ export default function TardiaController({
 }: TardiaControllerProps) {
   
   // Persona control (can switch between Supervisor and Operator if role is 'super' or for troubleshooting)
-  const luser = activeUsername.toLowerCase();
+  const luser = (activeUsername || '').toLowerCase();
   const isSuperAdmin = currentRole === 'super';
+  const canManageSchedules = currentRole === 'pasado_edad_supervisor' || currentRole === 'super' || currentRole === 'pasado_edad';
   
   const [activePersona, setActivePersona] = useState<'superit' | 'adminpedad'>(() => {
     if (currentRole === 'pasado_edad_supervisor') return 'superit';
@@ -71,6 +80,9 @@ export default function TardiaController({
     }
   }, [luser, currentRole]);
 
+  // Sub-tabs for supervisor mode ('citas' | 'horarios' | 'descargas')
+  const [tardiaTab, setTardiaTab] = useState<'citas' | 'horarios' | 'descargas'>('citas');
+
   // STATES FOR REGISTRATION FORM (adminpedad)
   const [expName, setExpName] = useState('');
   const [expIdentificacion, setExpIdentificacion] = useState('');
@@ -85,7 +97,7 @@ export default function TardiaController({
   const [pasadoEdadLinkBase, setPasadoEdadLinkBase] = useState(() => {
     const stored = localStorage.getItem('te_panama_pasado_edad_link_base');
     if (stored) return stored;
-    return typeof window !== 'undefined' ? window.location.origin : 'https://agendate.te.gob.pa';
+    return 'https://test.te.gob.pa:8443/citas';
   });
 
   const [generatedExp, setGeneratedExp] = useState<{
@@ -99,117 +111,89 @@ export default function TardiaController({
   const [searchExpCategory, setSearchExpCategory] = useState('Todas');
 
   const [historicalExp, setHistoricalExp] = useState<any[]>(() => {
-    const demoExpedientes = [
-      {
-        id: "VID-26-000-111",
-        number: "VID-26-000-111",
-        citizenName: "Esteban Caballero Pérez",
-        identificacion: "8-445-667",
-        fechaNacimiento: "2005-06-12",
-        correo: "esteban.caballero@example.com",
-        telefono: "+507 6201-9988",
-        category: "Primera vez nacional, sin biometría",
-        notes: "Trámite de filiación tardía para obtención de cédula por primera vez.",
-        fechaCreacion: new Date().toISOString()
-      },
-      {
-        id: "VID-26-000-222",
-        number: "VID-26-000-222",
-        citizenName: "María Luz González",
-        identificacion: "4-789-102",
-        fechaNacimiento: "2004-10-15",
-        correo: "maria.gonzalez@example.com",
-        telefono: "+507 6655-4433",
-        category: "Primera vez nacional, inscripción tardía (Hasta 6 meses)",
-        notes: "Inscripción tardía aprobada por la Dirección de Registro Civil.",
-        fechaCreacion: new Date().toISOString()
-      },
-      {
-        id: "VID-26-000-333",
-        number: "VID-26-000-333",
-        citizenName: "Carlos Alberto Samudio",
-        identificacion: "9-122-384",
-        fechaNacimiento: "2003-02-28",
-        correo: "carlos.samudio@example.com",
-        telefono: "+507 6100-2211",
-        category: "Primera vez nacional con 20 años y 1 día cumplidos",
-        notes: "Trámite de cédula tardía para ciudadanos de 20 años o más.",
-        fechaCreacion: new Date().toISOString()
-      },
-      {
-        id: "VID-26-000-444",
-        number: "VID-26-000-444",
-        citizenName: "Milagros de Gracia",
-        identificacion: "8-999-1002",
-        fechaNacimiento: "2002-12-15",
-        correo: "milagros.degracia@example.com",
-        telefono: "+507 6911-3829",
-        category: "Renovación blanco y negro",
-        notes: "Autorización de renovación para cédula tardía.",
-        fechaCreacion: new Date().toISOString()
-      },
-      {
-        id: "VID-26-000-555",
-        number: "VID-26-000-555",
-        citizenName: "José Arispe Urriola",
-        identificacion: "2-105-992",
-        fechaNacimiento: "2006-03-24",
-        correo: "jose.arispe@example.com",
-        telefono: "+507 6492-3311",
-        category: "Primera vez nacional, sin biometría",
-        notes: "Pendiente de toma de datos biométricos para filiación.",
-        fechaCreacion: new Date().toISOString()
-      },
-      {
-        id: "VID-26-000-666",
-        number: "VID-26-000-666",
-        citizenName: "Diana Patricia Vergara",
-        identificacion: "7-712-453",
-        fechaNacimiento: "2005-09-08",
-        correo: "diana.vergara@example.com",
-        telefono: "+507 6599-2211",
-        category: "Primera vez nacional, inscripción tardía (Hasta 6 meses)",
-        notes: "Expediente autorizado para agendamiento presencial de Toma de Fotos.",
-        fechaCreacion: new Date().toISOString()
-      },
-      {
-        id: "NºSP-26-888-999",
-        number: "NºSP-26-888-999",
-        citizenName: "Roberto Carlos Alvarado",
-        identificacion: "8-111-2222",
-        fechaNacimiento: "1978-11-05",
-        correo: "roberto.alvarado@example.com",
-        telefono: "6222-3333",
-        category: "Renovación blanco y negro",
-        notes: "Renovación blanco y negro - Creado de forma automática por el Supervisor/SuperIT al programar cita directa.",
-        fechaCreacion: new Date().toISOString()
-      }
-    ];
-
     const stored = localStorage.getItem('te_panama_historical_expedientes');
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
-        // If our primary demo tracking code is missing, merge them!
-        const hasDemo = parsed.some((e: any) => e.id === "VID-26-000-111");
-        if (!hasDemo) {
-          const merged = [...parsed];
-          demoExpedientes.forEach(demo => {
-            if (!merged.some((e: any) => e.id === demo.id)) {
-              merged.push(demo);
-            }
-          });
-          localStorage.setItem('te_panama_historical_expedientes', JSON.stringify(merged));
-          return merged;
+        const filtered = parsed.filter((rec: any) => {
+          if (!rec || !rec.id) return false;
+          if (rec.id.startsWith("VID-26-000-") || rec.id === "NºSP-26-888-999") return false;
+          return true;
+        });
+        if (filtered.length !== parsed.length) {
+          localStorage.setItem('te_panama_historical_expedientes', JSON.stringify(filtered));
         }
-        return parsed;
+        return filtered;
       } catch (e) {
-        return demoExpedientes;
+        return [];
       }
     }
-    localStorage.setItem('te_panama_historical_expedientes', JSON.stringify(demoExpedientes));
-    return demoExpedientes;
+    localStorage.setItem('te_panama_historical_expedientes', JSON.stringify([]));
+    return [];
   });
+
+  const syncWithServer = async (updatedList: any[]) => {
+    setHistoricalExp(updatedList);
+    try {
+      localStorage.setItem('te_panama_historical_expedientes', JSON.stringify(updatedList));
+      await fetch('/api/tardia/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records: updatedList })
+      });
+    } catch (err) {
+      console.error("Error syncing with server:", err);
+    }
+  };
+
+  useEffect(() => {
+    const fetchAndSync = async () => {
+      try {
+        const res = await fetch('/api/tardia/list');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.records)) {
+          // Filter out demo records from server response
+          const cleanServerRecords = data.records.filter((rec: any) => {
+            if (!rec || !rec.id) return false;
+            if (rec.id.startsWith("VID-26-000-") || rec.id === "NºSP-26-888-999") return false;
+            return true;
+          });
+          const serverMap = new Map(cleanServerRecords.map((r: any) => [r.id, r]));
+
+          // Filter out demo records from local state
+          const cleanLocalRecords = historicalExp.filter((rec: any) => {
+            if (!rec || !rec.id) return false;
+            if (rec.id.startsWith("VID-26-000-") || rec.id === "NºSP-26-888-999") return false;
+            return true;
+          });
+          const localMap = new Map(cleanLocalRecords.map((r: any) => [r.id, r]));
+          
+          let modified = false;
+          for (const [id, r] of localMap.entries()) {
+            if (!serverMap.has(id)) {
+              serverMap.set(id, r);
+              modified = true;
+            }
+          }
+          
+          const merged = Array.from(serverMap.values());
+          setHistoricalExp(merged);
+          localStorage.setItem('te_panama_historical_expedientes', JSON.stringify(merged));
+          
+          if (modified || data.records.length === 0) {
+            await fetch('/api/tardia/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ records: merged })
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Error syncing expedientes with server on mount:", err);
+      }
+    };
+    fetchAndSync();
+  }, []);
 
   // STATES FOR PLANNING OPERATION CONFIG (adminpedad)
   const [tardiaCapacidadTotal, setTardiaCapacidadTotal] = useState<number>(4);
@@ -221,8 +205,8 @@ export default function TardiaController({
   // NEW STATE VARIABLES FOR INTERACTIVE SUPERVISOR CALENDAR
   const [superViewMode, setSuperViewMode] = useState<'table' | 'calendar'>('table');
   const [calendarView, setCalendarView] = useState<'mes' | 'semana' | 'dia'>('mes');
-  const [calendarDate, setCalendarDate] = useState<Date>(() => new Date('2026-05-27T12:00:00'));
-  const [selectedCalendarDateStr, setSelectedCalendarDateStr] = useState<string>('2026-05-27');
+  const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
+  const [selectedCalendarDateStr, setSelectedCalendarDateStr] = useState<string>(getTodayDateStr);
 
   // STATES FOR FILTERING AND LISTING COMPLETED CITAS (superit)
   const [searchQuery, setSearchQuery] = useState('');
@@ -231,10 +215,17 @@ export default function TardiaController({
 
   // New Date Range State for reports
   const [reportStartDate, setReportStartDate] = useState<string>(() => {
-    return '2026-05-01';
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}-01`;
   });
   const [reportEndDate, setReportEndDate] = useState<string>(() => {
-    return '2026-05-31';
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    return `${y}-${m}-${String(lastDay).padStart(2, '0')}`;
   });
 
   // EXTRA POWERS FOR SUPERVISORS (Crear Cita variables)
@@ -246,7 +237,7 @@ export default function TardiaController({
   const [newCitaCorreo, setNewCitaCorreo] = useState('');
   const [newCitaTelefono, setNewCitaTelefono] = useState('');
   const [newCitaSucursal, setNewCitaSucursal] = useState('anc_main');
-  const [newCitaFecha, setNewCitaFecha] = useState('2026-05-27');
+  const [newCitaFecha, setNewCitaFecha] = useState(getTodayDateStr);
   const [newCitaHora, setNewCitaHora] = useState('08:00 AM');
 
   // Sync configuration from server on mount
@@ -385,6 +376,30 @@ export default function TardiaController({
     return g;
   }, [allTardiaCitas]);
 
+  // Auto-select first available date with appointments if today is empty to ensure user instantly sees appointments
+  useEffect(() => {
+    if (allTardiaCitas && allTardiaCitas.length > 0) {
+      const todayStr = getTodayDateStr();
+      const hasToday = allTardiaCitas.some(app => app.fecha === todayStr);
+      if (!hasToday) {
+        const firstAppWithDate = allTardiaCitas.find(app => app.fecha && /^\d{4}-\d{2}-\d{2}$/.test(app.fecha));
+        if (firstAppWithDate && firstAppWithDate.fecha) {
+          const targetDateStr = firstAppWithDate.fecha;
+          setSelectedCalendarDateStr(targetDateStr);
+          const parts = targetDateStr.split('-');
+          if (parts.length === 3) {
+            const y = parseInt(parts[0], 10);
+            const m = parseInt(parts[1], 10);
+            const d = parseInt(parts[2], 10);
+            if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+              setCalendarDate(new Date(y, m - 1, d));
+            }
+          }
+        }
+      }
+    }
+  }, [allTardiaCitas]);
+
   const monthAppointments = useMemo(() => {
     const year = calendarDate.getFullYear();
     const month = calendarDate.getMonth();
@@ -444,9 +459,9 @@ export default function TardiaController({
   };
 
   const handleGoToToday = () => {
-    const today = new Date('2026-05-27T12:00:00');
+    const today = new Date();
     setCalendarDate(today);
-    setSelectedCalendarDateStr('2026-05-27');
+    setSelectedCalendarDateStr(getTodayDateStr());
   };
 
   // Handle Generate Expedientes Followup code (adminpedad role)
@@ -494,12 +509,7 @@ Su número de seguimiento es: ${uniqueNumber}`;
     };
 
     const updated = [newRecord, ...historicalExp];
-    setHistoricalExp(updated);
-    try {
-      localStorage.setItem('te_panama_historical_expedientes', JSON.stringify(updated));
-    } catch (err) {
-      console.error(err);
-    }
+    syncWithServer(updated);
 
     setGeneratedExp({
       number: uniqueNumber,
@@ -544,7 +554,7 @@ Su número de seguimiento es: ${uniqueNumber}`;
     doc.text('TRIBUNAL ELECTORAL DE PANAMÁ', 20, 16);
     doc.setFontSize(8);
     doc.setFont('Helvetica', 'normal');
-    doc.text('DIRECCIÓN NACIONAL DE CEDULACIÓN / REGISTRO CIVIL', 20, 21);
+    doc.text('DIRECCIÓN NACIONAL DE CEDULACIÓN', 20, 21);
 
     doc.setFont('Helvetica', 'bold');
     doc.setFontSize(14);
@@ -580,20 +590,22 @@ Su número de seguimiento es: ${uniqueNumber}`;
     doc.setTextColor(71, 85, 105);
 
     doc.setFont('Helvetica', 'bold'); doc.text('Nombre Completo:', 26, currentY + 17);
-    doc.setFont('Helvetica', 'normal'); doc.text(exp.citizenName || exp.nombreCompleto || 'N/A', 65, currentY + 17);
+    doc.setFont('Helvetica', 'normal'); doc.text(exp.citizenName || exp.nombreCompleto || exp.name || 'N/A', 65, currentY + 17);
 
     doc.setFont('Helvetica', 'bold'); doc.text('Identificación / Cédula:', 26, currentY + 24);
-    doc.setFont('Helvetica', 'normal'); doc.text(exp.identificacion, 65, currentY + 24);
+    doc.setFont('Helvetica', 'normal'); doc.text(exp.identificacion || 'N/A', 65, currentY + 24);
 
     doc.setFont('Helvetica', 'bold'); doc.text('Código de Seguimiento:', 26, currentY + 31);
     doc.setFont('Helvetica', 'bold'); doc.setTextColor(29, 78, 216); doc.text(exp.number || exp.id, 65, currentY + 31);
     doc.setTextColor(71, 85, 105);
 
     doc.setFont('Helvetica', 'bold'); doc.text('Contacto Registrado:', 26, currentY + 38);
-    doc.setFont('Helvetica', 'normal'); doc.text(`${exp.correo} / ${exp.telefono}`, 65, currentY + 38);
+    const emailStr = exp.correo || 'N/D';
+    const phoneStr = exp.telefono || 'N/D';
+    doc.setFont('Helvetica', 'normal'); doc.text(`${emailStr} / ${phoneStr}`, 65, currentY + 38);
 
     doc.setFont('Helvetica', 'bold'); doc.text('Fecha Creación:', 26, currentY + 45);
-    doc.setFont('Helvetica', 'normal'); doc.text(exp.fechaCreacion ? exp.fechaCreacion.substring(0, 10) : '2026-05-27', 65, currentY + 45);
+    doc.setFont('Helvetica', 'normal'); doc.text(exp.fechaCreacion ? exp.fechaCreacion.substring(0, 10) : getTodayDateStr(), 65, currentY + 45);
 
     currentY += 62;
     doc.setFont('Helvetica', 'bold');
@@ -615,7 +627,8 @@ Su número de seguimiento es: ${uniqueNumber}`;
     doc.setFont('Helvetica', 'bold');
     doc.setFontSize(8.5);
     doc.setTextColor(29, 78, 216);
-    const linkToRender = exp.link || exp.directLink || '';
+    const cleanBase = pasadoEdadLinkBase.trim().endsWith('/') ? pasadoEdadLinkBase.trim().slice(0, -1) : pasadoEdadLinkBase.trim();
+    const linkToRender = exp.link || exp.directLink || `${cleanBase}/?tramite=ced_pasados_edad&seguimiento=${exp.number || exp.id}`;
     doc.text(linkToRender, 24, currentY + 10, { maxWidth: pageW - 48 });
 
     currentY += 28;
@@ -647,7 +660,7 @@ Su número de seguimiento es: ${uniqueNumber}`;
     localStorage.setItem('tardia_hora_fin', tardiaHoraFin);
     
     try {
-      const token = sessionStorage.getItem('admin_token') || '';
+      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
       const res = await fetch('/api/tardia/config', {
         method: 'POST',
         headers: { 
@@ -700,11 +713,21 @@ Su número de seguimiento es: ${uniqueNumber}`;
       return;
     }
 
+    const selectedSuc = SUCURSALES_TE.find(s => s.id === newCitaSucursal);
+    if (selectedSuc && selectedSuc.acceptsNationalAppointments === false) {
+      alert(`La sucursal ${selectedSuc.nombre} está deshabilitada para citas nacionales por el Super Administrador.`);
+      return;
+    }
+
     const shortYearMonthDay = newCitaFecha.replace(/-/g, '');
     const randId = Math.floor(1000 + Math.random() * 9000);
     
-    // Special supervisor nomenclature: "PAS-SP-" prefix for the transaction/appointment code
-    const transCode = `PAS-SP-${Math.floor(100000 + Math.random() * 900000)}`;
+    const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let randStr = '';
+    for (let i = 0; i < 7; i++) {
+      randStr += alpha.charAt(Math.floor(Math.random() * alpha.length));
+    }
+    const transCode = `PA-${randStr}`;
     
     // Special supervisor nomenclature: "NºSP-" prefix for the expediente tracking number
     const part1 = Math.floor(10 + Math.random() * 90);
@@ -713,8 +736,8 @@ Su número de seguimiento es: ${uniqueNumber}`;
     const trackNum = `NºSP-${part1}-${part2}-${part3}`;
 
     const newAppointment: Cita = {
-      // Special supervisor nomenclature: "TE-SP-" prefix for the appointment/citation ID
-      id: `TE-SP-${shortYearMonthDay}-${randId}`,
+      // Special supervisor nomenclature: "PA-SP-" prefix for the appointment/citation ID
+      id: `PA-SP-${shortYearMonthDay}-${randId}`,
       datosPersonales: {
         tipoIdentificacion: newCitaTipoIdent,
         identificacion: newCitaIdent.trim(),
@@ -765,12 +788,7 @@ Su número de seguimiento es: ${trackNum}`;
     };
 
     const updatedExp = [newRecord, ...historicalExp];
-    setHistoricalExp(updatedExp);
-    try {
-      localStorage.setItem('te_panama_historical_expedientes', JSON.stringify(updatedExp));
-    } catch (err) {
-      console.error('Error saving generated expediente for supervisor appointment:', err);
-    }
+    syncWithServer(updatedExp);
 
     onUpdateCitas([...citas, newAppointment]);
     alert(`¡Éxito! Cita para ${newCitaNombre.trim()} creada de forma exitosa para el ${newCitaFecha} a las ${newCitaHora}.\nSe ha generado automáticamente el Expediente de Pasados de Edad con el Número de Seguimiento: ${trackNum}`);
@@ -782,7 +800,7 @@ Su número de seguimiento es: ${trackNum}`;
     setNewCitaCorreo('');
     setNewCitaTelefono('');
     setNewCitaSucursal('anc_main');
-    setNewCitaFecha('2026-05-27');
+    setNewCitaFecha(getTodayDateStr());
     setNewCitaHora('08:00 AM');
     setShowCreateForm(false);
   };
@@ -990,13 +1008,15 @@ Su número de seguimiento es: ${trackNum}`;
           doc.setFont('Helvetica', 'normal');
           doc.setTextColor(51, 65, 85);
           
-          const fullName = rec.datosPersonales.nombreCompleto || 'Desconocido';
-          const truncatedName = fullName.length > 25 ? fullName.substring(0, 22) + '...' : fullName;
+          const dp = rec.datosPersonales || {};
+          const fullName = dp.nombreCompleto || rec.nombre || 'Desconocido';
+          const truncatedName = fullName.length > 36 ? fullName.substring(0, 34) + '...' : fullName;
           doc.text(truncatedName, 48, currentY + 6);
-          doc.text(rec.datosPersonales.identificacion, 110, currentY + 6);
+          const labelId = (dp.identificacion || 'N/D').length > 16 ? (dp.identificacion || 'N/D').substring(0, 14) + '...' : (dp.identificacion || 'N/D');
+          doc.text(labelId, 110, currentY + 6);
           
           const sName = rec.sucursalId ? rec.sucursalId.replace(/_/g, ' ').toUpperCase() : 'CENTRAL';
-          const sTruncated = sName.length > 15 ? sName.substring(0, 13) + '.' : sName;
+          const sTruncated = sName.length > 24 ? sName.substring(0, 22) + '.' : sName;
           doc.text(sTruncated, 137, currentY + 6);
           
           doc.setFont('Helvetica', 'bold');
@@ -1176,7 +1196,53 @@ Su número de seguimiento es: ${trackNum}`;
 
           </div>
 
-          {/* MODE SWITCHER & CREATION TOGGLE */}
+          {/* SUB-TABS NAVIGATION BAR */}
+          <div className="flex border-b border-slate-850 gap-2 overflow-x-auto pb-px text-left">
+            <button
+              type="button"
+              onClick={() => setTardiaTab('citas')}
+              className={`px-5 py-3 text-xs font-black uppercase tracking-wider border-b-2 transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                tardiaTab === 'citas'
+                  ? 'border-blue-500 text-blue-500 bg-blue-500/5'
+                  : 'border-transparent text-slate-400 hover:text-white hover:bg-slate-900/40'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Bandeja de Citas 📋</span>
+            </button>
+
+            {canManageSchedules && (
+              <button
+                type="button"
+                onClick={() => setTardiaTab('horarios')}
+                className={`px-5 py-3 text-xs font-black uppercase tracking-wider border-b-2 transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                  tardiaTab === 'horarios'
+                    ? 'border-blue-500 text-blue-500 bg-blue-500/5'
+                    : 'border-transparent text-slate-400 hover:text-white hover:bg-slate-900/40'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5 text-blue-500" />
+                <span>Control de Horarios y Cupos ⚙️</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setTardiaTab('descargas')}
+              className={`px-5 py-3 text-xs font-black uppercase tracking-wider border-b-2 transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                tardiaTab === 'descargas'
+                  ? 'border-blue-500 text-blue-500 bg-blue-500/5'
+                  : 'border-transparent text-slate-400 hover:text-white hover:bg-slate-900/40'
+              }`}
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Consolidado de Descargas 📊</span>
+            </button>
+          </div>
+
+          {tardiaTab === 'citas' && (
+            <>
+              {/* MODE SWITCHER & CREATION TOGGLE */}
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
             <div className="flex bg-slate-950 p-1.5 rounded-xl border border-slate-850 max-w-sm w-full sm:w-auto shadow-xl">
               <button
@@ -1315,7 +1381,7 @@ Su número de seguimiento es: ${trackNum}`;
                     onChange={(e) => setNewCitaSucursal(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 rounded p-2.5 text-white focus:outline-none focus:border-indigo-500 font-semibold"
                   >
-                    {SUCURSALES_TE.map((s) => (
+                    {SUCURSALES_TE.filter((s) => s.acceptsNationalAppointments !== false).map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.provincia} - {s.nombre}
                       </option>
@@ -1385,93 +1451,9 @@ Su número de seguimiento es: ${trackNum}`;
 
           {superViewMode === 'table' ? (
             <div className="flex flex-col gap-6">
-            
-            {/* LEFT: DOWNLOAD REPORTS FOR COMPLETED CITAS BY PERIOD */}
-            <div className="w-full bg-slate-950 p-5 rounded-xl border border-slate-850 shadow-xl space-y-4 order-2">
-              <div className="border-b border-slate-900 pb-3">
-                <h4 className="text-xs font-black uppercase text-slate-350 tracking-wider flex items-center gap-2">
-                  <Download className="w-4 h-4 text-emerald-500" />
-                  Consolidado de Descargas (Citas Realizadas)
-                </h4>
-                <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                  Consulte y descargue instantáneamente las citas de pasados de edad realizadas y confirmadas. Los reportes están disponibles en formato PDF oficial firmado o CSV estructurado.
-                </p>
-              </div>
 
-              {/* REPORT CARDS */}
-              <div className="space-y-3.5 pt-1">
-                
-                <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-xl space-y-4">
-                  {/* Date Input Range Selector */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-left">
-                    <div className="space-y-1">
-                      <label className="text-[10.5px] font-black uppercase tracking-wider text-slate-450 block font-mono">
-                        Intervalo de Fecha Desde
-                      </label>
-                      <input
-                        type="date"
-                        value={reportStartDate}
-                        onChange={(e) => setReportStartDate(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-500 transition"
-                      />
-                    </div>
-                    
-                    <div className="space-y-1">
-                      <label className="text-[10.5px] font-black uppercase tracking-wider text-slate-450 block font-mono">
-                        Intervalo de Fecha Hasta
-                      </label>
-                      <input
-                        type="date"
-                        value={reportEndDate}
-                        onChange={(e) => setReportEndDate(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-500 transition"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-850">
-                    <div className="text-left space-y-0.5">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block font-mono">
-                        Citas Encontradas (VID)
-                      </span>
-                      <p className="text-xl font-mono font-black text-white">
-                        {getCitasByDateRange(reportStartDate, reportEndDate).length} <span className="text-xs font-sans font-medium text-slate-400">citas registradas</span>
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 w-full sm:w-auto shrink-0 justify-end">
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadReportPDF(reportStartDate, reportEndDate)}
-                        disabled={exportLoading !== null}
-                        className="bg-emerald-950 hover:bg-emerald-900 border border-emerald-900 px-4 py-2 text-[10px] font-extrabold uppercase text-emerald-400 rounded flex items-center justify-center gap-1.5 cursor-pointer transition"
-                      >
-                        {exportLoading === 'pdf' ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <FileText className="w-3.5 h-3.5" />
-                        )}
-                        <span>PDF</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadReportCSV(reportStartDate, reportEndDate)}
-                        className="bg-slate-950 hover:bg-slate-800 border border-slate-800 px-4 py-2 text-[10px] font-extrabold uppercase text-slate-300 rounded flex items-center justify-center gap-1.5 cursor-pointer transition"
-                      >
-                        <FileSpreadsheet className="w-3.5 h-3.5 text-blue-450" />
-                        <span>CSV</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-
-            </div>
-
-            {/* RIGHT: COMPREHENSIVE VIEW & SUPERVISORY LIST SEARCH */}
-            <div className="w-full bg-slate-950 rounded-xl border border-slate-850 overflow-hidden shadow-xl space-y-4 p-5 order-1">
+            {/* COMPREHENSIVE VIEW & SUPERVISORY LIST SEARCH */}
+            <div className="w-full bg-slate-950 rounded-xl border border-slate-850 overflow-hidden shadow-xl space-y-4 p-5">
               
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 border-b border-slate-900 pb-3">
                 <div className="space-y-1">
@@ -1739,7 +1721,7 @@ Su número de seguimiento es: ${trackNum}`;
                 {monthDays.map(item => {
                   const dayCits = citationsByDate[item.dateStr] || [];
                   const isSelected = selectedCalendarDateStr === item.dateStr;
-                  const isToday = item.dateStr === '2026-05-27';
+                  const isToday = item.dateStr === getTodayDateStr();
                   
                   const confirmadas = dayCits.filter(c => c.estado === 'confirmada' || c.estado === 'asistire').length;
                   const realizadas = dayCits.filter(c => c.estado === 'realizada').length;
@@ -1814,6 +1796,53 @@ Su número de seguimiento es: ${trackNum}`;
                   );
                 })}
               </div>
+
+              {/* Accesos Rápidos a Fechas con Citas de Pasados de Edad */}
+              {Object.keys(citationsByDate).length > 0 && (
+                <div className="pt-4 border-t border-slate-900 mt-4 text-left">
+                  <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest block font-mono mb-2">
+                    🔍 Fechas con Citas Programadas en el Sistema (Pasados de Edad)
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.keys(citationsByDate)
+                      .sort()
+                      .map((dateStr) => {
+                        const count = citationsByDate[dateStr].length;
+                        const isSelected = selectedCalendarDateStr === dateStr;
+                        return (
+                          <button
+                            key={`quick-date-tardia-${dateStr}`}
+                            type="button"
+                            onClick={() => {
+                              setSelectedCalendarDateStr(dateStr);
+                              const parts = dateStr.split('-');
+                              if (parts.length === 3) {
+                                const y = parseInt(parts[0], 10);
+                                const m = parseInt(parts[1], 10);
+                                const d = parseInt(parts[2], 10);
+                                if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+                                  setCalendarDate(new Date(y, m - 1, d));
+                                }
+                              }
+                            }}
+                            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold transition flex items-center gap-1.5 cursor-pointer border ${
+                              isSelected
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-xs ring-1 ring-amber-500/20'
+                                : 'bg-slate-900 hover:bg-slate-850 text-slate-400 border-slate-850 hover:border-slate-700'
+                            }`}
+                          >
+                            <span>📅 {dateStr}</span>
+                            <span className={`px-1.5 py-0.2 rounded text-[9px] ${
+                              isSelected ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                            }`}>
+                              {count} {count === 1 ? 'cita' : 'citas'}
+                            </span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1828,7 +1857,7 @@ Su número de seguimiento es: ${trackNum}`;
                 {weekDays.map(item => {
                   const dayCits = citationsByDate[item.dateStr] || [];
                   const isSelected = selectedCalendarDateStr === item.dateStr;
-                  const isToday = item.dateStr === '2026-05-27';
+                  const isToday = item.dateStr === getTodayDateStr();
                   const confirmadas = dayCits.filter(c => c.estado === 'confirmada' || c.estado === 'asistire').length;
                   const realizadas = dayCits.filter(c => c.estado === 'realizada').length;
                   const canceladas = dayCits.filter(c => c.estado === 'cancelada' || c.estado === 'no_asistire').length;
@@ -2034,126 +2063,134 @@ Su número de seguimiento es: ${trackNum}`;
 
         </div>
       )}
+            </>
+          )}
 
-      {/* SCHEDULE MANAGEMENT FORM */}
-          <div className="bg-slate-950 p-5 rounded-lg border border-slate-800 space-y-4 shadow-xl text-left">
-            <div className="border-b border-slate-900 pb-2 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-blue-500" />
-                <h4 className="text-xs font-black uppercase text-slate-300 tracking-wider">
-                  Control de Horarios y Cupos (Pasados de Edad)
-                </h4>
-              </div>
-              <span className="text-[9px] bg-blue-950 text-blue-400 border border-blue-900/60 px-2 py-0.5 rounded font-bold uppercase">
-                Planificación Activa: {tardiaCapacidadTotal} Citas por día
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400 font-medium leading-relaxed font-sans">
-              Personalice los límites operativos, intervalos de reunión, hora de apertura, hora de cierre de la agenda para trámites de cédulas para ciudadanos Pasados de Edad. Standard: 4 citas por día de 8:00 AM a 11:30 AM con lapso de 30 min.
-            </p>
-
-            <form onSubmit={promptSaveTardiaConfig} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end pt-1">
-              <div className="space-y-1">
-                <label className="text-[9px] font-extrabold uppercase text-slate-450 block">Cupo Máximo Diario (Citas/Día)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="30"
-                  value={tardiaCapacidadTotal}
-                  onChange={(e) => setTardiaCapacidadTotal(parseInt(e.target.value, 10) || 1)}
-                  className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs px-3 focus:outline-none focus:ring-1 focus:ring-blue-600 font-mono font-bold"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[9px] font-extrabold uppercase text-slate-450 block">Intervalo de Cita (Minutos)</label>
-                <select
-                  value={tardiaIntervalo}
-                  onChange={(e) => setTardiaIntervalo(parseInt(e.target.value, 10))}
-                  className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-600 font-mono font-semibold"
-                >
-                  <option value="10">10 minutos</option>
-                  <option value="15">15 minutos</option>
-                  <option value="20">20 minutos</option>
-                  <option value="30">30 minutos</option>
-                  <option value="45">45 minutos</option>
-                  <option value="50">50 minutos</option>
-                  <option value="60">60 minutos</option>
-                  <option value="150">150 minutos (2:30 horas)</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[9px] font-extrabold uppercase text-slate-450 block">Hora Apertura (Inicio)</label>
-                <select
-                  value={tardiaHoraInicio}
-                  onChange={(e) => setTardiaHoraInicio(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs cursor-pointer focus:outline-none font-medium text-slate-200 font-mono"
-                >
-                  {['07:00 AM', '07:30 AM', '08:00 AM', '08:30 AM', '09:00 AM', '09:30 AM', '10:00 AM'].map(time => (
-                    <option key={`tardia-start-${time}`} value={time}>{time}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[9px] font-extrabold uppercase text-slate-455 block">Hora Cierre (Límite)</label>
-                <select
-                  value={tardiaHoraFin}
-                  onChange={(e) => setTardiaHoraFin(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs cursor-pointer focus:outline-none font-medium text-slate-201 font-mono"
-                >
-                  {['11:00 AM', '11:15 AM', '11:30 AM', '12:00 PM', '12:30 PM', '01:00 PM', '01:30 PM', '02:00 PM', '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM'].map(time => (
-                    <option key={`tardia-end-${time}`} value={time}>{time}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="sm:col-span-4 flex justify-end">
-                <button
-                  type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] uppercase tracking-wider py-2.5 px-6 rounded transition shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Check className="w-3.5 h-3.5 text-white" />
-                  <span>Guardar Planificación VID (Pasados de Edad)</span>
-                </button>
-              </div>
-            </form>
-          </div>
-
-          {/* CONFIRMATION TIMING MODAL */}
-          {showConfirmTardiaSave && (
-            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 animate-fade-in font-sans">
-              <div className="bg-slate-900 border border-blue-500/40 rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4 text-slate-100">
-                <div className="flex items-center gap-3 border-b border-blue-500/20 pb-3 text-blue-400">
-                  <AlertCircle className="w-6 h-6 shrink-0 text-blue-400" />
-                  <h4 className="text-sm font-black uppercase tracking-wider text-slate-100">Confirmar Planificación VID (Pasados de Edad)</h4>
+          {tardiaTab === 'horarios' && canManageSchedules && (
+            <div className="space-y-6 animate-fade-in text-left">
+              {/* SCHEDULE MANAGEMENT FORM */}
+              <div className="bg-slate-950 p-5 rounded-lg border border-slate-800 space-y-4 shadow-xl">
+                <div className="border-b border-slate-900 pb-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-blue-500" />
+                    <h4 className="text-xs font-black uppercase text-slate-300 tracking-wider">
+                      Control de Horarios y Cupos (Pasados de Edad)
+                    </h4>
+                  </div>
+                  <span className="text-[9px] bg-blue-950 text-blue-400 border border-blue-900/60 px-2 py-0.5 rounded font-bold uppercase">
+                    Planificación Activa: {tardiaCapacidadTotal} Citas por día
+                  </span>
                 </div>
-                <p className="text-xs text-slate-300 leading-relaxed font-semibold">
-                  ¿Está seguro de que desea aplicar estos cambios a la planificación de Pasados de Edad (VID)? 
-                  Los nuevos cupos diarios de **{tardiaCapacidadTotal} citas**, un intervalo de **{tardiaIntervalo} minutos** y el horario laborable regulado de **{tardiaHoraInicio} a {tardiaHoraFin}** se guardarán y entrarán en vigencia inmediatamente.
+                <p className="text-[11px] text-slate-400 font-medium leading-relaxed font-sans">
+                  Personalice los límites operativos, intervalos de reunión, hora de apertura, hora de cierre de la agenda para trámites de cédulas para ciudadanos Pasados de Edad. Standard: 4 citas por día de 8:00 AM a 11:30 AM con lapso de 30 min.
                 </p>
-                <div className="flex items-center justify-end gap-3 pt-2 font-black">
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirmTardiaSave(false)}
-                    className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-350 border border-slate-700 rounded text-xs uppercase tracking-wide cursor-pointer transition"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={executeSaveTardiaConfig}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs uppercase tracking-wider shadow-md cursor-pointer transition"
-                  >
-                    Sí, Confirmar Planificación
-                  </button>
-                </div>
+
+                <form onSubmit={promptSaveTardiaConfig} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end pt-1">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-extrabold uppercase text-slate-450 block">Cupo Máximo Diario (Citas/Día)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={tardiaCapacidadTotal}
+                      onChange={(e) => setTardiaCapacidadTotal(parseInt(e.target.value, 10) || 1)}
+                      className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs px-3 focus:outline-none focus:ring-1 focus:ring-blue-600 font-mono font-bold"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-extrabold uppercase text-slate-450 block">Intervalo de Cita (Minutos)</label>
+                    <select
+                      value={tardiaIntervalo}
+                      onChange={(e) => setTardiaIntervalo(parseInt(e.target.value, 10))}
+                      className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-600 font-mono font-semibold"
+                    >
+                      <option value="10">10 minutos</option>
+                      <option value="15">15 minutos</option>
+                      <option value="20">20 minutos</option>
+                      <option value="30">30 minutos</option>
+                      <option value="45">45 minutos</option>
+                      <option value="50">50 minutos</option>
+                      <option value="60">60 minutos</option>
+                      <option value="150">150 minutos (2:30 horas)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-extrabold uppercase text-slate-450 block">Hora Apertura (Inicio)</label>
+                    <select
+                      value={tardiaHoraInicio}
+                      onChange={(e) => setTardiaHoraInicio(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs cursor-pointer focus:outline-none font-medium text-slate-200 font-mono"
+                    >
+                      {['07:00 AM', '07:30 AM', '08:00 AM', '08:30 AM', '09:00 AM', '09:30 AM', '10:00 AM'].map(time => (
+                        <option key={`tardia-start-${time}`} value={time}>{time}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-extrabold uppercase text-slate-455 block">Hora Cierre (Límite)</label>
+                    <select
+                      value={tardiaHoraFin}
+                      onChange={(e) => setTardiaHoraFin(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs cursor-pointer focus:outline-none font-medium text-slate-201 font-mono"
+                    >
+                      {['11:00 AM', '11:15 AM', '11:30 AM', '12:00 PM', '12:30 PM', '01:00 PM', '01:30 PM', '02:00 PM', '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM'].map(time => (
+                        <option key={`tardia-end-${time}`} value={time}>{time}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-4 flex justify-end">
+                    <button
+                      type="submit"
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[10px] uppercase tracking-wider py-2.5 px-6 rounded transition shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Check className="w-3.5 h-3.5 text-white" />
+                      <span>Guardar Planificación VID (Pasados de Edad)</span>
+                    </button>
+                  </div>
+                </form>
               </div>
+
+              {/* CONFIRMATION TIMING MODAL */}
+              {showConfirmTardiaSave && (
+                <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 animate-fade-in font-sans">
+                  <div className="bg-slate-900 border border-blue-500/40 rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4 text-slate-100">
+                    <div className="flex items-center gap-3 border-b border-blue-500/20 pb-3 text-blue-400">
+                      <AlertCircle className="w-6 h-6 shrink-0 text-blue-400" />
+                      <h4 className="text-sm font-black uppercase tracking-wider text-slate-100">Confirmar Planificación VID (Pasados de Edad)</h4>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed font-semibold">
+                      ¿Está seguro de que desea aplicar estos cambios a la planificación de Pasados de Edad (VID)? 
+                      Los nuevos cupos diarios de **{tardiaCapacidadTotal} citas**, un intervalo de **{tardiaIntervalo} minutos** y el horario laborable regulado de **{tardiaHoraInicio} a {tardiaHoraFin}** se guardarán y entrarán en vigencia inmediatamente.
+                    </p>
+                    <div className="flex items-center justify-end gap-3 pt-2 font-black">
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmTardiaSave(false)}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-350 border border-slate-700 rounded text-xs uppercase tracking-wide cursor-pointer transition"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={executeSaveTardiaConfig}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs uppercase tracking-wider shadow-md cursor-pointer transition"
+                      >
+                        Sí, Confirmar Planificación
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Table history log of trackers */}
+          {tardiaTab === 'citas' && (
+            <>
+              {/* Table history log of trackers */}
           <div className="bg-slate-950 rounded-lg border border-slate-800 overflow-hidden shadow-xl text-left">
             <div className="bg-slate-900/50 p-4 border-b border-slate-800 flex items-center justify-between">
               <h4 className="text-xs font-black uppercase tracking-wider text-slate-350 flex items-center gap-2">
@@ -2227,35 +2264,77 @@ Su número de seguimiento es: ${trackNum}`;
                   <thead>
                     <tr className="bg-slate-900 text-[9px] font-black uppercase tracking-widest text-slate-450 border-b border-slate-800">
                       <th className="p-3 w-16 border-b border-slate-800">Fecha</th>
-                      <th className="p-3 w-40 border-b border-slate-800">N° Seguimiento</th>
-                      <th className="p-3 w-44 border-b border-slate-800">Solicitante</th>
+                      <th className="p-3 w-36 border-b border-slate-800">N° Seguimiento</th>
+                      <th className="p-3 w-36 border-b border-slate-800">N° Cita</th>
+                      <th className="p-3 w-40 border-b border-slate-800">Solicitante</th>
                       <th className="p-3 w-28 border-b border-slate-800">Documento / ID</th>
                       <th className="p-3 w-32 border-b border-slate-800">Contacto</th>
                       <th className="p-3 text-right border-b border-slate-800">Acciones de Remisión</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-850 text-xs text-slate-330">
-                    {filteredHistoricalExp.map((rec) => (
-                      <tr key={rec.id} className="hover:bg-slate-900/40 border-b border-slate-850/50">
-                        <td className="p-3 text-[10px] font-mono text-slate-450">
-                          {rec.fechaCreacion ? rec.fechaCreacion.substring(0, 10) : '2026-05-27'}
-                        </td>
-                        <td className="p-3">
-                          <span className="font-mono font-black text-blue-450 bg-blue-950/40 px-2 py-0.5 rounded border border-blue-900/30">
-                            {rec.number}
-                          </span>
-                        </td>
-                        <td className="p-3 font-semibold text-slate-200">
-                          {rec.citizenName}
-                        </td>
-                        <td className="p-3 font-mono text-[11px]">
-                          {rec.identificacion}
-                        </td>
-                        <td className="p-3 font-mono text-[10px] space-y-0.5">
-                          <div className="text-slate-350">{rec.correo}</div>
-                          <div className="text-slate-450">{rec.telefono}</div>
-                        </td>
-                        <td className="p-3 text-right">
+                    {filteredHistoricalExp.map((rec) => {
+                      const cleanStringForMatching = (str: string) => {
+                        if (!str) return '';
+                        return str.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+                      };
+                      
+                      const matchingCita = citas.find(c => {
+                        const citaSeg = c.datosPersonales?.numeroSeguimiento;
+                        const cleanCitaSeg = citaSeg ? cleanStringForMatching(citaSeg) : '';
+                        const cleanRecNum = rec.number ? cleanStringForMatching(rec.number) : '';
+                        const cleanRecId = rec.id ? cleanStringForMatching(rec.id) : '';
+                        
+                        if (cleanCitaSeg && (cleanCitaSeg === cleanRecNum || cleanCitaSeg === cleanRecId)) {
+                          return true;
+                        }
+                        
+                        const cleanCitaId = c.datosPersonales?.identificacion ? cleanStringForMatching(c.datosPersonales.identificacion) : '';
+                        const cleanRecIdDoc = rec.identificacion ? cleanStringForMatching(rec.identificacion) : '';
+                        if (cleanCitaId && cleanRecIdDoc && cleanCitaId === cleanRecIdDoc) {
+                          return true;
+                        }
+                        
+                        return false;
+                      });
+
+                      return (
+                        <tr key={rec.id} className="hover:bg-slate-900/40 border-b border-slate-850/50">
+                          <td className="p-3 text-[10px] font-mono text-slate-450">
+                            {rec.fechaCreacion ? rec.fechaCreacion.substring(0, 10) : getTodayDateStr()}
+                          </td>
+                          <td className="p-3">
+                            <span className="font-mono font-black text-blue-450 bg-blue-950/40 px-2 py-0.5 rounded border border-blue-900/30">
+                              {rec.number}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            {matchingCita ? (
+                              <div className="space-y-0.5">
+                                <span className="font-mono font-black text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-900/40 text-[10px] inline-block">
+                                  {matchingCita.codigoTransaccion}
+                                </span>
+                                <div className="text-[9.5px] font-mono text-slate-450 whitespace-nowrap">
+                                  📅 {matchingCita.fecha} | ⏰ {matchingCita.hora}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-[9.5px] font-bold text-slate-500 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 uppercase tracking-wider">
+                                Sin agendar
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 font-semibold text-slate-200">
+                            {rec.citizenName}
+                          </td>
+                          <td className="p-3 font-mono text-[11px]">
+                            {rec.identificacion}
+                          </td>
+                          <td className="p-3 font-mono text-[10px] space-y-0.5">
+                            <div className="text-slate-350">{rec.correo}</div>
+                            <div className="text-slate-450">{rec.telefono}</div>
+                          </td>
+                          <td className="p-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"
@@ -2305,8 +2384,7 @@ Su número de seguimiento es: ${trackNum}`;
                               onClick={() => {
                                 if (window.confirm('¿Está seguro de eliminar este registro del historial local de seguimientos?')) {
                                   const filtered = historicalExp.filter((e: any) => e.id !== rec.id);
-                                  setHistoricalExp(filtered);
-                                  localStorage.setItem('te_panama_historical_expedientes', JSON.stringify(filtered));
+                                  syncWithServer(filtered);
                                 }
                               }}
                               className="bg-red-950/40 hover:bg-red-900/50 text-red-500 hover:text-red-400 border border-red-900/40 p-1 rounded transition cursor-pointer"
@@ -2317,12 +2395,100 @@ Su número de seguimiento es: ${trackNum}`;
                           </div>
                         </td>
                       </tr>
-                    ))}
+                    );
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
           </div>
+            </>
+          )}
+
+          {tardiaTab === 'descargas' && (
+            <div className="space-y-6 animate-fade-in text-slate-100">
+              {/* DOWNLOAD REPORTS FOR COMPLETED CITAS BY PERIOD */}
+              <div className="w-full bg-slate-950 p-6 rounded-xl border border-slate-850 shadow-xl space-y-4 text-left">
+                <div className="border-b border-slate-900 pb-3">
+                  <h4 className="text-xs font-black uppercase text-slate-355 tracking-wider flex items-center gap-2">
+                    <Download className="w-4 h-4 text-emerald-500" />
+                    Consolidado de Descargas (Citas Realizadas)
+                  </h4>
+                  <p className="text-[11.5px] text-slate-400 mt-1 leading-relaxed">
+                    Consulte y descargue instantáneamente las citas de pasados de edad realizadas y confirmadas. Los reportes están disponibles en formato PDF oficial firmado o CSV estructurado.
+                  </p>
+                </div>
+
+                {/* REPORT CARDS */}
+                <div className="space-y-3.5 pt-1">
+                  <div className="bg-slate-900/60 border border-slate-800 p-4 rounded-xl space-y-4">
+                    {/* Date Input Range Selector */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-left">
+                      <div className="space-y-1">
+                        <label className="text-[10.5px] font-black uppercase tracking-wider text-slate-450 block font-mono">
+                          Intervalo de Fecha Desde
+                        </label>
+                        <input
+                          type="date"
+                          value={reportStartDate}
+                          onChange={(e) => setReportStartDate(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-500 transition cursor-pointer"
+                        />
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <label className="text-[10.5px] font-black uppercase tracking-wider text-slate-455 block font-mono">
+                          Intervalo de Fecha Hasta
+                        </label>
+                        <input
+                          type="date"
+                          value={reportEndDate}
+                          onChange={(e) => setReportEndDate(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-blue-500 transition cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-850">
+                      <div className="text-left space-y-0.5">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block font-mono">
+                          Citas Encontradas (VID)
+                        </span>
+                        <p className="text-xl font-mono font-black text-white">
+                          {getCitasByDateRange(reportStartDate, reportEndDate).length} <span className="text-xs font-sans font-medium text-slate-400">citas registradas</span>
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 w-full sm:w-auto shrink-0 justify-end">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadReportPDF(reportStartDate, reportEndDate)}
+                          disabled={exportLoading !== null}
+                          className="bg-emerald-950 hover:bg-emerald-900 border border-emerald-900 px-4 py-2 text-[10px] font-extrabold uppercase text-emerald-400 rounded flex items-center justify-center gap-1.5 cursor-pointer transition min-w-[100px]"
+                        >
+                          {exportLoading === 'pdf' ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <FileText className="w-3.5 h-3.5" />
+                          )}
+                          <span>PDF</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadReportCSV(reportStartDate, reportEndDate)}
+                          className="bg-slate-950 hover:bg-slate-800 border border-slate-800 px-4 py-2 text-[10px] font-extrabold uppercase text-slate-300 rounded flex items-center justify-center gap-1.5 cursor-pointer transition min-w-[100px]"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5 text-blue-450" />
+                          <span>CSV</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
         </div>
       )}

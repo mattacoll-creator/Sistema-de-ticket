@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.5
  */
 
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Ticket, Cubicle, TicketStatus, OFFICES_CONFIG, ServiceType, SERVICES_CONFIG, SystemUser, UserRole } from "../types";
 import { 
   Building2, 
@@ -78,6 +78,65 @@ export default function SuperAdminConsole({
   const totalDbCubicles = useMemo(() => {
     return Object.values(officeCubicles).reduce((acc, currentList) => acc + (currentList?.length || 0), 0);
   }, [officeCubicles]);
+
+  // Sincronizar directorio de usuarios desde la Base de Datos PostgreSQL del servidor
+  useEffect(() => {
+    let isMounted = true;
+    const fetchUsersFromDB = async () => {
+      try {
+        const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+        const res = await fetch('/api/users', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && Array.isArray(data.users) && isMounted) {
+            const mappedUsers: SystemUser[] = data.users.map((u: any) => {
+              let r = UserRole.AGENT_CAJA;
+              const roleStr = String(u.role || '').toUpperCase();
+              if (roleStr === 'SUPERADMIN' || roleStr === 'SUPER') r = UserRole.SUPERADMIN;
+              else if (roleStr.includes('SUPERVISOR')) r = UserRole.SUPERVISOR;
+              else if (roleStr.includes('TRIADA')) r = UserRole.AGENT_TRIADA;
+              else if (roleStr.includes('CAJA')) r = UserRole.AGENT_CAJA;
+              else if (roleStr.includes('REGISTRO')) r = UserRole.AGENT_REGISTRO_CIVIL;
+              else if (roleStr.includes('EXTRANJERIA')) r = UserRole.GESTOR_EXTRANJERIA;
+              else if (roleStr.includes('CITAS')) r = UserRole.GESTOR_CITAS;
+
+              return {
+                id: `usr_${u.username}`,
+                username: u.username,
+                fullName: u.nombre || u.username,
+                role: r,
+                officeId: u.sucursalId || u.sucursal_id || 'OFF-1',
+                password: u.password,
+                mustChangePassword: !!u.mustChangePassword
+              };
+            });
+
+            if (mappedUsers.length > 0) {
+              setUsers(prev => {
+                const existingMap = new Map<string, SystemUser>();
+                // Prioritize DB users
+                mappedUsers.forEach(mu => existingMap.set(mu.username.toLowerCase(), mu));
+                // Add any local-only user not yet in DB
+                prev.forEach(pu => {
+                  if (!existingMap.has(pu.username.toLowerCase())) {
+                    existingMap.set(pu.username.toLowerCase(), pu);
+                  }
+                });
+                return Array.from(existingMap.values());
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Aviso al sincronizar usuarios de la BD:", err);
+      }
+    };
+
+    fetchUsersFromDB();
+    return () => { isMounted = false; };
+  }, [setUsers]);
 
   const calculateDbSizeKB = () => {
     try {
@@ -331,7 +390,7 @@ export default function SuperAdminConsole({
     setNewPassword(`te${randomNum}`);
   };
 
-  const handleCreateUser = (e: React.FormEvent) => {
+  const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
     setFormSuccess("");
@@ -351,7 +410,7 @@ export default function SuperAdminConsole({
 
     const cleanedUsername = newUsername.trim().toLowerCase().replace(/\s+/g, "");
 
-    // Check if duplicate username
+    // Check if duplicate username locally
     if (users.some(u => u.username === cleanedUsername)) {
       setFormError(`El usuario "${cleanedUsername}" ya existe.`);
       return;
@@ -366,20 +425,65 @@ export default function SuperAdminConsole({
       password: newPassword.trim()
     };
 
-    setUsers(prev => [...prev, newUser]);
+    // 1. Guardar en estado local inmediatamente
+    setUsers(prev => [...prev.filter(u => u.username !== cleanedUsername), newUser]);
     setNewFullName("");
     setNewUsername("");
     setNewPassword("");
-    setFormSuccess("¡Usuario creado con credenciales autogeneradas!");
-    setTimeout(() => setFormSuccess(""), 5300);
+
+    // 2. Persistir en la API y Base de Datos PostgreSQL del servidor
+    try {
+      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          username: cleanedUsername,
+          password: newPassword.trim(),
+          role: newRole,
+          nombre: newFullName.trim(),
+          sucursalId: newOfficeId
+        })
+      });
+      
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setFormSuccess(`¡Usuario "${cleanedUsername}" creado y guardado en la Base de Datos PostgreSQL con éxito!`);
+      } else {
+        setFormError(`Aviso del servidor: ${data.error || "No se pudo guardar en la base de datos."}`);
+      }
+    } catch (apiErr: any) {
+      console.warn("Aviso de sincronización de usuario con API:", apiErr);
+      setFormError("Aviso: El usuario fue creado localmente pero ocurrió un problema de conexión con la BD del servidor.");
+    }
+
+    setTimeout(() => {
+      setFormSuccess("");
+    }, 6000);
   };
 
-  const handleDeleteUser = (userId: string) => {
+  const handleDeleteUser = async (userId: string) => {
     const userToDel = users.find(u => u.id === userId);
     if (!userToDel) return;
     
     if (confirm(`¿Está seguro de eliminar al usuario "${userToDel.fullName}"?`)) {
       setUsers(prev => prev.filter(u => u.id !== userId));
+
+      // Eliminar también en la base de datos del servidor
+      try {
+        const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+        await fetch(`/api/users/${encodeURIComponent(userToDel.username.toLowerCase())}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+      } catch (err) {
+        console.warn("Error al eliminar usuario en el servidor:", err);
+      }
     }
   };
 
@@ -1646,16 +1750,25 @@ export default function SuperAdminConsole({
 
               {/* Role selection */}
               <div className="space-y-1.5">
-                <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-widest">Rol del Operador:</label>
+                <label className="block text-[10px] font-bold text-slate-550 uppercase tracking-widest">Rol / Tipo de Gestión:</label>
                 <select
                   value={newRole}
                   onChange={(e) => setNewRole(e.target.value as UserRole)}
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none font-bold text-slate-705 cursor-pointer"
                 >
-                  <option value={UserRole.AGENT_CAJA}>🏧 Agente de Hechos Vitales (Registro Civil)</option>
-                  <option value={UserRole.AGENT_TRIADA}>📸 Agente de Investigación (Registro Civil)</option>
-                  <option value={UserRole.SUPERVISOR}>👑 Administrador / Supervisor Regional</option>
-                  <option value={UserRole.SUPERADMIN}>🛡️ Super Administrador Central</option>
+                  <optgroup label="🎟️ Módulos de Tickets (Ventanillas en Vivo)">
+                    <option value={UserRole.AGENT_CAJA}>🏧 Agente de Caja (Ticket / Cobros)</option>
+                    <option value={UserRole.AGENT_TRIADA}>📸 Agente de Tríada (Ticket / Fotografía / Biometría)</option>
+                    <option value={UserRole.AGENT_REGISTRO_CIVIL}>📑 Agente Registro Civil (Ticket / Trámites)</option>
+                  </optgroup>
+                  <optgroup label="📅 Módulos de Citas y Extranjería">
+                    <option value={UserRole.GESTOR_CITAS}>📅 Gestor de Citas Previas e Inscripción</option>
+                    <option value={UserRole.GESTOR_EXTRANJERIA}>🛂 Gestor de Citas de Extranjería / Inmigración</option>
+                  </optgroup>
+                  <optgroup label="👑 Supervisión y Administración">
+                    <option value={UserRole.SUPERVISOR}>👑 Administrador / Supervisor Regional (Tickets + Citas)</option>
+                    <option value={UserRole.SUPERADMIN}>🛡️ Super Administrador Central (Acceso Total)</option>
+                  </optgroup>
                 </select>
               </div>
 
@@ -1715,16 +1828,25 @@ export default function SuperAdminConsole({
                 let roleLabel: string = u.role;
                 if (u.role === UserRole.SUPERADMIN) {
                   roleBadgeColor = "bg-purple-100 text-purple-950 border-purple-300 font-black";
-                  roleLabel = "🛡️ Super Administrador";
+                  roleLabel = "🛡️ Super Administrador (Total)";
                 } else if (u.role === UserRole.SUPERVISOR) {
                   roleBadgeColor = "bg-amber-500/10 text-amber-950 border-amber-400/30 font-black";
-                  roleLabel = "👑 Supervisor Regional";
+                  roleLabel = "👑 Supervisor (Tickets y Citas)";
                 } else if (u.role === UserRole.AGENT_CAJA) {
                   roleBadgeColor = "bg-emerald-500/10 text-emerald-950 border-emerald-400/30 font-black";
-                  roleLabel = "🏧 Agente de Hechos Vitales";
+                  roleLabel = "🏧 Agente de Caja (Ticket)";
                 } else if (u.role === UserRole.AGENT_TRIADA) {
                   roleBadgeColor = "bg-cyan-500/10 text-cyan-950 border-cyan-400/30 font-black";
-                  roleLabel = "📸 Agente de Investigación";
+                  roleLabel = "📸 Agente de Tríada (Ticket)";
+                } else if (u.role === UserRole.AGENT_REGISTRO_CIVIL) {
+                  roleBadgeColor = "bg-teal-500/10 text-teal-950 border-teal-400/30 font-black";
+                  roleLabel = "📑 Agente Reg. Civil (Ticket)";
+                } else if (u.role === UserRole.GESTOR_CITAS) {
+                  roleBadgeColor = "bg-indigo-500/10 text-indigo-950 border-indigo-400/30 font-black";
+                  roleLabel = "📅 Gestor Citas Previas";
+                } else if (u.role === UserRole.GESTOR_EXTRANJERIA) {
+                  roleBadgeColor = "bg-sky-500/10 text-sky-950 border-sky-400/30 font-black";
+                  roleLabel = "🛂 Gestor Extranjería / Citas";
                 }
 
                 return (
@@ -1772,7 +1894,7 @@ export default function SuperAdminConsole({
             </div>
 
             <div className="p-3.5 border border-sky-100 bg-sky-50 text-sky-950 rounded-xl text-[10px] leading-relaxed font-semibold">
-              ℹ️ <strong>Seguridad del Kiosko y Consolas:</strong> Los agentes creados aquí son inmediatamente funcionales. La división entre <strong>Oficiales de Hechos Vitales</strong> y <strong>Oficiales de Investigación</strong> es estricta: un agente de Hechos Vitales no tiene permitido ver los datos ni las colas del equipo de Investigación, garantizando la confidencialidad, optimización del caudal y mitigación de errores de flujos cruzados.
+              ℹ️ <strong>Seguridad del Kiosko y Consolas:</strong> Los agentes creados aquí son inmediatamente funcionales. La división entre <strong>Agentes de Caja</strong> y <strong>Agentes de Tríada</strong> es estricta: un agente de Caja no tiene permitido ver los datos ni las colas del equipo de Tríada, garantizando la confidencialidad, optimización del caudal y mitigación de errores de flujos cruzados.
             </div>
           </div>
 

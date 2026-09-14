@@ -122,7 +122,8 @@ const renderWithLinks = (text: string) => {
 
 export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCita }: CitaComprobanteProps) {
   const currentCategory = SERVICIOS_TRIBUNAL.find((c) => c.id === cita.servicioCategoria);
-  const currentSubService = currentCategory?.subServicios.find((s) => s.id === cita.subServicioId);
+  const currentSubService = currentCategory?.subServicios.find((s) => s.id === cita.subServicioId)
+    || SERVICIOS_TRIBUNAL.flatMap(c => c.subServicios).find(s => s.id === cita.subServicioId);
   const currentSucursal = SUCURSALES_TE.find((s) => s.id === cita.sucursalId);
 
   // States to manage email sending
@@ -190,6 +191,16 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
     };
   }, [cita.id, cita.estado]);
 
+  // Auto-send confirmation email on component mount
+  React.useEffect(() => {
+    if (cita.datosPersonales.correo && cita.datosPersonales.correo.trim().includes('@')) {
+      handleSendEmail(undefined, cita.datosPersonales.correo.trim());
+    } else {
+      setEmailStatus('error');
+      setEmailMessage('No se detectó un correo electrónico de contacto válido para realizar el envío automático del comprobante.');
+    }
+  }, [cita.id]);
+
   const handleSendReminder = async () => {
     setReminderStatus('sending');
     setReminderMessage('');
@@ -256,11 +267,12 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
     return `${day} de ${month} de ${year}`;
   };
 
-  const handleSendEmail = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!emailInput || !emailInput.includes('@')) {
+  const handleSendEmail = async (e?: React.FormEvent, emailOverride?: string) => {
+    if (e) e.preventDefault();
+    const targetEmail = emailOverride !== undefined ? emailOverride : emailInput;
+    if (!targetEmail || !targetEmail.includes('@')) {
       setEmailStatus('error');
-      setEmailMessage('Por favor, introduzca un correo electrónico válido.');
+      setEmailMessage('No se detectó un correo electrónico de contacto válido para realizar el envío automático del comprobante.');
       return;
     }
 
@@ -274,7 +286,7 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email: emailInput,
+          email: targetEmail,
           codigoTransaccion: cita.codigoTransaccion,
           categoriaNombre: currentCategory?.nombre || '',
           subServicioNombre: currentSubService?.nombre || '',
@@ -372,7 +384,7 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
           </div>
           <div className="flex sm:flex-col items-center sm:items-end gap-2 sm:gap-1.5">
             <div className="text-center sm:text-right bg-white/10 rounded px-3 py-1 border border-white/10 select-all font-semibold">
-              <span className="text-[9px] text-white/70 uppercase block tracking-wider font-extrabold">Código de Cita</span>
+              <span className="text-[9px] text-white/70 uppercase block tracking-wider font-extrabold">Código de Cita / Ref N° {cita.id}</span>
               <span className="font-mono text-xs font-black text-amber-400">{cita.codigoTransaccion}</span>
             </div>
             
@@ -438,6 +450,23 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
               </p>
             </div>
           ) : null}
+
+          {/* Extranjeria Sequence Number badge (1-56/day limit) */}
+          {cita.servicioCategoria === 'extranjeria' && !isCanceled && (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="p-1 px-2 bg-amber-500 text-slate-950 font-black rounded text-[9px] uppercase tracking-wider font-mono">
+                  Extranjería
+                </span>
+                <span className="text-slate-800 font-bold text-[11px]">
+                  Secuencia Oficial del Día (Capacidad: 56 Citas/Día):
+                </span>
+              </div>
+              <span className="font-mono font-black text-xs text-amber-900 bg-amber-100 border border-amber-300 px-3 py-1 rounded shadow-xs">
+                {cita.numeroCitaDia ? `CITA N° ${cita.numeroCitaDia} DE 56` : 'CITA REGISTRADA'}
+              </span>
+            </div>
+          )}
           
           {/* Main info column */}
           <div className="space-y-4">
@@ -558,141 +587,82 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
 
       </div>
 
-      {/* Email Dispatch Control Card */}
-      <div className="bg-white border border-slate-200 rounded p-5 max-w-2xl mx-auto shadow-sm space-y-4">
-        <h5 className="text-xs font-extrabold text-blue-900 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-100 pb-2.5">
-          <Mail className="w-4 h-4 text-blue-700 animate-pulse" />
-          <span>Enviar Comprobante por Correo Electrónico</span>
-        </h5>
-        
-        <p className="text-[11px] text-slate-500 leading-normal font-medium">
-          ¿Desea recibir una copia oficial de este comprobante directamente en su buzón de entrada? Confirme o edite su dirección de correo electrónica de contacto a continuación:
-        </p>
-
-        <form onSubmit={handleSendEmail} className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1">
-            <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="email"
-              value={emailInput}
-              onChange={(e) => {
-                setEmailInput(e.target.value);
-                if (emailStatus === 'success' || emailStatus === 'error') {
-                  setEmailStatus('idle');
-                }
-              }}
-              placeholder="correo@ejemplo.com"
-              disabled={emailStatus === 'sending'}
-              className="w-full h-11 pl-9 pr-4 text-xs bg-white border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-750 font-medium"
-              required
-            />
+      {/* Automatic Email Dispatch Status Bar */}
+      <div className="max-w-2xl mx-auto">
+        {emailStatus === 'sending' && (
+          <div className="bg-slate-50 border border-slate-200/60 rounded p-4 text-xs font-semibold text-slate-700 flex items-center justify-between shadow-sm animate-pulse">
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-blue-700" />
+              <span>Despachando comprobante de manera automática a <strong className="text-slate-900 font-extrabold">{cita.datosPersonales.correo || 'su correo'}</strong>...</span>
+            </div>
           </div>
-          <button
-            type="submit"
-            disabled={emailStatus === 'sending'}
-            className={`h-11 px-5 rounded text-xs uppercase font-extrabold tracking-wider transition flex items-center justify-center gap-2 cursor-pointer shrink-0 ${
-              emailStatus === 'sending'
-                ? 'bg-slate-100 text-slate-450 border border-slate-200 cursor-not-allowed'
-                : 'bg-blue-700 hover:bg-blue-850 text-white shadow-sm hover:shadow'
-            }`}
-          >
-            {emailStatus === 'sending' ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                <span>Enviando...</span>
-              </>
-            ) : (
-              <>
-                <Send className="w-4 h-4" />
-                <span>Enviar por Correo</span>
-              </>
-            )}
-          </button>
-        </form>
+        )}
 
-        {/* Status Responses */}
         {emailStatus === 'success' && (
-          <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded text-xs space-y-1">
-            <p className="font-extrabold flex items-center gap-1.5">
-              <CheckCircle className="w-4 h-4 text-emerald-600" />
-              <span>¡Comprobante despachado!</span>
+          <div className="bg-emerald-50/80 border border-emerald-500/20 rounded p-4 text-xs font-semibold text-emerald-950 shadow-sm space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-emerald-800 font-extrabold">
+                <CheckCircle className="w-4 h-4 text-emerald-600" />
+                <span>¡Comprobante enviado automáticamente!</span>
+              </div>
+              {isSimulated && confHtmlPreview && (
+                <button
+                  type="button"
+                  onClick={() => setShowConfHtmlPreview(!showConfHtmlPreview)}
+                  className="text-[11px] font-bold text-emerald-800 hover:text-emerald-950 underline decoration-dotted underline-offset-4 cursor-pointer"
+                >
+                  {showConfHtmlPreview ? 'Ocultar correo' : 'Ver correo simulado (HTML)'}
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-600 pl-6 leading-relaxed">
+              Hemos despachado una copia digital del comprobante de cita a la dirección <strong className="text-slate-900 font-extrabold">{cita.datosPersonales.correo}</strong>.
             </p>
-            <p className="font-medium text-[11px] leading-normal text-emerald-700 pl-5">
-              {emailMessage}
-            </p>
-            {isSimulated && (
-              <>
-                <p className="font-bold text-[10px] text-amber-700 leading-normal pl-5 uppercase">
-                  (Nota: El servidor está operando en Modo Demostración sin claves. Para efectuar entregas reales a cualquier bandeja, configure las variables OUTLOOK_USER y OUTLOOK_PASS en los secretos).
-                </p>
-                {confHtmlPreview && (
-                  <div className="mt-3.5 pt-3.5 border-t border-emerald-200/50 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-extrabold uppercase text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded tracking-wider">
-                        Buzón de Simulación Activo
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowConfHtmlPreview(!showConfHtmlPreview)}
-                        className="text-[11px] font-bold text-emerald-800 hover:text-emerald-950 underline decoration-dotted underline-offset-4 cursor-pointer"
-                      >
-                        {showConfHtmlPreview ? 'Ocultar correo' : 'Ver correo simulado (HTML)'}
-                      </button>
-                    </div>
-                    {showConfHtmlPreview && (
-                      <div className="bg-white rounded border border-emerald-200 overflow-hidden shadow-sm">
-                        <div className="bg-slate-100 p-2.5 text-[10px] border-b border-slate-200 text-slate-500 font-mono flex items-center justify-between">
-                          <span>De: Tribunal Electoral (simulado)</span>
-                          <span>Para: {emailInput}</span>
-                        </div>
-                        <div 
-                          className="p-4 overflow-auto max-h-96 text-left border-t border-slate-100" 
-                          dangerouslySetInnerHTML={{ __html: confHtmlPreview }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
+            {isSimulated && showConfHtmlPreview && confHtmlPreview && (
+              <div className="bg-white rounded border border-emerald-100 overflow-hidden shadow-inner mt-2">
+                <div className="bg-slate-50 p-2 text-[10px] border-b border-slate-100 text-slate-400 font-mono flex items-center justify-between">
+                  <span>De: Tribunal Electoral (simulado)</span>
+                  <span>Para: {cita.datosPersonales.correo}</span>
+                </div>
+                <div 
+                  className="p-4 overflow-auto max-h-96 text-left border-t border-slate-50" 
+                  dangerouslySetInnerHTML={{ __html: confHtmlPreview }}
+                />
+              </div>
             )}
           </div>
         )}
 
         {emailStatus === 'error' && (
-          <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded text-xs space-y-2">
-            <div>
-              <p className="font-extrabold flex items-center gap-1.5 text-red-700">
-                <AlertCircle className="w-4 h-4 text-red-600" />
-                <span>No se pudo procesar el correo</span>
-              </p>
+          <div className="bg-amber-50 border border-amber-500/20 rounded p-4 text-xs font-semibold text-amber-950 shadow-sm space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-amber-800 font-extrabold">
+                <AlertCircle className="w-4 h-4 text-amber-600" />
+                <span>Envío automático no procesado</span>
+              </div>
+              {confHtmlPreview && (
+                <button
+                  type="button"
+                  onClick={() => setShowConfHtmlPreview(!showConfHtmlPreview)}
+                  className="text-[11px] font-bold text-amber-800 hover:text-amber-950 underline decoration-dotted underline-offset-4 cursor-pointer"
+                >
+                  {showConfHtmlPreview ? 'Ocultar correo' : 'Ver correo simulado (HTML)'}
+                </button>
+              )}
             </div>
-            
-            {confHtmlPreview && (
-              <div className="mt-3 pt-3 border-t border-red-200/50 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-extrabold uppercase text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded tracking-wider">
-                    Buzón de Simulación Alternativo
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setShowConfHtmlPreview(!showConfHtmlPreview)}
-                    className="text-[11px] font-bold text-red-800 hover:text-red-950 underline decoration-dotted underline-offset-4 cursor-pointer"
-                  >
-                    {showConfHtmlPreview ? 'Ocultar correo' : 'Ver correo simulado (HTML)'}
-                  </button>
+            <p className="text-[11px] text-slate-600 pl-6 leading-relaxed">
+              {emailMessage || "No se registró una dirección de correo electrónica de contacto válida para realizar el envío automático."}
+            </p>
+            {showConfHtmlPreview && confHtmlPreview && (
+              <div className="bg-white rounded border border-slate-200 overflow-hidden shadow-inner mt-2">
+                <div className="bg-slate-50 p-2 text-[10px] border-b border-slate-200 text-slate-500 font-mono flex items-center justify-between">
+                  <span>De: Tribunal Electoral (simulado)</span>
+                  <span>Para: {cita.datosPersonales.correo || 'N/A'}</span>
                 </div>
-                {showConfHtmlPreview && (
-                  <div className="bg-white rounded border border-red-200 overflow-hidden shadow-sm">
-                    <div className="bg-slate-100 p-2.5 text-[10px] border-b border-slate-200 text-slate-500 font-mono flex items-center justify-between">
-                      <span>De: Tribunal Electoral</span>
-                      <span>Para: {emailInput}</span>
-                    </div>
-                    <div 
-                      className="p-4 overflow-auto max-h-96 text-left border-t border-slate-100" 
-                      dangerouslySetInnerHTML={{ __html: confHtmlPreview }}
-                    />
-                  </div>
-                )}
+                <div 
+                  className="p-4 overflow-auto max-h-96 text-left border-t border-slate-100" 
+                  dangerouslySetInnerHTML={{ __html: confHtmlPreview }}
+                />
               </div>
             )}
           </div>

@@ -196,12 +196,20 @@ export default function FormularioDatos({ initialData, onSuccess, onBack, select
       setVerifyingPassport(false);
 
       setErrors({});
+      const fullCitizenName = [
+        primerNombre.trim(),
+        segundoNombre.trim(),
+        primerApellido.trim(),
+        segundoApellido.trim()
+      ].filter(Boolean).join(' ');
+
       onSuccess({
         tipoIdentificacion: 'Pasaporte',
         identificacion: pasaporte.trim().toUpperCase(),
         fechaNacimiento: fechaResolucion,
         telefono: 'N/A',
         correo: correo.trim(),
+        nombreCompleto: fullCitizenName,
         primerNombre: primerNombre.trim(),
         segundoNombre: segundoNombre.trim(),
         primerApellido: primerApellido.trim(),
@@ -268,24 +276,45 @@ export default function FormularioDatos({ initialData, onSuccess, onBack, select
       } else {
         // Strict platform registration validation
         try {
-          const stored = localStorage.getItem('te_panama_historical_expedientes');
           let isValid = false;
           let citizenDetails: any = null;
-          if (stored) {
-            const list = JSON.parse(stored);
-            if (Array.isArray(list)) {
-              const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
-              const cleanedInput = clean(numeroSeguimiento);
-              const found = list.find((item: any) => {
-                const itemNum = item.number || item.id || '';
-                return clean(itemNum) === cleanedInput;
-              });
-              if (found) {
-                isValid = true;
-                citizenDetails = found;
+
+          // 1. Try to verify with backend database first
+          try {
+            const res = await fetch('/api/tardia/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ numeroSeguimiento: numeroSeguimiento.trim() })
+            });
+            const data = await res.json();
+            if (data.success && data.found) {
+              isValid = true;
+              citizenDetails = data.record;
+            }
+          } catch (apiErr) {
+            console.error('Error verifying with backend API:', apiErr);
+          }
+
+          // 2. Fallback to localStorage
+          if (!isValid) {
+            const stored = localStorage.getItem('te_panama_historical_expedientes');
+            if (stored) {
+              const list = JSON.parse(stored);
+              if (Array.isArray(list)) {
+                const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+                const cleanedInput = clean(numeroSeguimiento);
+                const found = list.find((item: any) => {
+                  const itemNum = item.number || item.id || '';
+                  return clean(itemNum) === cleanedInput;
+                });
+                if (found) {
+                  isValid = true;
+                  citizenDetails = found;
+                }
               }
             }
           }
+
           if (!isValid) {
             newErrors.numeroSeguimiento = `Número de expediente no ubicado en el control de la base de datos. El trámite requiere de un proceso previamente aprobado que le dará un número de expediente, favor escribir a verificacionid@tribunal-electoral.gob.pa o entrar a la página del tribunal-electoral.gob.pa, para revisar sus requisitos.`;
           } else if (citizenDetails) {

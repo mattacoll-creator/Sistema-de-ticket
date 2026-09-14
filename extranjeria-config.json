@@ -1,0 +1,7 @@
+{
+  "capacidad": 2,
+  "intervalo": 15,
+  "horaInicio": "07:00 AM",
+  "horaFin": "01:45 PM",
+  "ticketKioscoUrl": "https://test.te.gob.pa:8443/kiosco"
+}

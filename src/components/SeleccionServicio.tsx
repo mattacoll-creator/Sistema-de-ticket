@@ -196,7 +196,7 @@ const CATEGORY_META: Record<ServicioCategoriaId, {
     bgLight: 'bg-sky-50 text-sky-700',
     textColor: 'text-sky-900',
     pillColor: 'bg-sky-100 text-sky-800',
-    badgeText: 'Panameños en Extranjero'
+    badgeText: 'Pasado de edad'
   }
 };
 
@@ -238,7 +238,7 @@ export default function SeleccionServicio({
     } else if (catId === 'cedulacion') {
       const ext = SERVICIOS_TRIBUNAL.find(c => c.id === 'extranjeria');
       if (ext) {
-        list = [...list, ...ext.subServicios];
+        list = [...ext.subServicios, ...list];
       }
     }
     
@@ -259,7 +259,7 @@ export default function SeleccionServicio({
 
   // Global search items list across allowed categories (Cedulación, Organización Electoral)
   const allSubServices = [
-    ...SERVICIOS_TRIBUNAL.filter((cat) => ['cedulacion', 'organizacion_electoral', 'extranjeria'].includes(cat.id)).flatMap((cat) => {
+    ...SERVICIOS_TRIBUNAL.filter((cat) => ['extranjeria', 'cedulacion', 'organizacion_electoral'].includes(cat.id)).flatMap((cat) => {
       return cat.subServicios.map((sub) => {
         let customCategoryName = cat.nombre;
         let targetCategoryId: ServicioCategoriaId = cat.id;
@@ -318,7 +318,7 @@ export default function SeleccionServicio({
   const handleNextSubmit = () => {
     if (activeCat && activeSub) {
       let finalCat = activeCat;
-      if (activeSub.startsWith('ext_')) {
+      if (activeSub.startsWith('ext_') || activeSub.startsWith('ced_extranjero_')) {
         finalCat = 'extranjeria';
       } else if (activeSub.startsWith('pe_')) {
         finalCat = 'panamenos_extranjero';

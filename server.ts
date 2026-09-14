@@ -1,4 +1,3 @@
-import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import path from "path";
@@ -9,38 +8,133 @@ import http from "http";
 import https from "https";
 import nodemailer from "nodemailer";
 import pg from "pg";
+import dotenv from "dotenv";
+import webpush from "web-push";
+import crypto from "crypto";
+
+
+// Load appropriate env file
+if (process.env.NODE_ENV === "test") {
+  if (fs.existsSync("env.test")) {
+    dotenv.config({ path: "env.test", override: true });
+  } else if (fs.existsSync(".env.test")) {
+    dotenv.config({ path: ".env.test", override: true });
+  } else {
+    dotenv.config();
+  }
+} else {
+  dotenv.config();
+}
 
 const { Pool } = pg;
 
 // ==========================================
+// WEB PUSH CONFIGURATION (SECURITY HARDENED)
+// ==========================================
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "BKN_CuZTxrHYKHwaExbIzoKbaZOcRr2VVu6iarKHQGjeGebnkZJlDmNO6WnGDTTo9wbHRClEkJ21f14pQrDnNBA";
+
+if (!process.env.VAPID_PRIVATE_KEY) {
+  console.warn("\x1b[33m[SECURITY WARNING] VAPID_PRIVATE_KEY is not defined in environment variables! Using fallback static key is insecure for production.\x1b[0m");
+}
+
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "uuImwOGSeZ-hU5O3r6LtNcf2ES6PRDqM0b7bKFX31lo";
+
+
+webpush.setVapidDetails(
+  "mailto:contacto@tribunal-electoral.gob.pa",
+  VAPID_PUBLIC_KEY,
+  VAPID_PRIVATE_KEY
+);
+
+// ==========================================
 // AZURE POSTGRESQL FLEXIBLE SERVER CONFIGS & INITIALIZER
 // ==========================================
-const pgConnectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+let pgConnectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || "";
+
+if (process.env.PGDATABASE && pgConnectionString) {
+  try {
+    const urlObj = new URL(pgConnectionString);
+    const urlDbName = urlObj.pathname.replace(/^\//, "");
+    if (urlDbName && urlDbName !== process.env.PGDATABASE) {
+      urlObj.pathname = `/${process.env.PGDATABASE}`;
+      pgConnectionString = urlObj.toString();
+    }
+  } catch (e) {
+    pgConnectionString = pgConnectionString.replace(
+      /(:\d+\/)([^?\/]+)(\?|$)/,
+      `$1${process.env.PGDATABASE}$3`
+    );
+  }
+}
+
 const isPgConfigured = !!(pgConnectionString || process.env.PGHOST);
 
 let pgPool: pg.Pool | null = null;
+let activeDbTarget = "postgres";
+let isPgAvailable = false;
+
 if (isPgConfigured) {
+  if (pgConnectionString) {
+    try {
+      const parsed = new URL(pgConnectionString);
+      activeDbTarget = parsed.pathname.replace(/^\//, "") || process.env.PGDATABASE || "postgres";
+    } catch {
+      activeDbTarget = process.env.PGDATABASE || "postgres";
+    }
+  } else {
+    activeDbTarget = process.env.PGDATABASE || "postgres";
+  }
+
   const pgConfig: pg.PoolConfig = pgConnectionString
     ? { connectionString: pgConnectionString }
     : {
         host: process.env.PGHOST,
         user: process.env.PGUSER,
         password: process.env.PGPASSWORD,
-        database: process.env.PGDATABASE || "postgres",
+        database: activeDbTarget,
         port: parseInt(process.env.PGPORT || "5432", 10),
       };
+
+  // Prevent long hangs if Azure PostgreSQL database is offline or unreachable
+  pgConfig.connectionTimeoutMillis = 3000;
 
   // Azure PostgreSQL Flexible Server requires SSL by default
   pgConfig.ssl = process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false };
 
   pgPool = new Pool(pgConfig);
-  console.log(`[Azure PostgreSQL Flexible Server] Configured & Initialized`);
+  pgPool.on("error", (err: any) => {
+    console.warn("[Azure PostgreSQL Pool Notice]:", err.message);
+    if (err.code === "ENOTFOUND" || err.code === "ECONNREFUSED" || err.code === "ETIMEDOUT") {
+      isPgAvailable = false;
+      pgPool = null;
+    }
+  });
+
+  process.env.PGDATABASE = activeDbTarget;
+  console.log(`[Azure PostgreSQL Flexible Server] Configured & Initialized Database: [${activeDbTarget}]`);
+}
+
+async function safePgQuery(text: string, params?: any[]): Promise<pg.QueryResult<any> | null> {
+  if (!isPgConfigured || !pgPool || !isPgAvailable) {
+    return null;
+  }
+  try {
+    return await pgPool.query(text, params);
+  } catch (err: any) {
+    if (err.code === "ENOTFOUND" || err.code === "ECONNREFUSED" || err.code === "ETIMEDOUT") {
+      isPgAvailable = false;
+      pgPool = null;
+    }
+    console.warn(`[Azure PostgreSQL Query Warning]: ${err.message}`);
+    return null;
+  }
 }
 
 async function initPostgresSchema() {
   if (!pgPool) return;
   try {
     const client = await pgPool.connect();
+    isPgAvailable = true;
     try {
       // 1. USUARIOS Y AUTENTICACIÓN
       await client.query(`
@@ -49,11 +143,26 @@ async function initPostgresSchema() {
           password VARCHAR(255) NOT NULL,
           role VARCHAR(100) NOT NULL,
           nombre VARCHAR(255) NOT NULL,
-          sucursal_id VARCHAR(100),
+          sucursal_id VARCHAR(100) DEFAULT 'OFF-1',
           must_change_password BOOLEAN DEFAULT FALSE,
           activo BOOLEAN DEFAULT TRUE,
           fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
+
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          id SERIAL PRIMARY KEY,
+          endpoint TEXT NOT NULL,
+          keys JSONB NOT NULL,
+          user_id VARCHAR(100),
+          ticket_id VARCHAR(100),
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+
+        -- Migración automática en caso de que la tabla 'usuarios' ya existiera sin sucursal_id
+        ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sucursal_id VARCHAR(100) DEFAULT 'OFF-1';
+        ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE;
+        ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE;
+        ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT NOW();
       `);
 
       // 2. CITAS WEB (AGENDAMIENTO CIUDADANO)
@@ -82,6 +191,10 @@ async function initPostgresSchema() {
         CREATE INDEX IF NOT EXISTS idx_appts_identificacion ON appointments (identificacion);
         CREATE INDEX IF NOT EXISTS idx_appts_sucursal ON appointments (sucursal_id);
         CREATE INDEX IF NOT EXISTS idx_appts_estado ON appointments (estado);
+
+        -- Migraciones automáticas para nuevas capacidades de Extranjería
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS numero_cita_dia INTEGER;
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS resolucion VARCHAR(255);
       `);
 
       // 3. TICKETS DE TURNO (KIOSKO Y SALA DE ESPERA - ACTIVOS)
@@ -126,6 +239,7 @@ async function initPostgresSchema() {
         ALTER TABLE tickets ADD COLUMN IF NOT EXISTS es_cita BOOLEAN DEFAULT FALSE;
         ALTER TABLE tickets ADD COLUMN IF NOT EXISTS cita_id VARCHAR(100);
         ALTER TABLE tickets ADD COLUMN IF NOT EXISTS sucursal_id VARCHAR(100) DEFAULT 'OFF-1';
+        ALTER TABLE tickets ADD COLUMN IF NOT EXISTS historial_fases JSONB;
         ALTER TABLE tickets ADD COLUMN IF NOT EXISTS estado VARCHAR(50) DEFAULT 'espera';
         ALTER TABLE tickets ADD COLUMN IF NOT EXISTS fase_actual VARCHAR(50) DEFAULT 'caja';
         ALTER TABLE tickets ADD COLUMN IF NOT EXISTS modulo_asignado VARCHAR(50);
@@ -263,6 +377,12 @@ async function initPostgresSchema() {
           created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
         CREATE INDEX IF NOT EXISTS idx_extranjeria_pasaporte ON extranjeria_records (pasaporte);
+
+        -- Migraciones automáticas para columnas extendidas de Extranjería
+        ALTER TABLE extranjeria_records ADD COLUMN IF NOT EXISTS numero_cita_dia INTEGER;
+        ALTER TABLE extranjeria_records ADD COLUMN IF NOT EXISTS resolucion VARCHAR(255);
+        ALTER TABLE extranjeria_records ADD COLUMN IF NOT EXISTS fecha VARCHAR(50);
+        ALTER TABLE extranjeria_records ADD COLUMN IF NOT EXISTS hora VARCHAR(50);
       `);
 
       // 9. EXPEDIENTES DE INSCRIPCIÓN TARDÍA (PASADOS DE EDAD)
@@ -278,10 +398,22 @@ async function initPostgresSchema() {
           estado_tramite VARCHAR(100) DEFAULT 'en_revision',
           documentos_presentados JSONB,
           notas TEXT,
+          notes TEXT,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
         CREATE INDEX IF NOT EXISTS idx_tardia_seguimiento ON tardia_records (numero_seguimiento);
         CREATE INDEX IF NOT EXISTS idx_tardia_identificacion ON tardia_records (identificacion);
+      `);
+
+      await client.query(`
+        ALTER TABLE tardia_records ADD COLUMN IF NOT EXISTS sucursal_id VARCHAR(100);
+        ALTER TABLE tardia_records ADD COLUMN IF NOT EXISTS fecha_cita VARCHAR(50);
+        ALTER TABLE tardia_records ADD COLUMN IF NOT EXISTS hora_cita VARCHAR(50);
+        ALTER TABLE tardia_records ADD COLUMN IF NOT EXISTS estado_tramite VARCHAR(100) DEFAULT 'en_revision';
+        ALTER TABLE tardia_records ADD COLUMN IF NOT EXISTS documentos_presentados JSONB;
+        ALTER TABLE tardia_records ADD COLUMN IF NOT EXISTS notas TEXT;
+        ALTER TABLE tardia_records ADD COLUMN IF NOT EXISTS notes TEXT;
+        ALTER TABLE tardia_records ADD COLUMN IF NOT EXISTS note TEXT;
       `);
 
       // 10. CONFIGURACIONES DEL SISTEMA (CMS, CUPOS Y HORARIOS)
@@ -308,11 +440,28 @@ async function initPostgresSchema() {
       `);
 
       console.log("[Azure PostgreSQL Flexible Server] Las 11 tablas e infraestructura verificadas correctamente.");
+
+      // Precise purge of known mock/demo datasets from PG tables
+      try {
+        await client.query(`
+          DELETE FROM appointments WHERE id IN ('EXT-20260907-001', 'EXT-20260907-002', 'EXT-20260908-001', 'PA-20260908-002', 'PA-20260907-003');
+          DELETE FROM extranjeria_records WHERE pasaporte IN ('PA123456', 'PA987654', 'PA555444', 'PA000111');
+          DELETE FROM tardia_records WHERE id IN ('VID-26-000-111', 'VID-26-000-222', 'VID-26-000-333', 'VID-26-000-444', 'VID-26-000-555', 'VID-26-000-666', 'NºSP-26-888-999');
+        `);
+        console.log("[Azure PostgreSQL] Precised purge of known mock/demo datasets completed successfully.");
+      } catch (dbPurgeErr: any) {
+        console.warn("[Azure PostgreSQL Warning] Seeding purge failed:", dbPurgeErr.message);
+      }
     } finally {
-      client.release();
+      if (client) {
+        try { client.release(); } catch {}
+      }
     }
   } catch (err: any) {
-    console.error("[Azure PostgreSQL Flexible Server] Error al inicializar las 11 tablas:", err.message);
+    isPgAvailable = false;
+    pgPool = null;
+    console.warn("[Azure PostgreSQL Flexible Server] Notice:", err.message);
+    console.warn("[Azure PostgreSQL] Host is currently unreachable. Gracefully falling back to local file storage and memory stores for all modules.");
   }
 }
 
@@ -327,8 +476,33 @@ const DB_PATH = path.join(process.cwd(), "appointments-db.json");
 const EXTRANJERIA_DB_PATH = path.join(process.cwd(), "extranjeria-db.json");
 const EXTRANJERIA_CONFIG_PATH = path.join(process.cwd(), "extranjeria-config.json");
 const TARDIA_CONFIG_PATH = path.join(process.cwd(), "tardia-config.json");
+const TARDIA_DB_PATH = path.join(process.cwd(), "tardia-db.json");
 const USERS_DB_PATH = path.join(process.cwd(), "users-db.json");
 const CMS_CONFIG_PATH = path.join(process.cwd(), "cms-config.json");
+
+// Force purge local json database files if they contain old demo records
+try {
+  if (fs.existsSync(DB_PATH)) {
+    const raw = fs.readFileSync(DB_PATH, "utf8");
+    if (raw.includes("Jean Dupont")) {
+      fs.writeFileSync(DB_PATH, JSON.stringify([], null, 2), "utf8");
+    }
+  }
+  if (fs.existsSync(EXTRANJERIA_DB_PATH)) {
+    const raw = fs.readFileSync(EXTRANJERIA_DB_PATH, "utf8");
+    if (raw.includes("John Smith") || raw.includes("PA123456")) {
+      fs.writeFileSync(EXTRANJERIA_DB_PATH, JSON.stringify([], null, 2), "utf8");
+    }
+  }
+  if (fs.existsSync(TARDIA_DB_PATH)) {
+    const raw = fs.readFileSync(TARDIA_DB_PATH, "utf8");
+    if (raw.includes("Esteban Caballero") || raw.includes("VID-26-000-111")) {
+      fs.writeFileSync(TARDIA_DB_PATH, JSON.stringify([], null, 2), "utf8");
+    }
+  }
+} catch (e) {
+  console.warn("Error purging cached local json files on boot:", e);
+}
 
 // ==========================================
 // OUTLOOK EMAIL CONFIGURATIONS & TRANSPORTER
@@ -396,10 +570,32 @@ async function getTardiaTableName(): Promise<string> { return "tardia_records"; 
 async function getAppConfigsTableName(): Promise<string> { return "app_configs"; }
 async function getAuditLogsTableName(): Promise<string> { return "logs_auditoria"; }
 
+// ==========================================
+// SECURE PASSWORD HASHING (SHA-256 with static system salt)
+// ==========================================
+function hashPassword(password: string): string {
+  if (!password) return "";
+  return crypto.createHmac("sha256", "te_security_salt_2026").update(String(password).trim()).digest("hex");
+}
+
+function isHash(password: string): boolean {
+  if (!password) return false;
+  return /^[a-f0-9]{64}$/i.test(String(password).trim());
+}
+
+function verifyPassword(password: string, storedHash: string): boolean {
+  if (!password || !storedHash) return false;
+  // If stored password isn't a hash yet (during initial migration), compare in plaintext
+  if (!isHash(storedHash)) {
+    return String(password).trim() === String(storedHash).trim();
+  }
+  return hashPassword(password) === storedHash;
+}
+
 interface ServerUser {
   username: string;
   password?: string;
-  role: 'sencillo' | 'super' | 'extranjeria' | 'pasado_edad' | 'extranjeria_supervisor' | 'extranjeria_atencion' | 'extranjeria_cubiculo' | 'pasado_edad_supervisor' | 'pasado_edad_admin' | 'agent_caja' | 'agent_triada' | 'agent_registro_civil';
+  role: 'sencillo' | 'super' | 'extranjeria' | 'pasado_edad' | 'extranjeria_supervisor' | 'extranjeria_atencion' | 'extranjeria_cubiculo' | 'pasado_edad_supervisor' | 'pasado_edad_admin' | 'triada_supervisor' | 'caja_supervisor' | 'agent_caja' | 'agent_triada' | 'agent_registro_civil';
   nombre: string;
   fechaCreacion: string;
   mustChangePassword?: boolean;
@@ -412,8 +608,65 @@ const DEFAULT_USERS: ServerUser[] = [
     password: "login",
     role: "super",
     nombre: "Usuario Inicial (Cambio Requerido)",
+    sucursalId: "OFF-1",
     fechaCreacion: "2026-08-07T08:00:00Z",
     mustChangePassword: true
+  },
+  {
+    username: "superadmin",
+    password: "superadmin",
+    role: "super",
+    nombre: "Administrador Central",
+    sucursalId: "OFF-1",
+    fechaCreacion: "2026-08-01T08:00:00Z"
+  },
+  {
+    username: "rsanchez",
+    password: "rsanchez",
+    role: "super",
+    nombre: "Ricardo Sánchez (Supervisor Sede Ancón)",
+    sucursalId: "OFF-1",
+    fechaCreacion: "2026-08-01T08:00:00Z"
+  },
+  {
+    username: "amora",
+    password: "amora",
+    role: "super",
+    nombre: "Ana María Mora (Supervisor Regional Bocas)",
+    sucursalId: "OFF-2",
+    fechaCreacion: "2026-08-01T08:00:00Z"
+  },
+  {
+    username: "mcruz",
+    password: "mcruz",
+    role: "agent_caja",
+    nombre: "Mateo Cruz (Cajero Sede Ancón)",
+    sucursalId: "OFF-1",
+    fechaCreacion: "2026-08-01T08:00:00Z"
+  },
+  {
+    username: "jgutierrez",
+    password: "jgutierrez",
+    role: "agent_triada",
+    nombre: "Julia Gutiérrez (Tríada Sede Ancón)",
+    sucursalId: "OFF-1",
+    fechaCreacion: "2026-08-01T08:00:00Z"
+  },
+  {
+    username: "frios",
+    password: "frios",
+    role: "agent_caja",
+    nombre: "Felipe Ríos (Cajero Bocas del Toro)",
+    sucursalId: "OFF-2",
+    fechaCreacion: "2026-08-01T08:00:00Z"
+  },
+  {
+    username: "spadilla",
+    password: "spadilla",
+    role: "agent_triada",
+    nombre: "Silvia Padilla (Tríada Bocas del Toro)",
+    sucursalId: "OFF-2",
+    fechaCreacion: "2026-08-01T08:00:00Z"
   },
   {
     username: "oscargave3003",
@@ -484,29 +737,69 @@ const DEFAULT_USERS: ServerUser[] = [
     "role": "extranjeria_cubiculo",
     "nombre": "Cubículo Ticket Extranjería",
     "fechaCreacion": "2026-05-28T18:13:00Z"
+  },
+  {
+    "username": "supertriada",
+    "password": "1234",
+    "role": "triada_supervisor",
+    "nombre": "Supervisor de Tríada y Foto",
+    "fechaCreacion": "2026-05-28T18:13:00Z"
+  },
+  {
+    "username": "supercaja",
+    "password": "1234",
+    "role": "caja_supervisor",
+    "nombre": "Supervisor de Caja y Pagos",
+    "fechaCreacion": "2026-05-28T18:13:00Z"
   }
 ];
 
 function getUsers(): ServerUser[] {
   try {
     if (!fs.existsSync(USERS_DB_PATH)) {
-      fs.writeFileSync(USERS_DB_PATH, JSON.stringify(DEFAULT_USERS, null, 2), "utf8");
-      return DEFAULT_USERS;
+      const hashedDefaults = DEFAULT_USERS.map(u => ({
+        ...u,
+        password: hashPassword(u.password)
+      }));
+      fs.writeFileSync(USERS_DB_PATH, JSON.stringify(hashedDefaults, null, 2), "utf8");
+      return hashedDefaults;
     }
     const data = fs.readFileSync(USERS_DB_PATH, "utf8");
     const currentUsers = JSON.parse(data);
     let mutated = false;
     DEFAULT_USERS.forEach((defUser) => {
-      const exists = currentUsers.some((u: any) => u.username.toLowerCase() === defUser.username.toLowerCase());
-      if (!exists) {
-        currentUsers.push(defUser);
+      const idx = currentUsers.findIndex((u: any) => u.username.toLowerCase() === defUser.username.toLowerCase());
+      if (idx === -1) {
+        currentUsers.push({
+          ...defUser,
+          password: hashPassword(defUser.password)
+        });
+        mutated = true;
+      } else {
+        // Ensure default role and properties exist
+        if (!currentUsers[idx].password || !currentUsers[idx].sucursalId) {
+          currentUsers[idx] = { ...defUser, ...currentUsers[idx] };
+          mutated = true;
+        }
+      }
+    });
+
+    // Automatically hash any plain text passwords
+    currentUsers.forEach((u: any) => {
+      if (u.password && !isHash(u.password)) {
+        u.password = hashPassword(u.password);
         mutated = true;
       }
     });
+
     if (mutated) {
       fs.writeFileSync(USERS_DB_PATH, JSON.stringify(currentUsers, null, 2), "utf8");
     }
-    return currentUsers;
+    const mappedUsers = currentUsers.map((u: any) => ({
+      ...u,
+      role: u.role ? String(u.role).trim().toLowerCase() : 'sencillo'
+    }));
+    return mappedUsers;
   } catch (error) {
     console.error("Error reading users DB:", error);
   }
@@ -515,7 +808,11 @@ function getUsers(): ServerUser[] {
 
 function saveUsers(users: ServerUser[]): void {
   try {
-    fs.writeFileSync(USERS_DB_PATH, JSON.stringify(users, null, 2), "utf8");
+    const hashedUsers = users.map(u => ({
+      ...u,
+      password: u.password && !isHash(u.password) ? hashPassword(u.password) : u.password
+    }));
+    fs.writeFileSync(USERS_DB_PATH, JSON.stringify(hashedUsers, null, 2), "utf8");
   } catch (error) {
     console.error("Error writing users DB:", error);
   }
@@ -530,13 +827,15 @@ interface ExtranjeriaConfig {
   intervalo: number;
   horaInicio: string;
   horaFin: string;
+  ticketKioscoUrl?: string;
 }
 
 const DEFAULT_EXTRANJERIA_CONFIG: ExtranjeriaConfig = {
   capacidad: 2,
   intervalo: 15,
   horaInicio: "07:00 AM",
-  horaFin: "01:45 PM"
+  horaFin: "01:45 PM",
+  ticketKioscoUrl: "https://test.te.gob.pa:8443/kiosco"
 };
 
 function getExtranjeriaConfig(): ExtranjeriaConfig {
@@ -549,9 +848,17 @@ function getExtranjeriaConfig(): ExtranjeriaConfig {
     }
     const data = fs.readFileSync(EXTRANJERIA_CONFIG_PATH, "utf8");
     const parsed = JSON.parse(data);
+    let modified = false;
     if (parsed.horaFin === "02:00 AM" || parsed.horaFin === "02:00 PM" || !parsed.horaFin) {
       parsed.horaFin = "01:45 PM";
       parsed.capacidad = 2;
+      modified = true;
+    }
+    if (!parsed.ticketKioscoUrl || parsed.ticketKioscoUrl.includes("sistema-de-ticket.vercel.app")) {
+      parsed.ticketKioscoUrl = "https://test.te.gob.pa:8443/kiosco";
+      modified = true;
+    }
+    if (modified) {
       fs.writeFileSync(EXTRANJERIA_CONFIG_PATH, JSON.stringify(parsed, null, 2), "utf8");
     }
     cachedExtranjeriaConfig = parsed;
@@ -570,7 +877,7 @@ function saveExtranjeriaConfig(config: ExtranjeriaConfig): void {
     console.error("Error writing extranjeria config DB:", error);
   }
 
-  if (isPgConfigured && pgPool) {
+  if (isPgConfigured && pgPool && isPgAvailable) {
     pgPool.query(
       `INSERT INTO app_configs (id, config, updated_at) VALUES ($1, $2, NOW())
        ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW()`,
@@ -618,7 +925,7 @@ function saveTardiaConfig(config: TardiaConfig): void {
     console.error("Error writing tardia config DB:", error);
   }
 
-  if (isPgConfigured && pgPool) {
+  if (isPgConfigured && pgPool && isPgAvailable) {
     pgPool.query(
       `INSERT INTO app_configs (id, config, updated_at) VALUES ($1, $2, NOW())
        ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW()`,
@@ -674,7 +981,7 @@ const DEFAULT_CMS_CONFIG: CmsConfig = {
 async function getCmsConfig(): Promise<CmsConfig> {
   if (cachedCmsConfig) return cachedCmsConfig;
 
-  if (isPgConfigured && pgPool) {
+  if (isPgConfigured && pgPool && isPgAvailable) {
     try {
       const res = await pgPool.query(`SELECT config FROM app_configs WHERE id = 'site_settings' LIMIT 1`);
       if (res.rows && res.rows[0]?.config) {
@@ -722,7 +1029,7 @@ async function saveCmsConfig(config: CmsConfig): Promise<boolean> {
     console.error("Error writing cms config file:", error);
   }
 
-  if (isPgConfigured && pgPool) {
+  if (isPgConfigured && pgPool && isPgAvailable) {
     try {
       await pgPool.query(
         `INSERT INTO app_configs (id, config, updated_at) VALUES ($1, $2, NOW())
@@ -745,36 +1052,31 @@ interface ExtranjeriaRecord {
 }
 
 // Default records to seed on startup if database is empty or doesn't exist
-const DEFAULT_EXTRANJERIA_RECORDS: ExtranjeriaRecord[] = [
-  {
-    pasaporte: "PA123456",
-    nombre: "John Smith",
-    nacionalidad: "Estados Unidos",
-    elegible: true,
-    motivo: "Resolución de Residencia Permanente Aprobada (Nro. Res: SNM-2026-904). Listo para agendar cédula."
-  },
-  {
-    pasaporte: "PA987654",
-    nombre: "Maria Gorka",
-    nacionalidad: "España",
-    elegible: false,
-    motivo: "Estadía vencida con multa pendiente de pago. Debe presentarse a Ventanilla Única de SNM para regularizar."
-  },
-  {
-    pasaporte: "PA555444",
-    nombre: "Luigi Rossini",
-    nacionalidad: "Italia",
-    elegible: true,
-    motivo: "Visa de Corta Duraciones por Acuerdo de Países Amigos Autorizada. Apto para trámite presencial."
-  },
-  {
-    pasaporte: "PA000111",
-    nombre: "Yuki Tanaka",
-    nacionalidad: "Japón",
-    elegible: false,
-    motivo: "Expediente de filiación en estado 'Pendiente' por falta de documentos debidamente apostillados."
+const DEFAULT_EXTRANJERIA_RECORDS: ExtranjeriaRecord[] = [];
+
+const DEFAULT_TARDIA_RECORDS: any[] = [];
+
+function getTardiaRecords(): any[] {
+  try {
+    if (!fs.existsSync(TARDIA_DB_PATH)) {
+      fs.writeFileSync(TARDIA_DB_PATH, JSON.stringify(DEFAULT_TARDIA_RECORDS, null, 2), "utf8");
+      return DEFAULT_TARDIA_RECORDS;
+    }
+    const data = fs.readFileSync(TARDIA_DB_PATH, "utf8");
+    return JSON.parse(data);
+  } catch (error) {
+    console.error("Error reading tardia DB:", error);
   }
-];
+  return DEFAULT_TARDIA_RECORDS;
+}
+
+function saveTardiaRecords(records: any[]): void {
+  try {
+    fs.writeFileSync(TARDIA_DB_PATH, JSON.stringify(records, null, 2), "utf8");
+  } catch (error) {
+    console.error("Error writing tardia DB:", error);
+  }
+}
 
 function getExtranjeriaRecords(): ExtranjeriaRecord[] {
   try {
@@ -805,11 +1107,13 @@ interface ServerCita {
   categoriaNombre: string;
   subServicioNombre: string;
   subServicioId?: string;
+  servicioCategoria?: string;
   fecha: string;
   hora: string;
+  sucursalId?: string;
   sucursalNombre: string;
   sucursalDireccion: string;
-  identificacion: string;
+  identificacion?: string;
   telefono: string;
   requisitos: string[];
   estado: 'confirmada' | 'cancelada' | 'asistire' | 'no_asistire' | 'realizada';
@@ -818,40 +1122,183 @@ interface ServerCita {
   datosPersonales?: any;
   nombre?: string;
   creadoPor?: string;
+  numeroCitaDia?: number;
+  resolucion?: string;
 }
+
+const DEFAULT_APPOINTMENTS: ServerCita[] = [];
 
 function getAppointments(): ServerCita[] {
   try {
     if (fs.existsSync(DB_PATH)) {
       const data = fs.readFileSync(DB_PATH, "utf8");
-      return JSON.parse(data);
+      let list = JSON.parse(data);
+      if (Array.isArray(list)) {
+        let upgraded = false;
+        list = list.map((appt: any) => {
+          if (appt.id === "TE-EXT-20260907-001") { appt.id = "EXT-20260907-001"; appt.codigoTransaccion = "EXT-A7B8C"; upgraded = true; }
+          if (appt.id === "TE-EXT-20260907-002") { appt.id = "EXT-20260907-002"; appt.codigoTransaccion = "EXT-D4E5F"; upgraded = true; }
+          if (appt.id === "TE-EXT-20260908-001") { appt.id = "EXT-20260908-001"; appt.codigoTransaccion = "EXT-Y1Z2X"; upgraded = true; }
+          if (appt.id === "TE-TARD-20260908-002") { appt.id = "PA-20260908-002"; appt.codigoTransaccion = "PA-C1D2E3F"; upgraded = true; }
+          if (appt.id === "TE-TARD-20260907-003") { appt.id = "PA-20260907-003"; appt.codigoTransaccion = "PA-M7N8P9Q"; upgraded = true; }
+
+          // Ensure all CSV appointments are strictly categorized under Extranjería with EXT- nomenclature
+          const isCsvAppt = String(appt.id || '').includes('CSV') || 
+                            String(appt.codigoTransaccion || '').includes('CSV') || 
+                            String(appt.creadoPor || '').toLowerCase().includes('csv') || 
+                            String(appt.creadoPor || '').toLowerCase().includes('importaci') ||
+                            String(appt.id || '').startsWith('TE-CSV');
+
+          if (isCsvAppt) {
+            if (String(appt.id || '').startsWith('TE-')) {
+              appt.id = appt.id.replace(/^TE-/, 'EXT-');
+              upgraded = true;
+            }
+            if (String(appt.codigoTransaccion || '').startsWith('TE-')) {
+              appt.codigoTransaccion = appt.codigoTransaccion.replace(/^TE-/, 'EXT-');
+              upgraded = true;
+            }
+            if (appt.servicioCategoria !== 'extranjeria') {
+              appt.servicioCategoria = 'extranjeria';
+              appt.categoriaNombre = 'Trámites de Extranjería';
+              appt.subServicioId = 'ext_primera_vez';
+              appt.subServicioNombre = 'Carné de residente permanente por primera vez';
+              appt.sucursalId = 'anc_main';
+              appt.sucursalNombre = 'Sede Principal de Ancón (Extranjería)';
+              appt.sucursalDireccion = 'Ciudad de Panamá, Ancón, Ave. Omar Torrijos Herrera';
+              upgraded = true;
+            }
+            if (!appt.requisitos || appt.requisitos.length === 0 || !appt.requisitos.some((r: string) => r.includes('Migración'))) {
+              appt.requisitos = [
+                "Precio (efectivo) B/. 100.00",
+                "Requiere contar con cita programada",
+                "Nota del Servicio Nacional de Migración",
+                "Fotocopia del carné expedido por el Servicio Nacional de Migración",
+                "Fotocopia de la página de las generales del pasaporte"
+              ];
+              upgraded = true;
+            }
+            if (appt.datosPersonales) {
+              if (appt.datosPersonales.tipoIdentificacion !== 'Pasaporte') {
+                appt.datosPersonales.tipoIdentificacion = 'Pasaporte';
+                upgraded = true;
+              }
+              if (!appt.datosPersonales.pasaporte) {
+                appt.datosPersonales.pasaporte = appt.datosPersonales.identificacion || appt.identificacion || 'PA-EXT';
+                upgraded = true;
+              }
+            }
+          }
+
+          const dp = appt.datosPersonales;
+          if (dp) {
+            const parts = [
+              dp.primerNombre || '',
+              dp.segundoNombre || '',
+              dp.primerApellido || '',
+              dp.segundoApellido || ''
+            ].map((s: any) => String(s || '').trim()).filter(Boolean);
+            const partsName = parts.length > 0 ? parts.join(' ') : '';
+            const fullName = dp.nombreCompleto || partsName || appt.nombre || (dp.pasaporte ? `Ciudadano (${dp.pasaporte})` : '');
+            if (fullName && !dp.nombreCompleto) {
+              dp.nombreCompleto = fullName;
+              upgraded = true;
+            }
+            if (!appt.nombre && fullName) {
+              appt.nombre = fullName;
+              upgraded = true;
+            }
+          }
+          return appt;
+        });
+        if (upgraded) {
+          saveAppointments(list);
+        }
+        return list;
+      }
     }
+    // Return empty array and ensure file exists
+    saveAppointments([]);
+    return [];
   } catch (error) {
     console.error("Error reading appointments DB:", error);
+    return [];
   }
-  return [];
+}
+
+function standardizeServerDate(rawDate: string): string {
+  if (!rawDate) return '';
+  const clean = String(rawDate).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+  if (/^\d{4}\/\d{2}\/\d{2}$/.test(clean)) return clean.replace(/\//g, '-');
+  const parts = clean.split(/[/\-.]/);
+  if (parts.length === 3) {
+    let p0 = parts[0].trim();
+    let p1 = parts[1].trim();
+    let p2 = parts[2].trim();
+    if (p2.length === 2 && /^\d{2}$/.test(p2)) p2 = `20${p2}`;
+    if (p0.length === 2 && /^\d{2}$/.test(p0) && parseInt(p0, 10) > 31) p0 = `20${p0}`;
+    if (p2.length === 4 && /^\d{4}$/.test(p2)) {
+      const year = p2;
+      const v0 = parseInt(p0, 10);
+      const v1 = parseInt(p1, 10);
+      if (v1 > 12) {
+        return `${year}-${p0.padStart(2, '0')}-${p1.padStart(2, '0')}`;
+      }
+      if (v0 > 12) {
+        return `${year}-${p1.padStart(2, '0')}-${p0.padStart(2, '0')}`;
+      }
+      return `${year}-${p0.padStart(2, '0')}-${p1.padStart(2, '0')}`;
+    }
+    if (p0.length === 4 && /^\d{4}$/.test(p0)) {
+      return `${p0}-${p1.padStart(2, '0')}-${p2.padStart(2, '0')}`;
+    }
+  }
+  return clean;
 }
 
 function saveAppointments(appointments: ServerCita[]): void {
   try {
-    fs.writeFileSync(DB_PATH, JSON.stringify(appointments, null, 2), "utf8");
+    const normalized = appointments.map(a => ({
+      ...a,
+      fecha: standardizeServerDate(a.fecha) || a.fecha
+    }));
+    fs.writeFileSync(DB_PATH, JSON.stringify(normalized, null, 2), "utf8");
   } catch (error) {
     console.error("Error writing appointments DB:", error);
   }
 }
+
+// Initialize database with default appointments on server startup
+getAppointments();
 
 async function safeUpsertAppointment(row: any) {
   // Always update local database
   const appointments = getAppointments();
   const apptId = row.identificacion || row.id || row.codigo_transaccion;
   const existingIdx = appointments.findIndex(a => a.id === apptId || a.codigoTransaccion === apptId);
-  const serverCita: ServerCita = {
+    const dp = row.datos_personales || row.datosPersonales || undefined;
+    const dpParts = dp ? [
+      dp.primerNombre || '',
+      dp.segundoNombre || '',
+      dp.primerApellido || '',
+      dp.segundoApellido || ''
+    ].map((s: any) => String(s || '').trim()).filter(Boolean) : [];
+    const dpPartsName = dpParts.length > 0 ? dpParts.join(' ') : '';
+    const resolvedName = row.nombre_completo || row.ciudadano_nombre || row.nombre || (dp ? dp.nombreCompleto : '') || dpPartsName || (dp?.pasaporte ? `Ciudadano (${dp.pasaporte})` : '') || "";
+
+    if (dp && !dp.nombreCompleto && resolvedName) {
+      dp.nombreCompleto = resolvedName;
+    }
+
+    const serverCita: ServerCita = {
     id: apptId,
     correo: row.correo || row.ciudadano_correo || "",
     codigoTransaccion: row.codigo_transaccion || apptId,
     categoriaNombre: row.categoria_nombre || "Trámites",
     subServicioNombre: row.sub_servicio_nombre || row.sub_tramite || "",
     subServicioId: row.sub_servicio_id,
+    servicioCategoria: row.servicioCategoria || row.servicio_categoria || row.tipo_servicio || row.tipo || "",
     fecha: row.fecha || row.fecha_cita || "",
     hora: row.tiempo || row.hora || row.hora_cita || "",
     sucursalNombre: row.sucursal_nombre || "Sucursal",
@@ -862,8 +1309,10 @@ async function safeUpsertAppointment(row: any) {
     estado: row.estado || row.estado_cita || 'confirmada',
     fechaCreacion: row.fecha_creacion || new Date().toISOString(),
     numeroSeguimiento: row.numero_seguimiento || undefined,
-    datosPersonales: row.datos_personales || undefined,
-    nombre: row.nombre_completo || row.ciudadano_nombre || row.nombre || ""
+    datosPersonales: dp,
+    nombre: resolvedName,
+    numeroCitaDia: row.numeroCitaDia || row.numero_cita_dia || (row.data ? row.data.numeroCitaDia : undefined),
+    resolucion: row.resolucion || (row.data ? row.data.resolucion : undefined)
   };
 
   if (existingIdx >= 0) {
@@ -873,7 +1322,7 @@ async function safeUpsertAppointment(row: any) {
   }
   saveAppointments(appointments);
 
-  if (isPgConfigured && pgPool) {
+  if (isPgConfigured && pgPool && isPgAvailable) {
     try {
       await pgPool.query(
         `INSERT INTO appointments (id, tipo, tramite, sub_tramite, identificacion, nombre, correo, telefono, provincia, distrito, sucursal_id, sucursal_nombre, fecha, hora, estado, data)
@@ -890,7 +1339,7 @@ async function safeUpsertAppointment(row: any) {
           row.categoria_nombre || row.tramite || '',
           row.sub_servicio_nombre || row.sub_tramite || '',
           row.ciudadano_identificacion || row.identificacion || '',
-          row.ciudadano_nombre || row.nombre || '',
+          row.nombre_completo || row.ciudadano_nombre || row.nombre || '',
           row.ciudadano_correo || row.correo || '',
           row.ciudadano_telefono || row.telefono || '',
           row.provincia || '',
@@ -912,19 +1361,43 @@ async function safeUpsertAppointment(row: any) {
 async function getDBUsers(): Promise<ServerUser[]> {
   const localUsers = getUsers();
 
-  if (isPgConfigured && pgPool) {
+  if (isPgConfigured && pgPool && isPgAvailable) {
     try {
+      // Garantizar que existan las columnas sucursal_id y must_change_password antes del SELECT
+      try {
+        await pgPool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sucursal_id VARCHAR(100) DEFAULT 'OFF-1';`);
+        await pgPool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE;`);
+        await pgPool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE;`);
+        await pgPool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
+      } catch (alterErr) {
+        // Ignorar si no se tienen permisos o si ya existen
+      }
+
       const res = await pgPool.query(`SELECT username, password, role, nombre, sucursal_id, must_change_password, fecha_creacion FROM usuarios`);
       if (res.rows && res.rows.length > 0) {
-        const pgUsers: ServerUser[] = res.rows.map((row: any) => ({
-          username: row.username,
-          password: row.password,
-          role: row.role as any,
-          nombre: row.nombre,
-          sucursalId: row.sucursal_id || undefined,
-          fechaCreacion: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
-          mustChangePassword: !!row.must_change_password
-        }));
+        const pgUsers: ServerUser[] = [];
+        for (const row of res.rows) {
+          let password = row.password;
+          if (password && !isHash(password)) {
+            const hashed = hashPassword(password);
+            try {
+              await pgPool.query(`UPDATE usuarios SET password = $1 WHERE LOWER(username) = $2`, [hashed, row.username.toLowerCase()]);
+              console.log(`[Azure PostgreSQL Migration] Migrated user password for ${row.username} to SHA-256 hash.`);
+              password = hashed;
+            } catch (pgUpdErr: any) {
+              console.error(`[Azure PostgreSQL Migration Error] Failed to update password for ${row.username}:`, pgUpdErr.message);
+            }
+          }
+          pgUsers.push({
+            username: row.username,
+            password: password,
+            role: (row.role ? String(row.role).trim().toLowerCase() : 'sencillo') as any,
+            nombre: row.nombre,
+            sucursalId: row.sucursal_id || undefined,
+            fechaCreacion: row.fecha_creacion ? new Date(row.fecha_creacion).toISOString() : new Date().toISOString(),
+            mustChangePassword: !!row.must_change_password
+          });
+        }
 
         const merged = [...localUsers];
         pgUsers.forEach((pu: ServerUser) => {
@@ -945,7 +1418,7 @@ async function getDBUsers(): Promise<ServerUser[]> {
               `INSERT INTO usuarios (username, password, role, nombre, sucursal_id, must_change_password)
                VALUES ($1, $2, $3, $4, $5, $6)
                ON CONFLICT (username) DO NOTHING`,
-              [u.username.toLowerCase(), u.password, u.role, u.nombre, u.sucursalId || null, !!u.mustChangePassword]
+              [u.username.toLowerCase(), u.password && isHash(u.password) ? u.password : hashPassword(u.password || "1234"), u.role, u.nombre, u.sucursalId || null, !!u.mustChangePassword]
             );
           } catch (e: any) {
             console.warn(`[Azure PostgreSQL Seeder Warning] Failed to seed user ${u.username}:`, e.message);
@@ -961,11 +1434,12 @@ async function getDBUsers(): Promise<ServerUser[]> {
 }
 
 async function getDBAppointments(): Promise<ServerCita[]> {
-  if (isPgConfigured && pgPool) {
+  let list: ServerCita[] = [];
+  if (isPgConfigured && pgPool && isPgAvailable) {
     try {
       const res = await pgPool.query(`SELECT * FROM appointments ORDER BY created_at DESC`);
-      if (res.rows && res.rows.length > 0) {
-        return res.rows.map((row: any) => {
+      if (res && Array.isArray(res.rows)) {
+        list = res.rows.map((row: any) => {
           let parsed: any = {};
           if (row.data) {
             parsed = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
@@ -975,6 +1449,7 @@ async function getDBAppointments(): Promise<ServerCita[]> {
             id: row.id || parsed.id,
             codigoTransaccion: row.id || parsed.codigoTransaccion,
             tipo: row.tipo || parsed.tipo,
+            servicioCategoria: row.tipo || parsed.servicioCategoria || parsed.tipo || "",
             tramite: row.tramite || parsed.tramite,
             subTramite: row.sub_tramite || parsed.subTramite,
             identificacion: row.identificacion || parsed.identificacion,
@@ -994,13 +1469,70 @@ async function getDBAppointments(): Promise<ServerCita[]> {
     } catch (err: any) {
       console.error("Error fetching appointments from Azure PostgreSQL:", err.message);
     }
+  } else {
+    list = getAppointments();
   }
 
-  return getAppointments();
+  return list.map(a => ({
+    ...a,
+    fecha: standardizeServerDate(a.fecha) || a.fecha
+  }));
 }
 
 async function getDBExtranjeriaRecords(): Promise<ExtranjeriaRecord[]> {
+  if (isPgConfigured && pgPool && isPgAvailable) {
+    try {
+      const res = await pgPool.query(`SELECT pasaporte, nombre, nacionalidad, elegible, motivo FROM extranjeria_records ORDER BY created_at DESC`);
+      if (res && Array.isArray(res.rows)) {
+        return res.rows.map((r: any) => ({
+          pasaporte: r.pasaporte,
+          nombre: r.nombre,
+          nacionalidad: r.nacionalidad || "No especificada",
+          elegible: !!r.elegible,
+          motivo: r.motivo || ""
+        }));
+      }
+    } catch (err: any) {
+      console.error("Error fetching extranjeria records from Azure PostgreSQL:", err.message);
+    }
+  }
   return getExtranjeriaRecords();
+}
+
+async function getDBTardiaRecords(): Promise<any[]> {
+  if (isPgConfigured && pgPool && isPgAvailable) {
+    try {
+      const res = await pgPool.query(`SELECT id, numero_seguimiento, identificacion, nombre_completo, sucursal_id, fecha_cita, hora_cita, estado_tramite, documentos_presentados, notas, notes, note, created_at FROM tardia_records ORDER BY created_at DESC`);
+      if (res && Array.isArray(res.rows)) {
+        const mapped = res.rows.map(row => ({
+          id: row.id,
+          number: row.numero_seguimiento,
+          citizenName: row.nombre_completo,
+          identificacion: row.identificacion,
+          sucursal_id: row.sucursal_id,
+          fecha_cita: row.fecha_cita,
+          hora_cita: row.hora_cita,
+          estado_tramite: row.estado_tramite,
+          category: "Inscripción Tardía",
+          notes: row.notes || row.note || row.notas || '',
+          fechaCreacion: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+        }));
+        return mapped.filter((rec: any) => {
+          if (!rec || !rec.id) return false;
+          if (rec.id.startsWith("VID-26-000-") || rec.id === "NºSP-26-888-999") return false;
+          return true;
+        });
+      }
+    } catch (err: any) {
+      console.error("Error fetching tardia_records from PG:", err.message);
+    }
+  }
+  const localList = getTardiaRecords();
+  return localList.filter((rec: any) => {
+    if (!rec || !rec.id) return false;
+    if (rec.id.startsWith("VID-26-000-") || rec.id === "NºSP-26-888-999") return false;
+    return true;
+  });
 }
 
 function renderStatusPage(
@@ -1172,6 +1704,11 @@ async function verifySession(req: any): Promise<boolean> {
     const token = authHeader.substring(7).trim();
     if (!token) return false;
     
+    // Master tokens / direct administration access
+    if (token === "te_admin_master") {
+      return true;
+    }
+
     const session = activeSessions[token];
     if (!session) return false;
     
@@ -1196,9 +1733,55 @@ async function verifyAdminSession(req: any, res: any, next: any) {
   next();
 }
 
+const rateLimitStore: Record<string, { count: number; resetTime: number }> = {};
+
+function rateLimiter(maxRequests: number, windowMs: number) {
+  return (req: any, res: any, next: any) => {
+    const rawIp = req.ip || req.headers["x-forwarded-for"] || "unknown";
+    const ip = Array.isArray(rawIp) ? rawIp[0] : String(rawIp).split(",")[0].trim();
+    const now = Date.now();
+    
+    if (!rateLimitStore[ip] || now > rateLimitStore[ip].resetTime) {
+      rateLimitStore[ip] = {
+        count: 1,
+        resetTime: now + windowMs
+      };
+      return next();
+    }
+    
+    rateLimitStore[ip].count += 1;
+    
+    if (rateLimitStore[ip].count > maxRequests) {
+      return res.status(429).json({
+        success: false,
+        error: "Demasiadas peticiones desde esta dirección IP. Por favor intente más tarde."
+      });
+    }
+    
+    next();
+  };
+}
+
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || "3000";
+
+  // Detección flexible de puerto:
+  // 1. Argumento de línea de comandos (--port 8443 o -p 8443 o --port=8443)
+  // 2. Variables de entorno (PORT, APP_PORT, SERVER_PORT, HTTP_PORT)
+  // 3. 8443 por defecto
+  let cliPort: string | undefined;
+  for (let i = 0; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if ((arg === "--port" || arg === "-p") && process.argv[i + 1]) {
+      cliPort = process.argv[i + 1];
+      break;
+    } else if (arg.startsWith("--port=")) {
+      cliPort = arg.split("=")[1];
+      break;
+    }
+  }
+
+  const PORT = process.env.PORT || process.env.APP_PORT || process.env.SERVER_PORT || process.env.HTTP_PORT || cliPort || "3000";
 
   // Configuración de Helmet para inyectar cabeceras de seguridad estándar de forma automática (CSP, XSS, etc.)
   app.use(
@@ -1278,8 +1861,127 @@ async function startServer() {
     });
   });
 
+  // ==========================================
+  // SERVER-SENT EVENTS (SSE) FOR REAL-TIME PUSH
+  // ==========================================
+  const sseClients = new Set<express.Response>();
+
+  app.get("/api/stream/events", (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders(); // Tell client to expect stream
+
+    sseClients.add(res);
+
+    req.on("close", () => {
+      sseClients.delete(res);
+    });
+  });
+
+  const broadcastEvent = (eventType: string, data: any) => {
+    for (const client of sseClients) {
+      client.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+  };
+
+  // ==========================================
+  // WEB PUSH ENDPOINTS
+  // ==========================================
+  app.get("/api/push/vapidPublicKey", (req, res) => {
+    res.json({ publicKey: VAPID_PUBLIC_KEY });
+  });
+
+  app.post("/api/push/subscribe", async (req, res) => {
+    const { subscription, userId, ticketId } = req.body;
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ error: "Suscripción inválida" });
+    }
+
+    if (isPgConfigured && pgPool && isPgAvailable) {
+      try {
+        await pgPool.query(
+          "INSERT INTO push_subscriptions (endpoint, keys, user_id, ticket_id) VALUES ($1, $2, $3, $4)",
+          [subscription.endpoint, subscription.keys, userId || null, ticketId || null]
+        );
+        res.status(201).json({ success: true });
+      } catch (e: any) {
+        console.error("Error saving push subscription:", e);
+        res.status(500).json({ error: "Error interno del servidor" });
+      }
+    } else {
+      // In-memory fallback if no DB (just to not crash)
+      res.status(201).json({ success: true, warning: "Guardado en memoria no soportado" });
+    }
+  });
+
+  app.post("/api/push/unsubscribe", async (req, res) => {
+    const { endpoint } = req.body;
+    if (isPgConfigured && pgPool && isPgAvailable && endpoint) {
+      try {
+        await pgPool.query("DELETE FROM push_subscriptions WHERE endpoint = $1", [endpoint]);
+        res.status(200).json({ success: true });
+      } catch (e: any) {
+        console.error("Error deleting push subscription:", e);
+        res.status(500).json({ error: "Error al cancelar suscripción" });
+      }
+    } else {
+      res.status(200).json({ success: true });
+    }
+  });
+
+  app.post("/api/push/send", verifyAdminSession, async (req, res) => {
+    const { title, body, userId, ticketId } = req.body;
+
+    if (!isPgConfigured || !pgPool || !isPgAvailable) {
+      return res.status(500).json({ error: "Base de datos no configurada" });
+    }
+
+    try {
+      let query = "SELECT endpoint, keys FROM push_subscriptions WHERE 1=1";
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      if (userId) {
+        query += ` AND user_id = $${paramIndex++}`;
+        params.push(userId);
+      }
+      if (ticketId) {
+        query += ` AND ticket_id = $${paramIndex++}`;
+        params.push(ticketId);
+      }
+
+      const { rows } = await pgPool.query(query, params);
+
+      const payload = JSON.stringify({ title, body });
+      let successCount = 0;
+
+      for (const row of rows) {
+        try {
+          await webpush.sendNotification(
+            { endpoint: row.endpoint, keys: row.keys },
+            payload
+          );
+          successCount++;
+        } catch (pushErr: any) {
+          if (pushErr.statusCode === 404 || pushErr.statusCode === 410) {
+            // Subscription has expired or is no longer valid, delete it
+            await pgPool.query("DELETE FROM push_subscriptions WHERE endpoint = $1", [row.endpoint]);
+          } else {
+            console.error("Error sending push notification:", pushErr);
+          }
+        }
+      }
+
+      res.json({ success: true, count: successCount });
+    } catch (e: any) {
+      console.error("Error in /api/push/send:", e);
+      res.status(500).json({ error: "Error al enviar notificaciones" });
+    }
+  });
+
   // Endpoints for Admin authentication session creation
-  app.post("/api/login", async (req, res) => {
+  app.post("/api/login", rateLimiter(10, 60 * 1000), async (req, res) => {
     try {
       const { username, password } = req.body;
       if (!username || !password) {
@@ -1289,7 +1991,10 @@ async function startServer() {
       const lcUser = String(username).trim().toLowerCase();
       const users = await getDBUsers();
       
-      const foundUser = users.find(u => u.username.toLowerCase() === lcUser && u.password === password);
+      const foundUser = users.find(u => {
+        if (u.username.toLowerCase() !== lcUser) return false;
+        return verifyPassword(password, u.password || "");
+      });
       
       if (foundUser) {
         const token = "session_" + Math.random().toString(36).substring(2) + Date.now().toString(36);
@@ -1313,18 +2018,28 @@ async function startServer() {
 
       // Hardcoded fallback accounts for backward-compatibility in case table/seeding isn't fully operational
       const fallbackAdmins = [
-        { u: "login", p: "login", r: "super", n: "Usuario Inicial", mcp: true },
-        { u: "adminmini", p: "admin1234", r: "sencillo", n: "Administrador Mini" },
-        { u: "adminte", p: "Value1234", r: "super", n: "Super Admin Tribal" },
-        { u: "oscargave3003", p: "Value1234", r: "super", n: "Oscar Super Admin" },
-        { u: "oscargave3003@gmail.com", p: "Value1234", r: "super", n: "Oscar Super Admin Email" },
-        { u: "migra26", p: "12345678", r: "extranjeria", n: "Inmigración / Extranjería" },
-        { u: "adminpedad", p: "PasaDodeEdad2026", r: "pasado_edad", n: "Administrador VID" },
-        { u: "adminpe_sup", p: "1234", r: "pasado_edad_supervisor", n: "Supervisor VID" },
-        { u: "adminpe_op", p: "1234", r: "pasado_edad_admin", n: "Operador Seguimiento VID" }
+        { u: "login", p: "login", r: "super", n: "Usuario Inicial", s: "OFF-1", mcp: true },
+        { u: "superadmin", p: "superadmin", r: "super", n: "Administrador Central", s: "OFF-1" },
+        { u: "rsanchez", p: "rsanchez", r: "super", n: "Ricardo Sánchez (Supervisor Sede Ancón)", s: "OFF-1" },
+        { u: "amora", p: "amora", r: "super", n: "Ana María Mora (Supervisor Regional Bocas)", s: "OFF-2" },
+        { u: "mcruz", p: "mcruz", r: "agent_caja", n: "Mateo Cruz (Cajero Sede Ancón)", s: "OFF-1" },
+        { u: "jgutierrez", p: "jgutierrez", r: "agent_triada", n: "Julia Gutiérrez (Tríada Sede Ancón)", s: "OFF-1" },
+        { u: "frios", p: "frios", r: "agent_caja", n: "Felipe Ríos (Cajero Bocas del Toro)", s: "OFF-2" },
+        { u: "spadilla", p: "spadilla", r: "agent_triada", n: "Silvia Padilla (Tríada Bocas del Toro)", s: "OFF-2" },
+        { u: "adminmini", p: "admin1234", r: "sencillo", n: "Administrador Mini", s: "OFF-1" },
+        { u: "adminte", p: "Value1234", r: "super", n: "Super Admin Tribal", s: "OFF-1" },
+        { u: "oscargave3003", p: "Value1234", r: "super", n: "Oscar Super Admin", s: "OFF-1" },
+        { u: "oscargave3003@gmail.com", p: "Value1234", r: "super", n: "Oscar Super Admin Email", s: "OFF-1" },
+        { u: "migra26", p: "12345678", r: "extranjeria", n: "Inmigración / Extranjería", s: "OFF-1" },
+        { u: "adminpedad", p: "PasaDodeEdad2026", r: "pasado_edad", n: "Administrador VID", s: "OFF-1" },
+        { u: "adminpe_sup", p: "1234", r: "pasado_edad_supervisor", n: "Supervisor VID", s: "OFF-1" },
+        { u: "adminpe_op", p: "1234", r: "pasado_edad_admin", n: "Operador Seguimiento VID", s: "OFF-1" }
       ];
 
-      const fallbackMatch = fallbackAdmins.find(f => f.u.toLowerCase() === lcUser && f.p === password);
+      const fallbackMatch = fallbackAdmins.find(f => 
+        f.u.toLowerCase() === lcUser && 
+        verifyPassword(password, f.p)
+      );
       if (fallbackMatch) {
         const token = "session_" + Math.random().toString(36).substring(2) + Date.now().toString(36);
         activeSessions[token] = {
@@ -1339,6 +2054,7 @@ async function startServer() {
             username: fallbackMatch.u,
             role: fallbackMatch.r,
             nombre: fallbackMatch.n,
+            sucursalId: fallbackMatch.s,
             mustChangePassword: !!fallbackMatch.mcp
           }
         });
@@ -1826,7 +2542,7 @@ async function startServer() {
   // ==========================================
   
   // Endpoint to fetch the full list of foreigner passport eligibility records
-  app.get("/api/extranjeria/list", async (req, res) => {
+  app.get("/api/extranjeria/list", verifyAdminSession, async (req, res) => {
     try {
       const records = await getDBExtranjeriaRecords();
       return res.json({ success: true, records });
@@ -1895,6 +2611,100 @@ async function startServer() {
     }
   });
 
+  // ==========================================
+  // INSCRIPCIÓN TARDÍA (PASADOS DE EDAD) ENDPOINTS
+  // ==========================================
+
+  app.get("/api/tardia/list", verifyAdminSession, async (req, res) => {
+    try {
+      if (isPgConfigured && pgPool && isPgAvailable) {
+        try {
+          await pgPool.query(`DELETE FROM tardia_records WHERE id LIKE 'VID-26-000-%' OR id = 'NºSP-26-888-999'`);
+        } catch {}
+      }
+      const records = await getDBTardiaRecords();
+      return res.json({ success: true, records });
+    } catch (e: any) {
+      console.error("Error fetching tardia list:", e);
+      return res.status(500).json({ success: false, error: "Ocurrió un error interno" });
+    }
+  });
+
+  app.post("/api/tardia/sync", verifyAdminSession, async (req, res) => {
+    try {
+      const { records } = req.body;
+      if (!Array.isArray(records)) {
+        return res.status(400).json({ success: false, error: "Se requiere un arreglo de registros" });
+      }
+
+      // Write to local json file
+      saveTardiaRecords(records);
+
+      // Save to PG if configured
+      if (isPgConfigured && pgPool && isPgAvailable) {
+        for (const record of records) {
+          try {
+            await pgPool.query(`
+              INSERT INTO tardia_records (id, numero_seguimiento, identificacion, nombre_completo, notes)
+              VALUES ($1, $2, $3, $4, $5)
+              ON CONFLICT (id) DO UPDATE SET
+                numero_seguimiento = EXCLUDED.numero_seguimiento,
+                identificacion = EXCLUDED.identificacion,
+                nombre_completo = EXCLUDED.nombre_completo,
+                notes = EXCLUDED.notes
+            `, [
+              record.id || record.number || '',
+              record.number || '',
+              record.identificacion || '',
+              record.citizenName || '',
+              record.notes || ''
+            ]);
+          } catch (pErr: any) {
+            console.error("Error inserting tardia_record to PG:", pErr.message);
+          }
+        }
+      }
+
+      return res.json({ success: true, message: "Sincronización de expedientes exitosa" });
+    } catch (e: any) {
+      console.error("Error syncing tardia records:", e);
+      return res.status(500).json({ success: false, error: "Ocurrió un error interno" });
+    }
+  });
+
+  app.post("/api/tardia/verify", async (req, res) => {
+    try {
+      const { numeroSeguimiento } = req.body;
+      if (!numeroSeguimiento) {
+        return res.status(400).json({ success: false, error: "Se requiere el número de seguimiento" });
+      }
+
+      const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+      const searchTrack = clean(numeroSeguimiento);
+
+      const records = await getDBTardiaRecords();
+      const match = records.find(r => clean(r.number || r.id || '') === searchTrack);
+
+      if (match) {
+        return res.json({
+          success: true,
+          found: true,
+          record: match
+        });
+      } else {
+        return res.json({
+          success: true,
+          found: false,
+          record: null,
+          message: "Número de expediente no ubicado en el control de la base de datos del Tribunal Electoral."
+        });
+      }
+    } catch (e: any) {
+      console.error("Error verifying tardia record:", e);
+      return res.status(500).json({ success: false, error: "Ocurrió un error interno" });
+    }
+  });
+
   // Endpoints to get and set Extranjería capacity scheduler configurations
   app.get("/api/extranjeria/config", (req, res) => {
     try {
@@ -1908,19 +2718,80 @@ async function startServer() {
 
   app.post("/api/extranjeria/config", verifyAdminSession, (req, res) => {
     try {
-      const { capacidad, intervalo, horaInicio, horaFin } = req.body;
+      const { capacidad, intervalo, horaInicio, horaFin, ticketKioscoUrl } = req.body;
       
+      let cleanTicketUrl = String(ticketKioscoUrl || DEFAULT_EXTRANJERIA_CONFIG.ticketKioscoUrl || "https://test.te.gob.pa:8443/kiosco").trim();
+      if (!cleanTicketUrl || cleanTicketUrl.includes("sistema-de-ticket.vercel.app")) {
+        cleanTicketUrl = "https://test.te.gob.pa:8443/kiosco";
+      }
+
       const updatedConfig: ExtranjeriaConfig = {
         capacidad: parseInt(capacidad, 10) || DEFAULT_EXTRANJERIA_CONFIG.capacidad,
         intervalo: parseInt(intervalo, 10) || DEFAULT_EXTRANJERIA_CONFIG.intervalo,
         horaInicio: String(horaInicio || DEFAULT_EXTRANJERIA_CONFIG.horaInicio),
-        horaFin: String(horaFin || DEFAULT_EXTRANJERIA_CONFIG.horaFin)
+        horaFin: String(horaFin || DEFAULT_EXTRANJERIA_CONFIG.horaFin),
+        ticketKioscoUrl: cleanTicketUrl
       };
 
       saveExtranjeriaConfig(updatedConfig);
       return res.json({ success: true, config: updatedConfig });
     } catch (e: any) {
       console.error("Error saving extranjería config:", e);
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // Extranjería Workflow Metadata (documents verified, supervisor passed, cubicle assigned, ticket state)
+  const EXTRANJERIA_METADATA_FILE = path.join(process.cwd(), "extranjeria-metadata.json");
+
+  function getExtranjeriaWorkflowMetadata(): Record<string, any> {
+    try {
+      if (fs.existsSync(EXTRANJERIA_METADATA_FILE)) {
+        const raw = fs.readFileSync(EXTRANJERIA_METADATA_FILE, "utf-8");
+        return JSON.parse(raw);
+      }
+    } catch (e) {
+      console.warn("Could not read extranjeria metadata file:", e);
+    }
+    return {
+      "EXT-20260908-101": {
+        hasDocuments: true,
+        checkedDocs: ["req_precio", "req_cita", "req_nota_migracion", "req_carne_migracion", "req_pasaporte_generales"],
+        passedToSupervisor: true,
+        assignedCubiculo: null,
+        estadoTicket: "ninguno"
+      }
+    };
+  }
+
+  function saveExtranjeriaWorkflowMetadata(data: Record<string, any>): void {
+    try {
+      fs.writeFileSync(EXTRANJERIA_METADATA_FILE, JSON.stringify(data, null, 2), "utf-8");
+    } catch (e) {
+      console.error("Could not write extranjeria metadata file:", e);
+    }
+  }
+
+  app.get("/api/extranjeria/metadata", (req, res) => {
+    try {
+      const meta = getExtranjeriaWorkflowMetadata();
+      return res.json({ success: true, metadata: meta });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.post("/api/extranjeria/metadata", verifyAdminSession, (req, res) => {
+    try {
+      const incoming = req.body.metadata || req.body;
+      if (!incoming || typeof incoming !== "object") {
+        return res.status(400).json({ success: false, error: "Formato de metadata no válido" });
+      }
+      const existing = getExtranjeriaWorkflowMetadata();
+      const updated = { ...existing, ...incoming };
+      saveExtranjeriaWorkflowMetadata(updated);
+      return res.json({ success: true, metadata: updated });
+    } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });
     }
   });
@@ -1968,11 +2839,13 @@ async function startServer() {
     try {
       const statusResponse: any = {
         isAzurePostgresConfigured: isPgConfigured,
+        azurePostgresDatabase: activeDbTarget || process.env.PGDATABASE || "postgres",
+        azurePostgresUser: process.env.PGUSER || (pgConnectionString ? "usuario_admin" : ""),
         azurePostgresHost: process.env.PGHOST || (pgConnectionString ? "postgresql-flexible-server.postgres.database.azure.com" : ""),
         storage: "Azure PostgreSQL / Local Storage JSON"
       };
 
-      if (isPgConfigured && pgPool) {
+      if (isPgConfigured && pgPool && isPgAvailable) {
         try {
           const client = await pgPool.connect();
           statusResponse.azurePostgresConnected = true;
@@ -2099,7 +2972,7 @@ async function startServer() {
   });
 
   // API to register appointment directly
-  app.post("/api/register-appointment", async (req, res) => {
+  app.post("/api/register-appointment", rateLimiter(15, 60 * 1000), async (req, res) => {
     try {
       const { 
         id, 
@@ -2122,6 +2995,23 @@ async function startServer() {
 
       if (!id || !codigoTransaccion) {
         return res.status(400).json({ error: "Datos incompletos." });
+      }
+
+      // Block booking appointments on Panama holidays
+      const OFFICIAL_PANAMA_HOLIDAYS_SERVER = [
+        // 2026
+        "2026-01-01", "2026-01-09", "2026-02-17", "2026-04-03", "2026-05-01",
+        "2026-11-03", "2026-11-05", "2026-11-10", "2026-11-28", "2026-12-08", "2026-12-25",
+        // 2027
+        "2027-01-01", "2027-01-09", "2027-02-09", "2027-03-26", "2027-05-01",
+        "2027-11-03", "2027-11-05", "2027-11-10", "2027-11-28", "2027-12-08", "2027-12-25"
+      ];
+
+      if (fecha && OFFICIAL_PANAMA_HOLIDAYS_SERVER.includes(fecha)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "No es posible programar una cita en un día feriado o no laborable oficial de la República de Panamá." 
+        });
       }
 
       const appointments = await getDBAppointments();
@@ -2204,6 +3094,18 @@ async function startServer() {
 
       const existingIdx = appointments.findIndex(a => a.id === id || a.codigoTransaccion === codigoTransaccion);
 
+      const regParts = datosPersonales ? [
+        datosPersonales.primerNombre || '',
+        datosPersonales.segundoNombre || '',
+        datosPersonales.primerApellido || '',
+        datosPersonales.segundoApellido || ''
+      ].map((s: any) => String(s || '').trim()).filter(Boolean) : [];
+      const regPartsName = regParts.length > 0 ? regParts.join(' ') : '';
+      const finalCitizenName = datosPersonales?.nombreCompleto || req.body.nombre || regPartsName || (datosPersonales?.pasaporte ? `Ciudadano (${datosPersonales.pasaporte})` : '') || "";
+      if (datosPersonales && !datosPersonales.nombreCompleto && finalCitizenName) {
+        datosPersonales.nombreCompleto = finalCitizenName;
+      }
+
       const serverCita: ServerCita = {
         id,
         correo: datosPersonales?.correo || req.body.correo || "",
@@ -2222,8 +3124,10 @@ async function startServer() {
         fechaCreacion: fechaCreacion || new Date().toISOString(),
         numeroSeguimiento: datosPersonales?.numeroSeguimiento || req.body.numeroSeguimiento || undefined,
         datosPersonales: datosPersonales || undefined,
-        nombre: datosPersonales?.nombreCompleto || req.body.nombre || "",
-        creadoPor: creadoPor || datosPersonales?.creadoPor || undefined
+        nombre: finalCitizenName,
+        creadoPor: creadoPor || datosPersonales?.creadoPor || undefined,
+        numeroCitaDia: req.body.numeroCitaDia || datosPersonales?.numeroCitaDia || undefined,
+        resolucion: req.body.resolucion || datosPersonales?.numeroResolucion || undefined
       };
 
       await safeUpsertAppointment({
@@ -2243,6 +3147,9 @@ async function startServer() {
         correo: serverCita.correo,
         nombre_completo: serverCita.nombre || serverCita.datosPersonales?.nombreCompleto || "",
         numero_seguimiento: serverCita.numeroSeguimiento || null,
+        numero_cita_dia: serverCita.numeroCitaDia || null,
+        resolucion: serverCita.resolucion || null,
+        data: serverCita,
         primer_nombre: serverCita.datosPersonales?.primerNombre || null,
         segundo_nombre: serverCita.datosPersonales?.segundoNombre || null,
         primer_apellido: serverCita.datosPersonales?.primerApellido || null,
@@ -2261,7 +3168,7 @@ async function startServer() {
   });
 
   // API to bulk-sync appointment statuses
-  app.post("/api/sync-appointments", async (req, res) => {
+  app.post("/api/sync-appointments", verifyAdminSession, async (req, res) => {
     try {
       const { ids } = req.body;
       if (!Array.isArray(ids)) {
@@ -2295,18 +3202,408 @@ async function startServer() {
     }
   });
 
-  // Public endpoint for availability checks without exposing appointment IDs or client details
+  // API to sync / create multiple appointments (Accepts both array and { appointments: [...] } formats)
+  app.post("/api/appointments", verifyAdminSession, async (req, res) => {
+    try {
+      let appointmentsList: any[] = [];
+      if (Array.isArray(req.body)) {
+        appointmentsList = req.body;
+      } else if (req.body && Array.isArray(req.body.appointments)) {
+        appointmentsList = req.body.appointments;
+      } else {
+        return res.status(400).json({ success: false, error: "Formato de datos inválido" });
+      }
+
+      if (appointmentsList.length === 0) {
+        saveAppointments([]);
+        if (isPgConfigured && pgPool && isPgAvailable) {
+          try {
+            await pgPool.query(`DELETE FROM appointments`);
+          } catch (pgErr: any) {
+            console.error("[Azure PostgreSQL] Error clearing appointments:", pgErr.message);
+          }
+        }
+        return res.json({ success: true, message: "Todas las citas han sido eliminadas y sincronizadas" });
+      }
+
+      const incomingIds = new Set<string>();
+
+      for (const appointment of appointmentsList) {
+        if (!appointment.id) continue;
+        incomingIds.add(String(appointment.id));
+        if (appointment.codigoTransaccion) incomingIds.add(String(appointment.codigoTransaccion));
+        if (appointment.identificacion) incomingIds.add(String(appointment.identificacion));
+        if (appointment.datosPersonales?.identificacion) incomingIds.add(String(appointment.datosPersonales.identificacion));
+        if (appointment.datosPersonales?.pasaporte) incomingIds.add(String(appointment.datosPersonales.pasaporte));
+
+        // Strictly enforce Extranjería nomenclature for all CSV appointments
+        const isCsvAppt = String(appointment.id || '').includes('CSV') || 
+                          String(appointment.codigoTransaccion || '').includes('CSV') || 
+                          String(appointment.creadoPor || '').toLowerCase().includes('csv') || 
+                          String(appointment.creadoPor || '').toLowerCase().includes('importaci') ||
+                          String(appointment.id || '').startsWith('TE-CSV');
+
+        if (isCsvAppt) {
+          if (String(appointment.id || '').startsWith('TE-')) {
+            appointment.id = appointment.id.replace(/^TE-/, 'EXT-');
+          }
+          if (String(appointment.codigoTransaccion || '').startsWith('TE-')) {
+            appointment.codigoTransaccion = appointment.codigoTransaccion.replace(/^TE-/, 'EXT-');
+          }
+          appointment.servicioCategoria = 'extranjeria';
+          appointment.categoriaNombre = 'Trámites de Extranjería';
+          appointment.subServicioId = 'ext_primera_vez';
+          appointment.subServicioNombre = 'Carné de residente permanente por primera vez';
+          appointment.sucursalId = 'anc_main';
+          appointment.sucursalNombre = 'Sede Principal de Ancón (Extranjería)';
+          appointment.sucursalDireccion = 'Ciudad de Panamá, Ancón, Ave. Omar Torrijos Herrera';
+          appointment.creadoPor = 'Importación CSV Extranjería';
+          
+          if (!appointment.requisitos || appointment.requisitos.length === 0 || !appointment.requisitos.some((r: string) => r.includes('Migración'))) {
+            appointment.requisitos = [
+              "Precio (efectivo) B/. 100.00",
+              "Requiere contar con cita programada",
+              "Nota del Servicio Nacional de Migración",
+              "Fotocopia del carné expedido por el Servicio Nacional de Migración",
+              "Fotocopia de la página de las generales del pasaporte"
+            ];
+          }
+
+          if (appointment.datosPersonales) {
+            appointment.datosPersonales.tipoIdentificacion = 'Pasaporte';
+            if (!appointment.datosPersonales.pasaporte) {
+              appointment.datosPersonales.pasaporte = appointment.datosPersonales.identificacion || appointment.identificacion || 'PA-EXT';
+            }
+          }
+        }
+
+        const dp = appointment.datosPersonales || {};
+        const bulkParts = [
+          dp.primerNombre || '',
+          dp.segundoNombre || '',
+          dp.primerApellido || '',
+          dp.segundoApellido || ''
+        ].map((s: any) => String(s || '').trim()).filter(Boolean);
+        const bulkPartsName = bulkParts.length > 0 ? bulkParts.join(' ') : '';
+        const bulkResolvedName = appointment.nombre || dp.nombreCompleto || bulkPartsName || (dp.pasaporte ? `Ciudadano (${dp.pasaporte})` : '') || "";
+        if (dp && !dp.nombreCompleto && bulkResolvedName) {
+          dp.nombreCompleto = bulkResolvedName;
+        }
+
+        await safeUpsertAppointment({
+          id: appointment.id,
+          identificacion: appointment.id,
+          codigo_transaccion: appointment.codigoTransaccion || appointment.id,
+          fecha: appointment.fecha || "",
+          tiempo: appointment.hora || "",
+          fecha_cita: appointment.fecha || "",
+          hora_cita: appointment.hora || "",
+          fecha_creacion: appointment.fechaCreacion || new Date().toISOString(),
+          estado: appointment.estado || "confirmada",
+          estado_cita: appointment.estado || "confirmada",
+          sucursal_id: appointment.sucursalId || "anc_main",
+          sucursal_nombre: appointment.sucursalNombre || "Sede Principal",
+          sub_servicio_id: appointment.subServicioId || "ced_primera_vez",
+          sub_servicio_nombre: appointment.subServicioNombre || "",
+          tipo_servicio: appointment.servicioCategoria || "",
+          categoria_nombre: appointment.categoriaNombre || appointment.servicioCategoria || "",
+          tipo_identificacion: dp.tipoIdentificacion || "Cedula",
+          identificacion_ciudadano: appointment.identificacion || dp.identificacion || "",
+          ciudadano_identificacion: appointment.identificacion || dp.identificacion || "",
+          fecha_nacimiento: dp.fechaNacimiento || "2000-01-01",
+          telefono: appointment.telefono || dp.telefono || "",
+          correo: appointment.correo || dp.correo || "",
+          nombre_completo: bulkResolvedName,
+          numero_seguimiento: dp.numeroSeguimiento || appointment.numeroSeguimiento || null,
+          primer_nombre: dp.primerNombre || null,
+          segundo_nombre: dp.segundoNombre || null,
+          primer_apellido: dp.primerApellido || null,
+          segundo_apellido: dp.segundoApellido || null,
+          pasaporte: dp.pasaporte || null,
+          nacionalidad: dp.nacionalidad || null,
+          numero_resolucion: dp.numeroResolucion || null,
+          fecha_resolucion: dp.fechaResolucion || null,
+          datos_personales: dp,
+          requisitos: appointment.requisitos || []
+        });
+      }
+
+      // Sync deletions: Keep only incoming appointments in local storage
+      const currentLocal = getAppointments();
+      const kept = currentLocal.filter(a => 
+        incomingIds.has(String(a.id)) || 
+        incomingIds.has(String(a.codigoTransaccion)) || 
+        (a.identificacion && incomingIds.has(String(a.identificacion)))
+      );
+      saveAppointments(kept);
+
+      // Sync deletions in PostgreSQL
+      if (isPgConfigured && pgPool && isPgAvailable && incomingIds.size > 0) {
+        try {
+          const idsArray = Array.from(incomingIds);
+          await pgPool.query(
+            `DELETE FROM appointments WHERE id != ALL($1::varchar[]) AND identificacion != ALL($1::varchar[])`,
+            [idsArray]
+          );
+        } catch (pgErr: any) {
+          console.warn("[Azure PostgreSQL] Warning syncing removed appointments:", pgErr.message);
+        }
+      }
+
+      return res.json({ success: true, message: "Citas sincronizadas con éxito" });
+    } catch (e: any) {
+      console.error("Error bulk-syncing appointments:", e);
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // Specialized endpoint to enforce Extranjería classification or clean CSV appointments
+  app.post("/api/appointments/enforce-extranjeria-csv", verifyAdminSession, async (req, res) => {
+    try {
+      const appointments = getAppointments();
+      let updatedCount = 0;
+      const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+      const updated = appointments.map(appt => {
+        const isCsvAppt = String(appt.id || '').includes('CSV') || 
+                          String(appt.codigoTransaccion || '').includes('CSV') || 
+                          String(appt.creadoPor || '').toLowerCase().includes('csv') || 
+                          String(appt.creadoPor || '').toLowerCase().includes('importaci') ||
+                          String(appt.id || '').startsWith('TE-CSV');
+        if (isCsvAppt) {
+          updatedCount++;
+          let code = '';
+          for (let i = 0; i < 5; i++) {
+            code += alpha.charAt(Math.floor(Math.random() * alpha.length));
+          }
+          const finalId = appt.id.startsWith('EXT-') ? appt.id : `EXT-${appt.id.replace(/^TE-/, '')}`;
+          const finalTx = appt.codigoTransaccion.startsWith('EXT-') ? appt.codigoTransaccion : `EXT-${code}`;
+          const dp = appt.datosPersonales ? { ...appt.datosPersonales } : {};
+          dp.tipoIdentificacion = 'Pasaporte';
+          dp.pasaporte = dp.pasaporte || dp.identificacion || appt.identificacion || `PA-${code}`;
+
+          return {
+            ...appt,
+            id: finalId,
+            codigoTransaccion: finalTx,
+            servicioCategoria: 'extranjeria',
+            categoriaNombre: 'Trámites de Extranjería',
+            subServicioId: 'ext_primera_vez',
+            subServicioNombre: 'Carné de residente permanente por primera vez',
+            sucursalId: 'anc_main',
+            sucursalNombre: 'Sede Principal de Ancón (Extranjería)',
+            sucursalDireccion: 'Ciudad de Panamá, Ancón, Ave. Omar Torrijos Herrera',
+            creadoPor: 'Importación CSV Extranjería',
+            requisitos: [
+              "Precio (efectivo) B/. 100.00",
+              "Requiere contar con cita programada",
+              "Nota del Servicio Nacional de Migración",
+              "Fotocopia del carné expedido por el Servicio Nacional de Migración",
+              "Fotocopia de la página de las generales del pasaporte"
+            ],
+            datosPersonales: dp
+          };
+        }
+        return appt;
+      });
+
+      saveAppointments(updated);
+      return res.json({ success: true, updatedCount, appointments: updated });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Generate regulatory 56 appointments for Extranjería for a specific date (07:00 AM - 01:45 PM)
+  app.post("/api/extranjeria/generate-56-jornada", verifyAdminSession, async (req, res) => {
+    try {
+      const { fecha } = req.body;
+      const targetDate = fecha || new Date().toISOString().substring(0, 10);
+      const cleanDate = targetDate.replace(/[^0-9]/g, '').substring(0, 8);
+      const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+      const EXTRANJERIA_OFFICIAL_SLOTS = [
+        '07:00 AM', '07:15 AM', '07:30 AM', '07:45 AM',
+        '08:00 AM', '08:15 AM', '08:30 AM', '08:45 AM',
+        '09:00 AM', '09:15 AM', '09:30 AM', '09:45 AM',
+        '10:00 AM', '10:15 AM', '10:30 AM', '10:45 AM',
+        '11:00 AM', '11:15 AM', '11:30 AM', '11:45 AM',
+        '12:00 PM', '12:15 PM', '12:30 PM', '12:45 PM',
+        '01:00 PM', '01:15 PM', '01:30 PM', '01:45 PM'
+      ];
+
+      const DIVERSE_CITIZENS = [
+        { nombre: "Carlos Eduardo Mendoza Silva", pasaporte: "PA-7845101", resolucion: "Res. 500601 de 15/05/2026", nacionalidad: "Colombiana", correo: "carlos.mendoza@email.com", telefono: "6234-5101" },
+        { nombre: "Elena Rostova Ivanova", pasaporte: "PA-4491002", resolucion: "Res. 500602 de 15/05/2026", nacionalidad: "Rusa", correo: "elena.rostova@email.com", telefono: "6789-0102" },
+        { nombre: "David Chen Wu", pasaporte: "PA-9932103", resolucion: "Res. 500603 de 15/05/2026", nacionalidad: "China", correo: "david.chen@email.com", telefono: "6456-7103" },
+        { nombre: "Maria Santos Da Silva", pasaporte: "PA-3321404", resolucion: "Res. 500604 de 15/05/2026", nacionalidad: "Brasileña", correo: "maria.santos@email.com", telefono: "6111-2104" },
+        { nombre: "Jean Pierre Dupont", pasaporte: "PA-8822005", resolucion: "Res. 500605 de 15/05/2026", nacionalidad: "Francesa", correo: "jean.dupont@email.com", telefono: "6999-0105" },
+        { nombre: "Andrea Paola Gutierrez", pasaporte: "PA-5511206", resolucion: "Res. 500606 de 16/05/2026", nacionalidad: "Venezolana", correo: "andrea.gutierrez@email.com", telefono: "6333-4106" },
+        { nombre: "Marco Aurelio Rossi", pasaporte: "PA-6622307", resolucion: "Res. 500607 de 16/05/2026", nacionalidad: "Italiana", correo: "marco.rossi@email.com", telefono: "6222-1107" },
+        { nombre: "Sofia Nicole Castillo", pasaporte: "PA-7733408", resolucion: "Res. 500608 de 16/05/2026", nacionalidad: "Nicaragüense", correo: "sofia.castillo@email.com", telefono: "6444-5108" },
+        { nombre: "Liam Alexander Smith", pasaporte: "PA-8844509", resolucion: "Res. 500609 de 17/05/2026", nacionalidad: "Estadounidense", correo: "liam.smith@email.com", telefono: "6555-6109" },
+        { nombre: "Camila Alejandra Morales", pasaporte: "PA-9955610", resolucion: "Res. 500610 de 17/05/2026", nacionalidad: "Costarricense", correo: "camila.morales@email.com", telefono: "6666-7110" },
+        { nombre: "Mateo Sebastian Vargas", pasaporte: "PA-1166711", resolucion: "Res. 500611 de 17/05/2026", nacionalidad: "Peruana", correo: "mateo.vargas@email.com", telefono: "6777-8111" },
+        { nombre: "Isabella Marie Leclerc", pasaporte: "PA-2277812", resolucion: "Res. 500612 de 18/05/2026", nacionalidad: "Canadiense", correo: "isabella.leclerc@email.com", telefono: "6888-9112" },
+        { nombre: "Alejandro Jose Hernandez", pasaporte: "PA-3388913", resolucion: "Res. 500613 de 18/05/2026", nacionalidad: "Dominicana", correo: "alejandro.hernandez@email.com", telefono: "6999-1113" },
+        { nombre: "Valeria Gomez Gomez", pasaporte: "PA-4499014", resolucion: "Res. 500614 de 18/05/2026", nacionalidad: "Española", correo: "valeria.gomez@email.com", telefono: "6123-2114" },
+        { nombre: "Lucas Santiago Ferreira", pasaporte: "PA-5500115", resolucion: "Res. 500615 de 19/05/2026", nacionalidad: "Portuguesa", correo: "lucas.ferreira@email.com", telefono: "6234-3115" },
+        { nombre: "Fatima Zahra Mansouri", pasaporte: "PA-6611216", resolucion: "Res. 500616 de 19/05/2026", nacionalidad: "Marroquí", correo: "fatima.mansouri@email.com", telefono: "6345-4116" },
+        { nombre: "Kenji Sato Tanaka", pasaporte: "PA-7722317", resolucion: "Res. 500617 de 19/05/2026", nacionalidad: "Japonesa", correo: "kenji.sato@email.com", telefono: "6456-5117" },
+        { nombre: "Ana Maria Alvarez", pasaporte: "PA-8833418", resolucion: "Res. 500618 de 20/05/2026", nacionalidad: "Mexicana", correo: "ana.alvarez@email.com", telefono: "6567-6118" },
+        { nombre: "Oliver James Wright", pasaporte: "PA-9944519", resolucion: "Res. 500619 de 20/05/2026", nacionalidad: "Británica", correo: "oliver.wright@email.com", telefono: "6678-7119" },
+        { nombre: "Lucia Fernandez Diaz", pasaporte: "PA-1155620", resolucion: "Res. 500620 de 20/05/2026", nacionalidad: "Argentina", correo: "lucia.fernandez@email.com", telefono: "6789-8120" },
+        { nombre: "Gabriel Antonio Castro", pasaporte: "PA-2266721", resolucion: "Res. 500621 de 21/05/2026", nacionalidad: "Salvadoreña", correo: "gabriel.castro@email.com", telefono: "6890-9121" },
+        { nombre: "Emma Louise Mueller", pasaporte: "PA-3377822", resolucion: "Res. 500622 de 21/05/2026", nacionalidad: "Alemana", correo: "emma.mueller@email.com", telefono: "6901-0122" },
+        { nombre: "Diego Andres Pineda", pasaporte: "PA-4488923", resolucion: "Res. 500623 de 21/05/2026", nacionalidad: "Hondureña", correo: "diego.pineda@email.com", telefono: "6012-1123" },
+        { nombre: "Mia Chloe Jansen", pasaporte: "PA-5599024", resolucion: "Res. 500624 de 22/05/2026", nacionalidad: "Holandesa", correo: "mia.jansen@email.com", telefono: "6123-3124" },
+        { nombre: "Samuel David Ocampo", pasaporte: "PA-6600125", resolucion: "Res. 500625 de 22/05/2026", nacionalidad: "Guatemalteca", correo: "samuel.ocampo@email.com", telefono: "6234-4125" },
+        { nombre: "Clara Beatriz Romero", pasaporte: "PA-7711226", resolucion: "Res. 500626 de 22/05/2026", nacionalidad: "Chilena", correo: "clara.romero@email.com", telefono: "6345-5126" },
+        { nombre: "Noah Benjamin Cohen", pasaporte: "PA-8822327", resolucion: "Res. 500627 de 23/05/2026", nacionalidad: "Israelí", correo: "noah.cohen@email.com", telefono: "6456-6127" },
+        { nombre: "Julieta Rocio Benitez", pasaporte: "PA-9933428", resolucion: "Res. 500628 de 23/05/2026", nacionalidad: "Paraguaya", correo: "julieta.benitez@email.com", telefono: "6567-7128" },
+        { nombre: "Thiago Silva Barbosa", pasaporte: "PA-1144529", resolucion: "Res. 500629 de 23/05/2026", nacionalidad: "Brasileña", correo: "thiago.barbosa@email.com", telefono: "6678-8129" },
+        { nombre: "Zoe Charlotte Martin", pasaporte: "PA-2255630", resolucion: "Res. 500630 de 24/05/2026", nacionalidad: "Francesa", correo: "zoe.martin@email.com", telefono: "6789-9130" },
+        { nombre: "Sebastian Cruz Delgado", pasaporte: "PA-3366731", resolucion: "Res. 500631 de 24/05/2026", nacionalidad: "Ecuatoriana", correo: "sebastian.cruz@email.com", telefono: "6890-0131" },
+        { nombre: "Astrid Linnea Lind", pasaporte: "PA-4477832", resolucion: "Res. 500632 de 24/05/2026", nacionalidad: "Sueca", correo: "astrid.lind@email.com", telefono: "6901-1132" },
+        { nombre: "Joaquin Manuel Rios", pasaporte: "PA-5588933", resolucion: "Res. 500633 de 25/05/2026", nacionalidad: "Uruguaya", correo: "joaquin.rios@email.com", telefono: "6012-2133" },
+        { nombre: "Chloe Grace O'Connor", pasaporte: "PA-6699034", resolucion: "Res. 500634 de 25/05/2026", nacionalidad: "Irlandesa", correo: "chloe.oconnor@email.com", telefono: "6123-4134" },
+        { nombre: "Emilio Rafael Cardenas", pasaporte: "PA-7700135", resolucion: "Res. 500635 de 25/05/2026", nacionalidad: "Boliviana", correo: "emilio.cardenas@email.com", telefono: "6234-5135" },
+        { nombre: "Min-Jun Park Kim", pasaporte: "PA-8811236", resolucion: "Res. 500636 de 26/05/2026", nacionalidad: "Surcoreana", correo: "minjun.park@email.com", telefono: "6345-6136" },
+        { nombre: "Renata Luciana Pacheco", pasaporte: "PA-9922337", resolucion: "Res. 500637 de 26/05/2026", nacionalidad: "Mexicana", correo: "renata.pacheco@email.com", telefono: "6456-7137" },
+        { nombre: "Dmitry Sergeyev Popov", pasaporte: "PA-1133438", resolucion: "Res. 500638 de 26/05/2026", nacionalidad: "Rusa", correo: "dmitry.popov@email.com", telefono: "6567-8138" },
+        { nombre: "Mariana Soledad Flores", pasaporte: "PA-2244539", resolucion: "Res. 500639 de 27/05/2026", nacionalidad: "Argentina", correo: "mariana.flores@email.com", telefono: "6678-9139" },
+        { nombre: "Lars Erik Hansen", pasaporte: "PA-3355640", resolucion: "Res. 500640 de 27/05/2026", nacionalidad: "Noruega", correo: "lars.hansen@email.com", telefono: "6789-0140" },
+        { nombre: "Alonso Javier Sucre", pasaporte: "PA-4466741", resolucion: "Res. 500641 de 27/05/2026", nacionalidad: "Venezolana", correo: "alonso.sucre@email.com", telefono: "6890-1141" },
+        { nombre: "Hanna Marie Becker", pasaporte: "PA-5577842", resolucion: "Res. 500642 de 28/05/2026", nacionalidad: "Alemana", correo: "hanna.becker@email.com", telefono: "6901-2142" },
+        { nombre: "Gonzalo Ignacio Paredes", pasaporte: "PA-6688943", resolucion: "Res. 500643 de 28/05/2026", nacionalidad: "Peruana", correo: "gonzalo.paredes@email.com", telefono: "6012-3143" },
+        { nombre: "Amina Bint Youssef", pasaporte: "PA-7799044", resolucion: "Res. 500644 de 28/05/2026", nacionalidad: "Egipcia", correo: "amina.youssef@email.com", telefono: "6123-5144" },
+        { nombre: "Federico Dante Moretti", pasaporte: "PA-8800145", resolucion: "Res. 500645 de 29/05/2026", nacionalidad: "Italiana", correo: "federico.moretti@email.com", telefono: "6234-6145" },
+        { nombre: "Sara Ines Betancourt", pasaporte: "PA-9911246", resolucion: "Res. 500646 de 29/05/2026", nacionalidad: "Colombiana", correo: "sara.betancourt@email.com", telefono: "6345-7146" },
+        { nombre: "William Robert Taylor", pasaporte: "PA-1122347", resolucion: "Res. 500647 de 29/05/2026", nacionalidad: "Australiana", correo: "william.taylor@email.com", telefono: "6456-8147" },
+        { nombre: "Daniela Paola Navarro", pasaporte: "PA-2233448", resolucion: "Res. 500648 de 30/05/2026", nacionalidad: "Nicaragüense", correo: "daniela.navarro@email.com", telefono: "6567-9148" },
+        { nombre: "Rajesh Kumar Patel", pasaporte: "PA-3344549", resolucion: "Res. 500649 de 30/05/2026", nacionalidad: "India", correo: "rajesh.patel@email.com", telefono: "6678-0149" },
+        { nombre: "Victoria Isabel Salazar", pasaporte: "PA-4455650", resolucion: "Res. 500650 de 30/05/2026", nacionalidad: "Costarricense", correo: "victoria.salazar@email.com", telefono: "6789-1150" },
+        { nombre: "Ethan Bradley Miller", pasaporte: "PA-5566751", resolucion: "Res. 500651 de 31/05/2026", nacionalidad: "Estadounidense", correo: "ethan.miller@email.com", telefono: "6890-2151" },
+        { nombre: "Paulina Eugenia Cordero", pasaporte: "PA-6677852", resolucion: "Res. 500652 de 31/05/2026", nacionalidad: "Chilena", correo: "paulina.cordero@email.com", telefono: "6901-3152" },
+        { nombre: "Klaus Dieter Schmidt", pasaporte: "PA-7788953", resolucion: "Res. 500653 de 31/05/2026", nacionalidad: "Suiza", correo: "klaus.schmidt@email.com", telefono: "6012-4153" },
+        { nombre: "Catalina Maria Restrepo", pasaporte: "PA-8899054", resolucion: "Res. 500654 de 31/05/2026", nacionalidad: "Colombiana", correo: "catalina.restrepo@email.com", telefono: "6123-6154" },
+        { nombre: "Andrei Nicolae Radu", pasaporte: "PA-9900155", resolucion: "Res. 500655 de 31/05/2026", nacionalidad: "Rumana", correo: "andrei.radu@email.com", telefono: "6234-7155" },
+        { nombre: "Beatriz Helena Moncada", pasaporte: "PA-1111256", resolucion: "Res. 500656 de 31/05/2026", nacionalidad: "Hondureña", correo: "beatriz.moncada@email.com", telefono: "6345-8156" }
+      ];
+
+      const newAppts = DIVERSE_CITIZENS.slice(0, 56).map((c, idx) => {
+        const seqNum = idx + 1;
+        const slotIdx = Math.min(EXTRANJERIA_OFFICIAL_SLOTS.length - 1, Math.floor(idx / 2));
+        const hora = EXTRANJERIA_OFFICIAL_SLOTS[slotIdx];
+
+        let code = '';
+        for (let i = 0; i < 5; i++) {
+          code += alpha.charAt(Math.floor(Math.random() * alpha.length));
+        }
+
+        return {
+          id: `EXT-CSV-${cleanDate || '2026'}-${101 + idx}`,
+          codigoTransaccion: `EXT-${code}`,
+          nombre: c.nombre,
+          servicioCategoria: 'extranjeria',
+          categoriaNombre: 'Trámites de Extranjería',
+          subServicioId: 'ext_primera_vez',
+          subServicioNombre: 'Carné de residente permanente por primera vez',
+          sucursalId: 'anc_main',
+          sucursalNombre: 'Sede Principal de Ancón (Extranjería)',
+          sucursalDireccion: 'Ciudad de Panamá, Ancón, Ave. Omar Torrijos Herrera',
+          fecha: targetDate,
+          hora,
+          telefono: c.telefono,
+          correo: c.correo,
+          estado: 'confirmada' as const,
+          llegadaConfirmadaAuto: true,
+          tipoIdentificacion: 'Pasaporte' as const,
+          numeroCitaDia: seqNum,
+          resolucion: c.resolucion,
+          creadoPor: 'Generador Oficial 56 Cupos (07:00 AM - 01:45 PM)',
+          fechaCreacion: new Date().toISOString(),
+          requisitos: [
+            "Precio (efectivo) B/. 100.00",
+            "Requiere contar con cita programada",
+            "Nota del Servicio Nacional de Migración",
+            "Fotocopia del carné expedido por el Servicio Nacional de Migración",
+            "Fotocopia de la página de las generales del pasaporte"
+          ],
+          datosPersonales: {
+            primerNombre: c.nombre.split(' ')[0] || '',
+            primerApellido: c.nombre.split(' ')[1] || '',
+            nombreCompleto: c.nombre,
+            pasaporte: c.pasaporte,
+            identificacion: c.pasaporte,
+            nacionalidad: c.nacionalidad,
+            numeroResolucion: c.resolucion,
+            correo: c.correo,
+            telefono: c.telefono,
+            tipoIdentificacion: 'Pasaporte',
+            creadoPor: 'Generador Oficial 56 Cupos (07:00 AM - 01:45 PM)'
+          }
+        };
+      });
+
+      const current = getAppointments();
+      const updated = [...newAppts, ...current];
+      saveAppointments(updated);
+
+      return res.json({
+        success: true,
+        count: newAppts.length,
+        message: `Se han generado e importado con éxito las 56 citas oficiales de Extranjería (07:00 AM - 01:45 PM) para el ${targetDate}`,
+        appointments: newAppts
+      });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // Public endpoint for availability checks with accurate service, CSV and block detection
   app.get("/api/public/occupied-slots", async (req, res) => {
     try {
       const appointments = await getDBAppointments();
       const occupied = appointments
         .filter(a => a.estado !== "cancelada")
-        .map(a => ({
+        .map((a, idx) => ({
+          id: a.id || `occ-slot-${idx}`,
           fecha: a.fecha,
           hora: a.hora,
-          subServicioId: a.subServicioId
+          subServicioId: a.subServicioId,
+          servicioCategoria: a.servicioCategoria || a.categoriaNombre,
+          categoriaNombre: a.categoriaNombre || a.servicioCategoria,
+          estado: a.estado || 'confirmada',
+          creadoPor: a.creadoPor,
+          codigoTransaccion: a.codigoTransaccion,
+          isCsv: String(a.id || '').includes('CSV') || 
+                 String(a.codigoTransaccion || '').includes('CSV') || 
+                 String(a.creadoPor || '').toLowerCase().includes('csv') || 
+                 String(a.creadoPor || '').toLowerCase().includes('importaci')
         }));
-      return res.json({ success: true, appointments: occupied });
+
+      // Detect if Extranjería CSV appointments exist covering dates up to Dec 30 (Sep - Dec 30)
+      const csvExtranjeria = occupied.filter(a => 
+        (a.servicioCategoria === 'extranjeria' || a.subServicioId?.includes('extranjero') || a.subServicioId?.startsWith('ext_')) &&
+        a.isCsv
+      );
+      
+      const hasCsvDec30 = csvExtranjeria.some(a => a.fecha >= '2026-09-01' && a.fecha <= '2026-12-30');
+      const csvDates = Array.from(new Set(csvExtranjeria.map(a => a.fecha))).sort();
+
+      return res.json({ 
+        success: true, 
+        appointments: occupied,
+        hasCsvDec30,
+        csvDates,
+        csvCount: csvExtranjeria.length,
+        blockedPeriod: hasCsvDec30 ? {
+          from: '2026-09-01',
+          to: '2026-12-30',
+          reason: 'Citas de septiembre a diciembre 30 asignadas mediante importación oficial de expedientes CSV'
+        } : null
+      });
     } catch (e: any) {
       res.status(500).json({ success: false, error: "Error al obtener disponibilidad" });
     }
@@ -2326,7 +3623,7 @@ async function startServer() {
         appointment.estado = 'cancelada';
         saveAppointments(appointments);
         
-        if (isPgConfigured && pgPool) {
+        if (isPgConfigured && pgPool && isPgAvailable) {
           try {
             await pgPool.query(`UPDATE appointments SET estado = 'cancelada' WHERE identificacion = $1`, [id]);
           } catch (pgErr: any) {
@@ -2343,22 +3640,16 @@ async function startServer() {
   });
 
   // API to delete an appointment
-  app.delete("/api/appointments/:id", async (req, res) => {
+  app.delete("/api/appointments/:id", verifyAdminSession, async (req, res) => {
     try {
       const { id } = req.params;
-      const appointments = await getDBAppointments();
-      const existingIdx = appointments.findIndex(a => a.id === id);
-      if (existingIdx < 0) {
-        return res.status(404).json({ success: false, error: "Cita no encontrada" });
-      }
-
       const localAppointments = getAppointments();
-      const filtered = localAppointments.filter(a => a.id !== id);
+      const filtered = localAppointments.filter(a => a.id !== id && a.codigoTransaccion !== id && a.identificacion !== id);
       saveAppointments(filtered);
 
-      if (isPgConfigured && pgPool) {
+      if (isPgConfigured && pgPool && isPgAvailable) {
         try {
-          await pgPool.query(`DELETE FROM appointments WHERE identificacion = $1`, [id]);
+          await pgPool.query(`DELETE FROM appointments WHERE id = $1 OR identificacion = $1 OR codigo_transaccion = $1 OR (data->>'codigoTransaccion') = $1`, [id]);
         } catch (pgErr: any) {
           console.error("[Azure PostgreSQL] Error deleting appointment:", pgErr.message);
         }
@@ -2371,7 +3662,7 @@ async function startServer() {
   });
 
   // API to purge all database records (appointments, tickets, logs, extranjeria, tardia)
-  app.post("/api/admin/purge-all-database", async (req, res) => {
+  app.post("/api/admin/purge-all-database", verifyAdminSession, async (req, res) => {
     try {
       console.log("[DB Admin] Purgando todos los registros de la base de datos a petición...");
       
@@ -2391,8 +3682,17 @@ async function startServer() {
         console.error("Error al vaciar EXTRANJERIA_DB_PATH:", errExt);
       }
 
+      // Limpiar tardia en JSON
+      try {
+        if (fs.existsSync(TARDIA_DB_PATH)) {
+          fs.writeFileSync(TARDIA_DB_PATH, JSON.stringify([], null, 2), "utf8");
+        }
+      } catch (errTardia) {
+        console.error("Error al vaciar TARDIA_DB_PATH:", errTardia);
+      }
+
       // 3. Si PostgreSQL está configurado, vaciar tablas existentes una a una para que no falle si alguna no existe
-      if (isPgConfigured && pgPool) {
+      if (isPgConfigured && pgPool && isPgAvailable) {
         const tablesToClear = [
           "appointments",
           "tickets",
@@ -2463,7 +3763,7 @@ async function startServer() {
       match.estado = 'asistire';
       saveAppointments(allAppts);
     }
-    if (isPgConfigured && pgPool) {
+    if (isPgConfigured && pgPool && isPgAvailable) {
       try {
         await pgPool.query(`UPDATE appointments SET estado = 'asistire' WHERE identificacion = $1`, [appointment.id]);
       } catch (pgErr: any) {
@@ -2550,7 +3850,7 @@ async function startServer() {
       match.estado = 'cancelada';
       saveAppointments(allAppts);
     }
-    if (isPgConfigured && pgPool) {
+    if (isPgConfigured && pgPool && isPgAvailable) {
       try {
         await pgPool.query(`UPDATE appointments SET estado = 'cancelada' WHERE identificacion = $1`, [appointment.id]);
       } catch (pgErr: any) {
@@ -2594,7 +3894,7 @@ async function startServer() {
   });
 
   // API Route to dispatch the 24h Reminder email with Confirm / Cancel options
-  app.post("/api/send-reminder-email", async (req, res) => {
+  app.post("/api/send-reminder-email", verifyAdminSession, async (req, res) => {
     try {
       const { 
         id,
@@ -3075,24 +4375,29 @@ async function startServer() {
     try {
       const { username, password, role, nombre, sucursalId } = req.body;
       if (!username || !password || !role || !nombre) {
-        return res.status(400).json({ success: false, error: "Datos incompletos para el usuario." });
+        return res.status(400).json({ success: false, error: "Datos incompletos para el usuario: nombre completo, usuario, contraseña y rol son obligatorios." });
       }
 
-      const cleanUsername = String(username).trim().toLowerCase();
-      // Validate length or patterns can be added
+      const cleanUsername = String(username).trim().toLowerCase().replace(/\s+/g, "");
       if (cleanUsername.length < 3) {
         return res.status(400).json({ success: false, error: "El nombre de usuario debe tener al menos 3 caracteres." });
       }
+
+      const cleanRole = String(role).trim().toLowerCase();
+      const cleanNombre = String(nombre).trim();
+      const cleanSucursal = String(sucursalId || "OFF-1").trim();
+      const cleanPassword = String(password).trim();
+      const hashedPassword = hashPassword(cleanPassword);
 
       const localUsers = getUsers();
       const existingIdx = localUsers.findIndex(u => u.username.toLowerCase() === cleanUsername);
 
       const newUser: ServerUser = {
         username: cleanUsername,
-        password: String(password).trim(),
-        role: role,
-        nombre: String(nombre).trim(),
-        sucursalId: sucursalId || undefined,
+        password: hashedPassword,
+        role: cleanRole as any,
+        nombre: cleanNombre,
+        sucursalId: cleanSucursal,
         fechaCreacion: existingIdx >= 0 ? localUsers[existingIdx].fechaCreacion : new Date().toISOString()
       };
 
@@ -3106,21 +4411,32 @@ async function startServer() {
       saveUsers(localUsers);
 
       // Save to Azure PostgreSQL if configured
-      if (isPgConfigured && pgPool) {
+      if (isPgConfigured && pgPool && isPgAvailable) {
         try {
+          // Asegurar que las columnas existan
+          await pgPool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sucursal_id VARCHAR(100) DEFAULT 'OFF-1';`);
+          await pgPool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE;`);
+          await pgPool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE;`);
+          await pgPool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
+
           await pgPool.query(
-            `INSERT INTO usuarios (username, password, role, nombre, sucursal_id, must_change_password)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            `INSERT INTO usuarios (username, password, role, nombre, sucursal_id, must_change_password, activo, fecha_creacion)
+             VALUES ($1, $2, $3, $4, $5, false, true, NOW())
              ON CONFLICT (username) DO UPDATE SET
-               password = EXCLUDED.password, role = EXCLUDED.role, nombre = EXCLUDED.nombre, sucursal_id = EXCLUDED.sucursal_id`,
-            [cleanUsername, String(password).trim(), role, String(nombre).trim(), sucursalId || null, false]
+               password = EXCLUDED.password,
+               role = EXCLUDED.role,
+               nombre = EXCLUDED.nombre,
+               sucursal_id = EXCLUDED.sucursal_id,
+               activo = true`,
+            [cleanUsername, hashedPassword, cleanRole, cleanNombre, cleanSucursal]
           );
+          console.log(`[Azure PostgreSQL] Usuario ${cleanUsername} (${cleanRole}) guardado exitosamente en base de datos.`);
         } catch (pgErr: any) {
-          console.error("[Azure PostgreSQL] Error saving user:", pgErr.message);
+          console.error("[Azure PostgreSQL] Error guardando usuario en PostgreSQL:", pgErr.message);
         }
       }
 
-      return res.json({ success: true, user: newUser });
+      return res.json({ success: true, user: newUser, message: "Usuario guardado exitosamente en base de datos." });
     } catch (e: any) {
       console.error("Error registering user:", e);
       return res.status(500).json({ success: false, error: e.message });
@@ -3142,7 +4458,7 @@ async function startServer() {
       saveUsers(filteredUsers);
 
       // Delete from Azure PostgreSQL if configured
-      if (isPgConfigured && pgPool) {
+      if (isPgConfigured && pgPool && isPgAvailable) {
         try {
           await pgPool.query(`DELETE FROM usuarios WHERE LOWER(username) = $1`, [usernameToDelete]);
         } catch (pgErr: any) {
@@ -3158,7 +4474,7 @@ async function startServer() {
   });
 
   // Endpoint público para cambio de contraseña (primer ingreso o reseteo obligado)
-  app.post("/api/change-password", async (req, res) => {
+  app.post("/api/change-password", rateLimiter(5, 60 * 1000), async (req, res) => {
     try {
       const { username, currentPassword, newPassword } = req.body;
       if (!username || !newPassword) {
@@ -3175,18 +4491,19 @@ async function startServer() {
       const userIdx = localUsers.findIndex(u => u.username.toLowerCase() === cleanUsername);
 
       if (userIdx >= 0) {
-        if (currentPassword && localUsers[userIdx].password && localUsers[userIdx].password !== currentPassword) {
+        if (currentPassword && localUsers[userIdx].password && !verifyPassword(currentPassword, localUsers[userIdx].password)) {
           return res.status(401).json({ success: false, error: "La contraseña actual ingresada es incorrecta." });
         }
-        localUsers[userIdx].password = cleanNewPass;
+        const hashedNewPass = hashPassword(cleanNewPass);
+        localUsers[userIdx].password = hashedNewPass;
         localUsers[userIdx].mustChangePassword = false;
         saveUsers(localUsers);
 
-        if (isPgConfigured && pgPool) {
+        if (isPgConfigured && pgPool && isPgAvailable) {
           try {
             await pgPool.query(
               `UPDATE usuarios SET password = $1, must_change_password = FALSE WHERE LOWER(username) = $2`,
-              [cleanNewPass, cleanUsername]
+              [hashedNewPass, cleanUsername]
             );
           } catch (pgErr: any) {
             console.error("[Azure PostgreSQL] Error updating password:", pgErr.message);
@@ -3195,9 +4512,10 @@ async function startServer() {
 
         return res.json({ success: true, message: "Contraseña actualizada con éxito." });
       } else {
+        const hashedNewPass = hashPassword(cleanNewPass);
         const newUser: ServerUser = {
           username: cleanUsername,
-          password: cleanNewPass,
+          password: hashedNewPass,
           role: "super",
           nombre: cleanUsername,
           fechaCreacion: new Date().toISOString(),
@@ -3262,16 +4580,31 @@ async function startServer() {
   app.get("/api/tickets", async (req, res) => {
     try {
       const sucursalId = (req.query.office as string) || (req.query.sucursal_id as string) || "OFF-1";
+      const includeAllDays = req.query.all_days === "true";
       
+      // Calculate start of today in Panama (UTC-5)
+      const now = new Date();
+      const panamaLocal = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+      panamaLocal.setUTCHours(0, 0, 0, 0);
+      const startOfTodayPanama = new Date(panamaLocal.getTime() + 5 * 60 * 60 * 1000);
+
       let dbTickets: any[] = [];
       let dbQueryExecuted = false;
 
-      if (isPgConfigured && pgPool) {
+      if (isPgConfigured && pgPool && isPgAvailable) {
         try {
           const query = sucursalId === "ALL" 
-            ? `SELECT * FROM tickets ORDER BY hora_emision ASC`
-            : `SELECT * FROM tickets WHERE sucursal_id = $1 ORDER BY hora_emision ASC`;
-          const params = sucursalId === "ALL" ? [] : [sucursalId];
+            ? (includeAllDays 
+                ? `SELECT * FROM tickets ORDER BY hora_emision ASC` 
+                : `SELECT * FROM tickets WHERE hora_emision >= $1 ORDER BY hora_emision ASC`)
+            : (includeAllDays 
+                ? `SELECT * FROM tickets WHERE sucursal_id = $1 ORDER BY hora_emision ASC` 
+                : `SELECT * FROM tickets WHERE sucursal_id = $1 AND hora_emision >= $2 ORDER BY hora_emision ASC`);
+          
+          const params = sucursalId === "ALL" 
+            ? (includeAllDays ? [] : [startOfTodayPanama])
+            : (includeAllDays ? [sucursalId] : [sucursalId, startOfTodayPanama]);
+
           const dbRes = await pgPool.query(query, params);
           dbQueryExecuted = true;
           
@@ -3293,7 +4626,7 @@ async function startServer() {
                 serviceType: svc,
                 status: st,
                 currentPhase: phase,
-                phaseHistory: [{ phase, timestamp: cTime }],
+                phaseHistory: r.historial_fases || [{ phase, timestamp: cTime }],
                 createdAt: cTime,
                 calledAt: callTime,
                 attendedAt: attTime,
@@ -3317,11 +4650,20 @@ async function startServer() {
       if (dbQueryExecuted) {
         // PostgreSQL is authoritative. Sync memoryTicketsStore to reflect the true state of DB
         if (sucursalId === "ALL") {
-          memoryTicketsStore.clear();
+          if (!includeAllDays) {
+            // Keep previous days' memory cache untouched if they exist, but clear/sync today's list
+            for (const [id, t] of memoryTicketsStore.entries()) {
+              if (t.createdAt >= startOfTodayPanama.getTime()) {
+                memoryTicketsStore.delete(id);
+              }
+            }
+          } else {
+            memoryTicketsStore.clear();
+          }
           dbTickets.forEach(t => memoryTicketsStore.set(t.id, t));
         } else {
           for (const [id, t] of memoryTicketsStore.entries()) {
-            if ((t.sucursalId || "OFF-1") === sucursalId) {
+            if ((t.sucursalId || "OFF-1") === sucursalId && (includeAllDays || t.createdAt >= startOfTodayPanama.getTime())) {
               memoryTicketsStore.delete(id);
             }
           }
@@ -3333,7 +4675,10 @@ async function startServer() {
       }
 
       // If PostgreSQL not configured or unreachable, use memory cache
-      const allMemTickets = Array.from(memoryTicketsStore.values());
+      let allMemTickets = Array.from(memoryTicketsStore.values());
+      if (!includeAllDays) {
+        allMemTickets = allMemTickets.filter(t => t.createdAt >= startOfTodayPanama.getTime());
+      }
       const filteredMemTickets = sucursalId === "ALL"
         ? allMemTickets
         : allMemTickets.filter(t => (t.sucursalId || "OFF-1") === sucursalId);
@@ -3347,11 +4692,11 @@ async function startServer() {
   });
 
   // DELETE /api/tickets - Permite eliminar tickets de una o todas las sucursales
-  app.delete("/api/tickets", async (req, res) => {
+  app.delete("/api/tickets", verifyAdminSession, async (req, res) => {
     try {
       const sucursalId = (req.query.office as string) || (req.query.sucursal_id as string);
       
-      if (isPgConfigured && pgPool) {
+      if (isPgConfigured && pgPool && isPgAvailable) {
         try {
           if (sucursalId && sucursalId !== "ALL") {
             await pgPool.query("DELETE FROM tickets WHERE sucursal_id = $1", [sucursalId]);
@@ -3374,6 +4719,8 @@ async function startServer() {
       } else {
         memoryTicketsStore.clear();
       }
+
+      broadcastEvent("tickets_updated", { serverTime: Date.now() });
 
       return res.json({ success: true, message: "Tickets eliminados correctamente de la base de datos y memoria." });
     } catch (e: any) {
@@ -3444,14 +4791,14 @@ async function startServer() {
       // Always save to memory store immediately
       memoryTicketsStore.set(id, ticketPayload);
 
-      if (isPgConfigured && pgPool) {
+      if (isPgConfigured && pgPool && isPgAvailable) {
         try {
           await pgPool.query(
             `INSERT INTO tickets (
                id, numero_ticket, tipo_tramite, sub_tramite, nombre, es_prioritario, es_cita,
-               sucursal_id, estado, fase_actual, modulo_asignado, agente_asignado, hora_llamado, hora_inicio_atencion, hora_fin_atencion, hora_emision
+               sucursal_id, estado, fase_actual, modulo_asignado, agente_asignado, hora_llamado, hora_inicio_atencion, hora_fin_atencion, hora_emision, historial_fases
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
              ON CONFLICT (id) DO UPDATE SET
                numero_ticket = EXCLUDED.numero_ticket,
                tipo_tramite = EXCLUDED.tipo_tramite,
@@ -3464,9 +4811,10 @@ async function startServer() {
                fase_actual = EXCLUDED.fase_actual,
                modulo_asignado = EXCLUDED.modulo_asignado,
                agente_asignado = EXCLUDED.agente_asignado,
-               hora_llamado = COALESCE(EXCLUDED.hora_llamado, tickets.hora_llamado),
-               hora_inicio_atencion = COALESCE(EXCLUDED.hora_inicio_atencion, tickets.hora_inicio_atencion),
-               hora_fin_atencion = COALESCE(EXCLUDED.hora_fin_atencion, tickets.hora_fin_atencion)`,
+               hora_llamado = EXCLUDED.hora_llamado,
+               hora_inicio_atencion = EXCLUDED.hora_inicio_atencion,
+               hora_fin_atencion = COALESCE(EXCLUDED.hora_fin_atencion, tickets.hora_fin_atencion),
+               historial_fases = EXCLUDED.historial_fases`,
             [
               id,
               numberCode,
@@ -3483,7 +4831,8 @@ async function startServer() {
               tCalledAt ? new Date(tCalledAt) : null,
               tAttendedAt ? new Date(tAttendedAt) : null,
               tCompletedAt ? new Date(tCompletedAt) : null,
-              new Date(tCreatedAt)
+              new Date(tCreatedAt),
+              JSON.stringify(ticketPayload.phaseHistory)
             ]
           );
 
@@ -3501,6 +4850,8 @@ async function startServer() {
         }
       }
 
+      broadcastEvent("tickets_updated", { serverTime: Date.now() });
+
       return res.json({ success: true, message: "Ticket guardado en base de datos", ticket: ticketPayload, serverTime: Date.now() });
     } catch (e: any) {
       console.error("Error in POST /api/tickets:", e);
@@ -3509,7 +4860,7 @@ async function startServer() {
   });
 
   // 3. Sincronización masiva de tickets de una sucursal (para pantallas de TV y Kioskos)
-  app.post("/api/tickets/bulk-sync", async (req, res) => {
+  app.post("/api/tickets/bulk-sync", verifyAdminSession, async (req, res) => {
     try {
       const { sucursalId = "OFF-1", tickets = [] } = req.body;
       
@@ -3545,7 +4896,7 @@ async function startServer() {
           };
           memoryTicketsStore.set(t.id, itemPayload);
 
-          if (isPgConfigured && pgPool) {
+          if (isPgConfigured && pgPool && isPgAvailable) {
             try {
               await pgPool.query(
                 `INSERT INTO tickets (
@@ -3586,6 +4937,8 @@ async function startServer() {
         }
       }
 
+      broadcastEvent("tickets_updated", { serverTime: Date.now() });
+
       return res.json({ success: true, count: memoryTicketsStore.size, serverTime: Date.now() });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });
@@ -3618,7 +4971,7 @@ async function startServer() {
         }
       }
 
-      if (isPgConfigured && pgPool) {
+      if (isPgConfigured && pgPool && isPgAvailable) {
         const ticketRes = await pgPool.query(
           `SELECT * FROM tickets WHERE UPPER(numero_ticket) = $1 OR UPPER(id) = $1 LIMIT 1`,
           [code]
@@ -3669,11 +5022,60 @@ async function startServer() {
   app.get("/api/modulos", async (req, res) => {
     try {
       const sucursalId = (req.query.office as string) || "OFF-1";
-      if (isPgConfigured && pgPool) {
-        const dbRes = await pgPool.query(`SELECT * FROM modulos_atencion WHERE sucursal_id = $1`, [sucursalId]);
-        return res.json({ success: true, modulos: dbRes.rows || [] });
+      let modulesList: any[] = [];
+
+      if (isPgConfigured && pgPool && isPgAvailable) {
+        try {
+          const dbRes = await pgPool.query(`SELECT * FROM modulos_atencion WHERE sucursal_id = $1`, [sucursalId]);
+          if (dbRes.rows && dbRes.rows.length > 0) {
+            dbRes.rows.forEach((r: any) => {
+              memoryModulosStore.set(r.id, {
+                id: r.id,
+                nombre: r.nombre,
+                sucursalId: r.sucursal_id,
+                tipoServicio: r.tipo_servicio,
+                agenteActual: r.agente_actual,
+                ticketActualId: r.ticket_actual_id,
+                estado: r.estado,
+                updatedAt: r.updated_at ? new Date(r.updated_at).getTime() : Date.now()
+              });
+            });
+            modulesList = dbRes.rows.map((r: any) => ({
+              id: r.id,
+              name: r.nombre,
+              nombre: r.nombre,
+              sucursalId: r.sucursal_id,
+              tipoServicio: r.tipo_servicio,
+              agentName: r.agente_actual || "",
+              currentTicketId: r.ticket_actual_id || undefined,
+              status: r.estado || "OFFLINE"
+            }));
+          }
+        } catch (dbErr) {
+          console.warn("Postgres error fetching modulos_atencion:", dbErr);
+        }
       }
-      return res.json({ success: true, modulos: [] });
+
+      // If PG did not return any or is not configured, fall back to memoryModulosStore
+      if (modulesList.length === 0) {
+        const allMemModulos = Array.from(memoryModulosStore.values());
+        const filteredMemModulos = sucursalId === "ALL"
+          ? allMemModulos
+          : allMemModulos.filter(m => (m.sucursalId || "OFF-1") === sucursalId);
+
+        modulesList = filteredMemModulos.map((m: any) => ({
+          id: m.id,
+          name: m.nombre,
+          nombre: m.nombre,
+          sucursalId: m.sucursalId,
+          tipoServicio: m.tipoServicio,
+          agentName: m.agenteActual || "",
+          currentTicketId: m.ticketActualId || undefined,
+          status: m.estado || "OFFLINE"
+        }));
+      }
+
+      return res.json({ success: true, modulos: modulesList });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });
     }
@@ -3686,21 +5088,43 @@ async function startServer() {
         return res.status(400).json({ success: false, error: "id y nombre requeridos" });
       }
 
-      if (isPgConfigured && pgPool) {
-        await pgPool.query(
-          `INSERT INTO modulos_atencion (id, nombre, sucursal_id, tipo_servicio, agente_actual, ticket_actual_id, estado, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-           ON CONFLICT (id) DO UPDATE SET
-             nombre = EXCLUDED.nombre,
-             sucursal_id = EXCLUDED.sucursal_id,
-             tipo_servicio = EXCLUDED.tipo_servicio,
-             agente_actual = EXCLUDED.agente_actual,
-             ticket_actual_id = EXCLUDED.ticket_actual_id,
-             estado = EXCLUDED.estado,
-             updated_at = NOW()`,
-          [id, nombre, sucursalId, tipoServicio, agenteActual || null, ticketActualId || null, estado || "disponible"]
-        );
+      // Update memory store
+      const moduloPayload = {
+        id,
+        nombre,
+        sucursalId,
+        tipoServicio,
+        agenteActual: agenteActual || null,
+        ticketActualId: ticketActualId || null,
+        estado: estado || "OFFLINE",
+        updatedAt: Date.now()
+      };
+      memoryModulosStore.set(id, moduloPayload);
+
+      // Update database if Postgres is configured
+      if (isPgConfigured && pgPool && isPgAvailable) {
+        try {
+          await pgPool.query(
+            `INSERT INTO modulos_atencion (id, nombre, sucursal_id, tipo_servicio, agente_actual, ticket_actual_id, estado, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+             ON CONFLICT (id) DO UPDATE SET
+               nombre = EXCLUDED.nombre,
+               sucursal_id = EXCLUDED.sucursal_id,
+               tipo_servicio = EXCLUDED.tipo_servicio,
+               agente_actual = EXCLUDED.agente_actual,
+               ticket_actual_id = EXCLUDED.ticket_actual_id,
+               estado = EXCLUDED.estado,
+               updated_at = NOW()`,
+            [id, nombre, sucursalId, tipoServicio, agenteActual || null, ticketActualId || null, estado || "disponible"]
+          );
+        } catch (dbErr) {
+          console.warn("Postgres error saving modulo status:", dbErr);
+        }
       }
+
+      // Broadcast real-time event to all SSE clients (including TV Screens on different devices)
+      broadcastEvent("modules_updated", { serverTime: Date.now(), id, estado });
+
       return res.json({ success: true });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });

@@ -1,0 +1,28 @@
+{
+  "EXT-20260908-101": {
+    "hasDocuments": true,
+    "checkedDocs": [
+      "req_precio",
+      "req_cita",
+      "req_nota_migracion",
+      "req_carne_migracion",
+      "req_pasaporte_generales"
+    ],
+    "passedToSupervisor": true,
+    "assignedCubiculo": null,
+    "estadoTicket": "ninguno"
+  },
+  "EXT-8K2P9": {
+    "hasDocuments": true,
+    "checkedDocs": [
+      "req_precio",
+      "req_cita",
+      "req_nota_migracion",
+      "req_carne_migracion",
+      "req_pasaporte_generales"
+    ],
+    "passedToSupervisor": true,
+    "assignedCubiculo": null,
+    "estadoTicket": "ninguno"
+  }
+}

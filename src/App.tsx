@@ -3,55 +3,91 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { 
+  Routes, 
+  Route, 
+  Navigate, 
+  useNavigate, 
+  useLocation, 
+  useSearchParams, 
+  useParams 
+} from "react-router-dom";
 import { useTicketSystem } from "./hooks/useTicketSystem";
 import { ServiceType, SERVICES_CONFIG, OFFICES_CONFIG, UserRole, SystemUser, TicketStatus, TicketPhase, Ticket } from "./types";
-import { playCallingChime, speakCall, announceAndCall } from "./utils/audio";
+import { announceAndCall } from "./utils/audio";
 import { APP_BUILD_VERSION, STORAGE_VERSION_KEY } from "./version";
 
+// Import custom pages from src/pages
+import {
+  HomePage,
+  CitasPage,
+  KioscoPage,
+  SeguimientoPage,
+  AgentePage,
+  AdminPage,
+  SuperAdminPage,
+  TvScreenPage
+} from "./pages";
 
-// Import custom components
-import WelcomeKiosk from "./components/WelcomeKiosk";
-import MainScreen from "./components/MainScreen";
-import AgentConsole from "./components/AgentConsole";
-import ControlDashboard from "./components/ControlDashboard";
-import SuperAdminConsole from "./components/SuperAdminConsole";
-import GatewayScreen from "./components/GatewayScreen";
-import CitasApp from "./components/CitasApp";
-import TicketTracker from "./components/TicketTracker";
+import ExtranjeriaController from "./components/ExtranjeriaController";
 
 import { 
   Tv, 
   Printer, 
   UserCheck, 
   Settings, 
-  LayoutGrid, 
   Sparkles, 
   Volume2, 
-  Activity,
-  Heart,
-  Trash2,
-  UserPlus,
-  Eye,
-  EyeOff,
-  Lock,
-  Unlock,
-  Laptop,
-  Tablet,
-  Maximize2,
-  Minimize2,
-  CalendarCheck2,
-  Link as LinkIcon,
-  Copy,
-  Check,
-  ExternalLink,
-  Globe,
-  Smartphone
+  Eye, 
+  EyeOff, 
+  Lock, 
+  Unlock, 
+  Laptop, 
+  Tablet, 
+  Maximize2, 
+  Minimize2, 
+  CalendarCheck2, 
+  Link as LinkIcon, 
+  Copy, 
+  Check, 
+  ExternalLink, 
+  Globe, 
+  Smartphone,
+  Home 
 } from "lucide-react";
 
+// Helper component for backwards-compatibility redirection of tracked tickets
+function TrackerRedirect() {
+  const { ticketId } = useParams<{ ticketId?: string }>();
+  const [searchParams] = useSearchParams();
+  const query = searchParams.toString();
+  return <Navigate to={`/seguimiento/${ticketId ? encodeURIComponent(ticketId) : ""}${query ? `?${query}` : ""}`} replace />;
+}
+
 export default function App() {
-  // Track selected gateway option: default to "select" (Vista Unificada / Agéndate)
-  const [gatewaySelection, setGatewaySelection] = useState<"select" | "cedulacion" | "registro_civil">("select");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  // Determine current gateway based on path or state
+  const isRegistroCivilPath = location.pathname.startsWith("/tv/registro-civil");
+  const [gatewaySelection, setGatewaySelection] = useState<"select" | "cedulacion" | "registro_civil">(() => {
+    if (location.pathname === "/") return "select";
+    if (location.pathname.startsWith("/tv/registro-civil")) return "registro_civil";
+    return "cedulacion";
+  });
+
+  // Sync gateway selection with route
+  useEffect(() => {
+    if (location.pathname === "/") {
+      setGatewaySelection("select");
+    } else if (location.pathname.startsWith("/tv/registro-civil")) {
+      setGatewaySelection("registro_civil");
+    } else {
+      setGatewaySelection("cedulacion");
+    }
+  }, [location.pathname]);
 
   const {
     currentOfficeId,
@@ -159,11 +195,65 @@ export default function App() {
     return localStorage.getItem("current_active_user_id") || "user-caja-ancon";
   });
 
-  React.useEffect(() => {
+  useEffect(() => {
     localStorage.setItem("system_users", JSON.stringify(users));
   }, [users]);
 
-  React.useEffect(() => {
+  // Sincronizar directorio de usuarios desde el backend / PostgreSQL al iniciar
+  useEffect(() => {
+    const fetchDBUsers = async () => {
+      try {
+        const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+        const res = await fetch('/api/users', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && Array.isArray(data.users)) {
+            const mappedUsers: SystemUser[] = data.users.map((u: any) => {
+              let r = UserRole.AGENT_CAJA;
+              const roleStr = String(u.role || '').toUpperCase();
+              if (roleStr === 'SUPERADMIN' || roleStr === 'SUPER') r = UserRole.SUPERADMIN;
+              else if (roleStr.includes('SUPERVISOR')) r = UserRole.SUPERVISOR;
+              else if (roleStr.includes('TRIADA')) r = UserRole.AGENT_TRIADA;
+              else if (roleStr.includes('CAJA')) r = UserRole.AGENT_CAJA;
+              else if (roleStr.includes('REGISTRO')) r = UserRole.AGENT_REGISTRO_CIVIL;
+              else if (roleStr.includes('EXTRANJERIA')) r = UserRole.GESTOR_EXTRANJERIA;
+              else if (roleStr.includes('CITAS')) r = UserRole.GESTOR_CITAS;
+
+              return {
+                id: `usr_${u.username}`,
+                username: u.username,
+                fullName: u.nombre || u.username,
+                role: r,
+                officeId: u.sucursalId || u.sucursal_id || 'OFF-1',
+                password: u.password,
+                mustChangePassword: !!u.mustChangePassword
+              };
+            });
+
+            if (mappedUsers.length > 0) {
+              setUsers(prev => {
+                const map = new Map<string, SystemUser>();
+                mappedUsers.forEach(mu => map.set(mu.username.toLowerCase(), mu));
+                prev.forEach(pu => {
+                  if (!map.has(pu.username.toLowerCase())) {
+                    map.set(pu.username.toLowerCase(), pu);
+                  }
+                });
+                return Array.from(map.values());
+              });
+            }
+          }
+        }
+      } catch (err) {
+        // Silencioso si no hay conexión
+      }
+    };
+    fetchDBUsers();
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem("current_active_user_id", currentActiveUserId);
     const targetUser = users.find(u => u.id === currentActiveUserId);
     if (targetUser && targetUser.officeId) {
@@ -171,126 +261,147 @@ export default function App() {
     }
   }, [currentActiveUserId, users, setCurrentOfficeId]);
 
-  // Selected viewport tab: "kiosk" | "tv" | "agent" | "admin" | "super-admin" | "tracker"
-  const [activeTab, setActiveTab ] = useState<string>("kiosk");
-  const [trackingTicketCode, setTrackingTicketCode] = useState<string>("");
+  // Synchronize ?office=OFF-X parameter with currentOfficeId
+  useEffect(() => {
+    const officeParam = searchParams.get("office") || searchParams.get("sede") || searchParams.get("oficina");
+    if (officeParam) {
+      const foundOffice = OFFICES_CONFIG.find(
+        o => o.id.toLowerCase() === officeParam.toLowerCase() || o.name.toLowerCase().includes(officeParam.toLowerCase())
+      );
+      if (foundOffice && foundOffice.id !== currentOfficeId) {
+        setCurrentOfficeId(foundOffice.id);
+      }
+    }
+  }, [searchParams, currentOfficeId, setCurrentOfficeId]);
 
-  // Direct Links Modal state
-  const [isDirectLinksModalOpen, setIsDirectLinksModalOpen] = useState<boolean>(false);
-  const [copiedDirectKey, setCopiedDirectKey] = useState<string | null>(null);
-
-  // Listen to URL search parameters for direct linking (?view=citas, ?view=ticket, ?view=unificado, etc.)
-  // and handle automatic cache flush + redirect to unified gateway on new builds/updates safely without reload loops
-  React.useEffect(() => {
+  // Backward compatibility: handle legacy query params when loading root "/"
+  useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // 1. Verificación de Versión de Compilación y Limpieza de Caché Automática (Segura, sin bucles de recarga)
+    // 1. Verificación de Versión de Compilación y Limpieza de Caché Automática
     try {
       const installedVersion = localStorage.getItem(STORAGE_VERSION_KEY);
       if (installedVersion !== APP_BUILD_VERSION) {
         console.log(`[Version Sync] Nueva versión instalada (${installedVersion} -> ${APP_BUILD_VERSION}). Limpiando cachés...`);
-        
-        // Limpiar cachés del navegador (CacheStorage API)
         if ("caches" in window) {
           caches.keys().then((names) => {
             names.forEach((name) => caches.delete(name));
           }).catch(() => {});
         }
-
-        // Limpiar sessionStorage
         sessionStorage.clear();
-
-        // Actualizar la versión guardada en el cliente
         localStorage.setItem(STORAGE_VERSION_KEY, APP_BUILD_VERSION);
-
-        // Forzar vista al Portal de Inicio Unificado
-        setGatewaySelection("select");
-        setActiveTab("kiosk");
       }
     } catch (e) {
       console.warn("Error en sincronización de versión:", e);
     }
 
-    const params = new URLSearchParams(window.location.search);
-    const viewParam = params.get("view") || params.get("tab") || params.get("modo") || params.get("screen");
-    const ticketParam = params.get("ticket");
-    if (ticketParam) {
-      setTrackingTicketCode(ticketParam.trim().toUpperCase());
-      setGatewaySelection("cedulacion");
-      setActiveTab("tracker");
-      return;
-    }
-    if (viewParam) {
-      const v = viewParam.toLowerCase();
-      if (v === "citas" || v === "cita" || v === "agendamiento") {
-        setGatewaySelection("cedulacion");
-        setActiveTab("citas");
-      } else if (v === "kiosk" || v === "ticket" || v === "tickets" || v === "turnos" || v === "kiosco") {
-        setGatewaySelection("cedulacion");
-        setActiveTab("kiosk");
-      } else if (v === "seguimiento" || v === "tracker" || v === "tracking" || v === "consultar" || v === "movil") {
-        setGatewaySelection("cedulacion");
-        setActiveTab("tracker");
-      } else if (v === "unificado" || v === "gateway" || v === "select" || v === "inicio" || v === "portal") {
-        setGatewaySelection("select");
-      } else if (v === "tv" || v === "monitor" || v === "sala" || v === "tv-caja" || v === "tv-triada" || v === "caja-tv" || v === "triada-tv") {
-        setGatewaySelection("cedulacion");
-        setActiveTab("tv");
-      } else if (v === "agent" || v === "agente" || v === "ventanilla") {
-        setGatewaySelection("cedulacion");
-        setActiveTab("agent");
-      } else if (v === "admin") {
-        setGatewaySelection("cedulacion");
-        setActiveTab("admin");
-      } else if (v === "super-admin" || v === "superadmin") {
-        setGatewaySelection("cedulacion");
-        setActiveTab("super-admin");
+    if (location.pathname === "/") {
+      const params = new URLSearchParams(location.search);
+      const viewParam = params.get("view") || params.get("tab") || params.get("screen");
+      const channelParam = (params.get("channel") || params.get("fase") || params.get("pantalla") || "").toLowerCase();
+      const gatewayParam = (params.get("gateway") || "").toLowerCase();
+      const ticketParam = params.get("ticket");
+      const officeParam = params.get("office");
+      const officeQuery = officeParam ? `?office=${encodeURIComponent(officeParam)}` : "";
+
+      if (ticketParam) {
+        navigate(`/seguimiento/${encodeURIComponent(ticketParam.trim().toUpperCase())}${officeQuery}`, { replace: true });
+        return;
+      }
+
+      if (viewParam) {
+        const v = viewParam.toLowerCase();
+        if (v === "citas" || v === "cita" || v === "agendamiento") {
+          navigate(`/citas${officeQuery}`, { replace: true });
+        } else if (v === "kiosk" || v === "ticket" || v === "tickets" || v === "turnos" || v === "kiosco") {
+          navigate(`/kiosco${officeQuery}`, { replace: true });
+        } else if (v === "seguimiento" || v === "tracker" || v === "tracking" || v === "consultar" || v === "movil") {
+          navigate(`/seguimiento${officeQuery}`, { replace: true });
+        } else if (v === "tv-caja" || v === "caja-tv" || (v === "tv" && (channelParam === "caja" || channelParam === "1"))) {
+          navigate(`/tv/caja${officeQuery}`, { replace: true });
+        } else if (v === "tv-triada" || v === "triada-tv" || (v === "tv" && (channelParam === "triada" || channelParam === "foto" || channelParam === "2"))) {
+          navigate(`/tv/triada${officeQuery}`, { replace: true });
+        } else if (v === "tv-extranjeria" || v === "extranjeria-tv" || (v === "tv" && (channelParam === "extranjeria" || channelParam === "extranjería" || channelParam === "e"))) {
+          navigate(`/tv/extranjeria${officeQuery}`, { replace: true });
+        } else if (v === "tv-rc" || (v === "tv" && (gatewayParam.includes("registro") || gatewayParam === "rc"))) {
+          if (channelParam === "or") navigate(`/tv/registro-civil/or${officeQuery}`, { replace: true });
+          else if (channelParam === "ohv") navigate(`/tv/registro-civil/ohv${officeQuery}`, { replace: true });
+          else navigate(`/tv/registro-civil${officeQuery}`, { replace: true });
+        } else if (v === "tv" || v === "monitor" || v === "sala") {
+          if (channelParam === "or") navigate(`/tv/registro-civil/or${officeQuery}`, { replace: true });
+          else if (channelParam === "ohv") navigate(`/tv/registro-civil/ohv${officeQuery}`, { replace: true });
+          else if (channelParam === "caja") navigate(`/tv/caja${officeQuery}`, { replace: true });
+          else if (channelParam === "triada") navigate(`/tv/triada${officeQuery}`, { replace: true });
+          else if (channelParam === "extranjeria" || channelParam === "extranjería") navigate(`/tv/extranjeria${officeQuery}`, { replace: true });
+          else navigate(`/tv/general${officeQuery}`, { replace: true });
+        } else if (v === "agent" || v === "agente" || v === "ventanilla") {
+          navigate(`/agente${officeQuery}`, { replace: true });
+        } else if (v === "admin") {
+          navigate(`/admin${officeQuery}`, { replace: true });
+        } else if (v === "super-admin" || v === "superadmin") {
+          navigate(`/super-admin${officeQuery}`, { replace: true });
+        }
       }
     }
-  }, []);
+  }, [location.pathname, location.search, navigate]);
 
-  // Update browser URL search query parameters and document title dynamically
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    document.title = "Agéndate - Tribunal Electoral";
-    try {
-      const url = new URL(window.location.href);
-      let viewVal = "unificado";
-      if (gatewaySelection === "select") {
-        viewVal = "unificado";
-      } else {
-        viewVal = activeTab === "kiosk" ? "ticket" : activeTab;
-      }
-      url.searchParams.set("view", viewVal);
-      window.history.replaceState({}, "", url.toString());
-    } catch (e) {
-      // ignore
-    }
-  }, [gatewaySelection, activeTab]);
+  // Direct Links Modal state
+  const [isDirectLinksModalOpen, setIsDirectLinksModalOpen] = useState<boolean>(false);
+  const [copiedDirectKey, setCopiedDirectKey] = useState<string | null>(null);
 
-  const handleCopyDirectLink = (key: string, e?: React.MouseEvent) => {
+  const handleCopyDirectLink = (path: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (typeof window === "undefined") return;
-    const origin = window.location.origin + window.location.pathname;
-    const fullUrl = `${origin}?view=${key}`;
+    const origin = window.location.origin;
+    const officeQuery = (currentOfficeId && currentOfficeId !== "OFF-1") ? `?office=${encodeURIComponent(currentOfficeId)}` : "";
+    const fullUrl = `${origin}${path}${officeQuery}`;
     navigator.clipboard.writeText(fullUrl);
-    setCopiedDirectKey(key);
+    setCopiedDirectKey(path);
     setTimeout(() => {
       setCopiedDirectKey(null);
     }, 2000);
   };
 
-  // Track the tab requested during login redirection
-  const [pendingAuthTab, setPendingAuthTab] = useState<string>("admin");
+  const navigatePreservingOffice = (path: string) => {
+    const officeQuery = (currentOfficeId && currentOfficeId !== "OFF-1") ? `?office=${encodeURIComponent(currentOfficeId)}` : "";
+    navigate(`${path}${officeQuery}`);
+  };
 
+  // Administration Authentication states (password: Admin12345)
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(false);
+  const [isAdminLoginModalOpen, setIsAdminLoginModalOpen] = useState<boolean>(false);
+  const [adminPasswordInput, setAdminPasswordInput] = useState<string>("" );
+  const [adminPasswordError, setAdminPasswordError] = useState<boolean>(false);
+  const [pendingAuthPath, setPendingAuthPath] = useState<string>("/admin");
 
-  // Viewport adaptive display mode: "desktop" (laptops) | "tablet" (tablets)
+  const handleVerifyAdminPassword = () => {
+    if (adminPasswordInput === "Admin12345") {
+      setIsAdminAuthenticated(true);
+      setIsAdminLoginModalOpen(false);
+      setAdminPasswordInput("");
+      setAdminPasswordError(false);
+      navigatePreservingOffice(pendingAuthPath);
+    } else {
+      setAdminPasswordError(true);
+    }
+  };
+
+  const handleTriggerAdminLogin = (targetPath: string) => {
+    if (isAdminAuthenticated) {
+      navigatePreservingOffice(targetPath);
+    } else {
+      setPendingAuthPath(targetPath);
+      setAdminPasswordInput("");
+      setAdminPasswordError(false);
+      setIsAdminLoginModalOpen(true);
+    }
+  };
+
+  // Viewport adaptive display mode: "desktop" | "tablet"
   const [viewType, setViewType] = useState<"desktop" | "tablet">("desktop");
-
-  // Track browser native fullscreen state
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
-  React.useEffect(() => {
+  useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
     };
@@ -306,9 +417,6 @@ export default function App() {
         await document.documentElement.requestFullscreen();
       } catch (err) {
         console.warn("Fullscreen request failed", err);
-        alert(
-          "El navegador ha bloqueado la pantalla completa automática debido a las políticas de seguridad o a que usted se encuentra visualizando el sistema dentro del visor de AI Studio (iframe).\n\n💡 CÓMO SOLUCIONARLO PARA OCULTAR LA BARRA DE DIRECCIÓN:\n1. Presione el botón 'Abrir en Pestaña Nueva' (enlace destacado en color naranja dentro de la sección de impresión del kiosko)\n2. Una vez que el sistema se abra en su propia pestaña, haga clic en el botón de 'Pantalla Completa' y se activará al instante sin restricciones de iframe."
-        );
       }
     } else {
       try {
@@ -319,13 +427,20 @@ export default function App() {
     }
   };
 
-  // Keep navigation menu hidden for dedicated device screen focus (Kiosk / TV screen lock)
-  const [isHeaderHidden, setIsHeaderHidden] = useState<boolean>(false);
-
-  // Floating PIN modal to show menu
+  // Navigation menu hidden mode for dedicated device screen focus (Kiosk / TV screen lock / Dedicated Agent Mode)
+  const [isHeaderHidden, setIsHeaderHidden] = useState<boolean>(() => {
+    return typeof window !== "undefined" && (window.location.pathname.startsWith("/agente") || window.location.pathname.startsWith("/tv/extranjeria"));
+  });
   const [isPinModalOpen, setIsPinModalOpen] = useState<boolean>(false);
   const [pinInput, setPinInput] = useState<string>("");
   const [pinError, setPinError] = useState<boolean>(false);
+
+  // Automatically activate dedicated mode when entering /agente or /tv/extranjeria route
+  useEffect(() => {
+    if (location.pathname.startsWith("/agente") || location.pathname.startsWith("/tv/extranjeria")) {
+      setIsHeaderHidden(true);
+    }
+  }, [location.pathname]);
 
   const handleVerifyPin = () => {
     if (pinInput === "12345678") {
@@ -338,32 +453,7 @@ export default function App() {
     }
   };
 
-  // Administration Authentication states (password: Admin12345)
-  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(false);
-  const [isAdminLoginModalOpen, setIsAdminLoginModalOpen] = useState<boolean>(false);
-  const [adminPasswordInput, setAdminPasswordInput] = useState<string>("");
-  const [adminPasswordError, setAdminPasswordError] = useState<boolean>(false);
-
-  const handleVerifyAdminPassword = () => {
-    if (adminPasswordInput === "Admin12345") {
-      setIsAdminAuthenticated(true);
-      setIsAdminLoginModalOpen(false);
-      setAdminPasswordInput("");
-      setAdminPasswordError(false);
-      setActiveTab(pendingAuthTab);
-    } else {
-      setAdminPasswordError(true);
-    }
-  };
-
-  const handleTriggerAdminLogin = (callbackTab: string) => {
-    setPendingAuthTab(callbackTab);
-    setAdminPasswordInput("");
-    setAdminPasswordError(false);
-    setIsAdminLoginModalOpen(true);
-  };
-
-  // Speaker Test trigger - Uses the first waiting ticket in queue or a sample citizen
+  // Speaker Test trigger
   const handleTestSpeaker = async () => {
     try {
       const firstWaiting = tickets.find(t => t.status === TicketStatus.WAITING);
@@ -396,87 +486,53 @@ export default function App() {
 
     const randomName = randomNames[Math.floor(Math.random() * randomNames.length)];
     const randomService = randomServices[Math.floor(Math.random() * randomServices.length)];
-    const randomPriority = Math.random() < 0.25; // 25% priority
+    const randomPriority = Math.random() < 0.25;
 
     createTicket(randomName, randomService, randomPriority);
   };
 
-  if (activeTab === "tracker") {
+  const handleOfficeChange = (newOfficeId: string) => {
+    setCurrentOfficeId(newOfficeId);
+    const search = new URLSearchParams(location.search);
+    if (newOfficeId && newOfficeId !== "OFF-1") {
+      search.set("office", newOfficeId);
+    } else {
+      search.delete("office");
+    }
+    const query = search.toString();
+    navigate(`${location.pathname}${query ? `?${query}` : ""}`, { replace: true });
+  };
+
+  // Helper to determine active tab based on path
+  const currentPath = location.pathname;
+  const isCitasRoute = currentPath.startsWith("/citas");
+  const isKioscoRoute = currentPath === "/kiosco" || currentPath === "/kiosco/";
+  const isTrackerRoute = currentPath.startsWith("/seguimiento");
+  const isTvRoute = currentPath.startsWith("/tv");
+  const isAgentRoute = currentPath === "/agente" || currentPath === "/agente/";
+  const isAdminRoute = currentPath === "/admin" || currentPath === "/admin/";
+  const isSuperAdminRoute = currentPath === "/super-admin" || currentPath === "/super-admin/";
+  const isGatewayRoot = currentPath === "/" || currentPath === "";
+
+  // Dedicated full screen for Portal Unificado (Gateway)
+  if (isGatewayRoot) {
     return (
-      <div id="tracker-isolated-root" className="min-h-screen bg-slate-100 font-sans text-slate-900 flex flex-col justify-between relative selection:bg-[#003087] selection:text-white">
-        {/* Panama Ribbon */}
-        <div className="w-full h-1.5 flex shrink-0">
-          <div className="flex-1 bg-[#da121a]" />
-          <div className="flex-1 bg-white" />
-          <div className="flex-1 bg-[#003087]" />
-        </div>
-
-        {/* Dedicated Citizen Header (Isolated - No navigation to other screens) */}
-        <header className="bg-white border-b border-slate-200/80 shadow-xs px-4 py-3.5 sm:px-6 sticky top-0 z-30">
-          <div className="max-w-4xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <img
-                src="/images/logo-te-aniversario-1.png"
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).src = "https://www.tribunal-electoral.gob.pa/wp-content/uploads/2026/06/Logo-TE-aniversario-256x256px-blanco-02.png";
-                }}
-                alt="Tribunal Electoral de Panamá"
-                className="h-10 sm:h-12 w-auto object-contain"
-              />
-              <div>
-                <h1 className="text-xs sm:text-sm font-black text-[#003087] tracking-tight uppercase">
-                  Tribunal Electoral de Panamá
-                </h1>
-                <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                  Dirección Nacional de Cedulación • Consulta de Turno Móvil
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-black uppercase tracking-wider rounded-full shadow-2xs">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>En Vivo</span>
-              </span>
-            </div>
-          </div>
-        </header>
-
-        {/* Isolated Tracker Content */}
-        <main className="max-w-4xl mx-auto w-full px-3 sm:px-6 py-6 flex-grow">
-          <TicketTracker
-            tickets={tickets}
-            cubicles={cubicles}
-            initialTicketCode={trackingTicketCode}
-            currentOfficeId={currentOfficeId}
-            officeTickets={officeTickets}
-            officeCubicles={officeCubicles}
-            onSelectOffice={setCurrentOfficeId}
-          />
-        </main>
-
-        {/* Dedicated Citizen Footer */}
-        <footer className="bg-white border-t border-slate-200/80 py-4 px-4 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">
-          República de Panamá • Tribunal Electoral • "La Patria la hacemos contigo"
-        </footer>
-      </div>
-    );
-  }
-
-  if (gatewaySelection === "select") {
-    return (
-      <GatewayScreen 
+      <HomePage 
         onSelectOption={(option) => {
           setGatewaySelection(option);
-          setActiveTab("kiosk");
+          navigatePreservingOffice("/kiosco");
         }} 
         onSelectCitas={() => {
           setGatewaySelection("cedulacion");
-          setActiveTab("citas");
+          navigatePreservingOffice("/citas");
         }} 
         onSelectView={(viewKey) => {
           setGatewaySelection("cedulacion");
-          setActiveTab(viewKey);
+          if (viewKey === "tracker" || viewKey === "seguimiento") {
+            navigatePreservingOffice("/seguimiento");
+          } else {
+            navigatePreservingOffice(`/${viewKey}`);
+          }
         }}
       />
     );
@@ -685,10 +741,10 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider font-sans">
-                    Enlaces Directos del Sistema
+                    Enlaces Directos del Sistema (Rutas Limpias)
                   </h3>
                   <p className="text-[10px] text-slate-500 font-medium">
-                    Copie los enlaces o navegue directamente a cualquier módulo sin pasos intermedios.
+                    Copie los enlaces o navegue directamente a cualquier módulo sin parámetros confusos.
                   </p>
                 </div>
               </div>
@@ -700,120 +756,304 @@ export default function App() {
               </button>
             </div>
 
-            <div className="space-y-2.5 max-h-[60vh] overflow-y-auto pr-1">
-              {[
-                {
-                  key: "citas",
-                  name: "📅 Agendamiento de Citas (CitasTE)",
-                  desc: "Acceso directo al portal web de reservas de citas",
-                  action: () => {
-                    setGatewaySelection("cedulacion");
-                    setActiveTab("citas");
-                    setIsDirectLinksModalOpen(false);
-                  }
-                },
-                {
-                  key: "ticket",
-                  name: "🎟️ Kiosco de Tickets Presenciales",
-                  desc: "Emisión directa de turnos de cédula para clientes",
-                  action: () => {
-                    setGatewaySelection("cedulacion");
-                    setActiveTab("kiosk");
-                    setIsDirectLinksModalOpen(false);
-                  }
-                },
-                {
-                  key: "unificado",
-                  name: "🌐 Sistema Unificado (Portal Inicial)",
-                  desc: "Pantalla principal de bienvenida y selección",
-                  action: () => {
-                    setGatewaySelection("select");
-                    setIsDirectLinksModalOpen(false);
-                  }
-                },
-                {
-                  key: "tv",
-                  name: "📺 Monitor TV de Sala",
-                  desc: "Pantalla completa para llamado de turnos a clientes",
-                  action: () => {
-                    setGatewaySelection("cedulacion");
-                    setActiveTab("tv");
-                    setIsDirectLinksModalOpen(false);
-                  }
-                },
-                {
-                  key: "agent",
-                  name: "👨‍💻 Consola del Agente",
-                  desc: "Panel de atención de ventanillas y llamadas",
-                  action: () => {
-                    setGatewaySelection("cedulacion");
-                    setActiveTab("agent");
-                    setIsDirectLinksModalOpen(false);
-                  }
-                },
-                {
-                  key: "seguimiento",
-                  name: "📱 Seguimiento Móvil de Turno",
-                  desc: "Consulta tu turno en vivo con vibración y sonido en celular",
-                  action: () => {
-                    setGatewaySelection("cedulacion");
-                    setActiveTab("tracker");
-                    setIsDirectLinksModalOpen(false);
-                  }
-                }
-              ].map((item) => {
-                const origin = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
-                const fullUrl = `${origin}?view=${item.key}`;
-                const isCopied = copiedDirectKey === item.key;
+            <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
+              {/* SECCIÓN 1: PANTALLAS DE TELEVISIÓN / SMART TV */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 px-1 pt-1 pb-0.5">
+                  <span className="text-[11px] font-black text-[#003087] uppercase tracking-wider flex items-center gap-1.5">
+                    <Tv className="w-3.5 h-3.5 text-[#0081f9]" />
+                    <span>1. URLs Directos para Pantallas de TV / Monitores de Sala</span>
+                  </span>
+                </div>
 
-                return (
-                  <div 
-                    key={item.key}
-                    className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-blue-300 transition-all"
-                  >
-                    <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-black text-slate-900">{item.name}</span>
-                        <span className="text-[8.5px] font-mono text-slate-500 font-bold bg-white px-2 py-0.5 rounded border border-slate-200">
-                          ?view={item.key}
-                        </span>
+                {[
+                  {
+                    path: "/tv/general",
+                    name: "📺 TV Multicanal General (Cedulación)",
+                    desc: "Muestra y anuncia todos los turnos del flujo general sin restricción de fase",
+                    badge: "MULTICANAL",
+                    badgeColor: "bg-purple-100 text-purple-900 border-purple-300"
+                  },
+                  {
+                    path: "/tv/caja",
+                    name: "📺 TV Sala 1: Solo Cajas (Cobro y Pagos)",
+                    desc: "Filtra y llama por voz únicamente a las ventanillas de Caja (ideal para el TV de cajas)",
+                    badge: "TV CAJA",
+                    badgeColor: "bg-emerald-100 text-emerald-900 border-emerald-300"
+                  },
+                  {
+                    path: "/tv/triada",
+                    name: "📺 TV Sala 2: Solo Tríada y Fotografía",
+                    desc: "Filtra y llama por voz únicamente a los módulos de Tríada / Biometría (ideal para la sala de espera)",
+                    badge: "TV TRÍADA",
+                    badgeColor: "bg-blue-100 text-blue-900 border-blue-300"
+                  },
+                  {
+                    path: "/tv/extranjeria",
+                    name: "📺 TV Sala 3: Pantalla de Extranjería",
+                    desc: "Muestra y anuncia por voz exclusivamente los turnos del flujo de Extranjería",
+                    badge: "TV EXTRANJERÍA",
+                    badgeColor: "bg-rose-100 text-rose-900 border-rose-300"
+                  }
+                ].map((item) => {
+                  const isCopied = copiedDirectKey === item.path;
+
+                  return (
+                    <div 
+                      key={item.path}
+                      className="p-3 bg-slate-50 hover:bg-blue-50/40 border border-slate-200 hover:border-[#0081f9]/40 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-all"
+                    >
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs font-black text-slate-900">{item.name}</span>
+                          <span className={`text-[8.5px] font-black uppercase px-2 py-0.5 rounded-full border ${item.badgeColor}`}>
+                            {item.badge}
+                          </span>
+                        </div>
+                        <p className="text-[9.5px] text-slate-500 font-medium leading-tight">{item.desc}</p>
+                        <p className="text-[9px] font-mono font-bold text-slate-600 truncate">{item.path}</p>
                       </div>
-                      <p className="text-[10px] text-slate-500 font-medium">{item.desc}</p>
-                    </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        onClick={item.action}
-                        className="py-1.5 px-3 bg-[#122e70] hover:bg-blue-800 text-white text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs"
-                      >
-                        <ExternalLink className="w-3 h-3 text-amber-400" />
-                        <span>Ir Ahora</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                        <button
+                          onClick={() => {
+                            setIsDirectLinksModalOpen(false);
+                            navigatePreservingOffice(item.path);
+                          }}
+                          className="py-1 px-2.5 bg-[#122e70] hover:bg-blue-800 text-white text-[9.5px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                          title="Abrir en esta misma pantalla"
+                        >
+                          <ExternalLink className="w-3 h-3 text-amber-400" />
+                          <span>Abrir</span>
+                        </button>
 
-                      <button
-                        onClick={(e) => handleCopyDirectLink(item.key, e)}
-                        className={`py-1.5 px-3 text-[10px] font-black uppercase tracking-wider rounded-xl border transition-all cursor-pointer flex items-center gap-1 ${
-                          isCopied 
-                            ? "bg-emerald-600 text-white border-emerald-600" 
-                            : "bg-white hover:bg-slate-100 text-slate-700 border-slate-300"
-                        }`}
-                      >
-                        {isCopied ? (
-                          <>
-                            <Check className="w-3 h-3 text-white" />
-                            <span>¡Copiado!</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3 text-slate-500" />
-                            <span>Copiar URL</span>
-                          </>
-                        )}
-                      </button>
+                        <button
+                          onClick={(e) => handleCopyDirectLink(item.path, e)}
+                          className={`py-1 px-2.5 text-[9.5px] font-black uppercase tracking-wider rounded-xl border transition-all cursor-pointer flex items-center gap-1 ${
+                            isCopied 
+                              ? "bg-emerald-600 text-white border-emerald-600" 
+                              : "bg-white hover:bg-slate-100 text-slate-700 border-slate-300"
+                          }`}
+                          title="Copiar URL completa al portapapeles"
+                        >
+                          {isCopied ? (
+                            <>
+                              <Check className="w-3 h-3 text-white" />
+                              <span>¡Copiado!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-slate-500" />
+                              <span>Copiar URL</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+
+              {/* SECCIÓN 2: ATENCIÓN CIUDADANA Y KIOSCOS */}
+              <div className="space-y-2 pt-2 border-t border-slate-200">
+                <div className="flex items-center gap-2 px-1 pt-1 pb-0.5">
+                  <span className="text-[11px] font-black text-[#003087] uppercase tracking-wider flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5 text-[#0081f9]" />
+                    <span>2. Módulos Ciudadanos y Kioscos</span>
+                  </span>
+                </div>
+
+                {[
+                  {
+                    path: "/",
+                    name: "🌐 Portal Unificado Inicial",
+                    desc: "Página principal con selección entre Cédula, CitasTE y Registro Civil"
+                  },
+                  {
+                    path: "/citas",
+                    name: "📅 Agendamiento de Citas Web (CitasTE)",
+                    desc: "Portal público para reserva y confirmación de citas en línea"
+                  },
+                  {
+                    path: "/citas/extranjeria/ext_primera_vez",
+                    name: "📝 Formulario de Extranjería: Primera Vez",
+                    desc: "Enlace directo para solicitar carné de residente permanente por primera vez"
+                  },
+                  {
+                    path: "/citas/extranjeria/ced_extranjero_renovacion",
+                    name: "📝 Formulario de Extranjería: Renovación",
+                    desc: "Enlace directo para renovar carné de residente permanente de extranjero"
+                  },
+                  {
+                    path: "/citas/extranjeria/ced_extranjero_duplicado_perdida",
+                    name: "📝 Formulario de Extranjería: Duplicado",
+                    desc: "Enlace directo para solicitar duplicado de carné de residente permanente"
+                  },
+                  {
+                    path: "/citas/cedulacion/ced_pasados_edad",
+                    name: "📝 Formulario de Pasados de Edad (20 años+)",
+                    desc: "Enlace directo para Cédula por primera vez con edad de 20 años y 1 día en adelante"
+                  },
+                  {
+                    path: "/kiosco",
+                    name: "🎟️ Kiosco Presencial de Turnos",
+                    desc: "Pantalla táctil de autoservicio para emisión de tiquetes en sede"
+                  },
+                  {
+                    path: "/seguimiento",
+                    name: "📱 Seguimiento Móvil de Turnos",
+                    desc: "Consulta en vivo para celulares con campanilla y alerta vibratoria"
+                  },
+                  {
+                    path: "/seguimiento/C-01",
+                    name: "📱 Seguimiento de Ticket Específico (Ej: C-01)",
+                    desc: "Acceso directo parametrizado a un ticket específico"
+                  }
+                ].map((item) => {
+                  const isCopied = copiedDirectKey === item.path;
+
+                  return (
+                    <div 
+                      key={item.path}
+                      className="p-3 bg-slate-50 hover:bg-blue-50/40 border border-slate-200 hover:border-[#0081f9]/40 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-all"
+                    >
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-slate-900">{item.name}</span>
+                          <span className="text-[8.5px] font-mono text-slate-500 font-bold bg-white px-2 py-0.5 rounded border border-slate-200">
+                            {item.path}
+                          </span>
+                        </div>
+                        <p className="text-[9.5px] text-slate-500 font-medium leading-tight">{item.desc}</p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                        <button
+                          onClick={() => {
+                            setIsDirectLinksModalOpen(false);
+                            navigatePreservingOffice(item.path);
+                          }}
+                          className="py-1 px-2.5 bg-[#122e70] hover:bg-blue-800 text-white text-[9.5px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                        >
+                          <ExternalLink className="w-3 h-3 text-amber-400" />
+                          <span>Abrir</span>
+                        </button>
+
+                        <button
+                          onClick={(e) => handleCopyDirectLink(item.path, e)}
+                          className={`py-1 px-2.5 text-[9.5px] font-black uppercase tracking-wider rounded-xl border transition-all cursor-pointer flex items-center gap-1 ${
+                            isCopied 
+                              ? "bg-emerald-600 text-white border-emerald-600" 
+                              : "bg-white hover:bg-slate-100 text-slate-700 border-slate-300"
+                          }`}
+                        >
+                          {isCopied ? (
+                            <>
+                              <Check className="w-3 h-3 text-white" />
+                              <span>¡Copiado!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-slate-500" />
+                              <span>Copiar URL</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* SECCIÓN 3: CONSOLA Y ADMINISTRACIÓN */}
+              <div className="space-y-2 pt-2 border-t border-slate-200">
+                <div className="flex items-center gap-2 px-1 pt-1 pb-0.5">
+                  <span className="text-[11px] font-black text-[#003087] uppercase tracking-wider flex items-center gap-1.5">
+                    <UserCheck className="w-3.5 h-3.5 text-[#0081f9]" />
+                    <span>3. Operación y Gestión Interna</span>
+                  </span>
+                </div>
+
+                {[
+                  {
+                    path: "/agente",
+                    name: "👨‍💻 Portal del Agente (Turnos y Citas)",
+                    desc: "Consola unificada para atención en ventanillas (Caja / Tríada) y administración de citas"
+                  },
+                  {
+                    path: "/agente?tab=citas",
+                    name: "📅 Panel de Administración de Citas",
+                    desc: "Control de agendas, Extranjería, Cédula Tardía, validaciones y reportes"
+                  },
+                  {
+                    path: "/admin",
+                    name: "📊 Panel de Control y Métricas",
+                    desc: "Dashboard supervisor en tiempo real para tiempos de espera y rendimiento"
+                  },
+                  {
+                    path: "/super-admin",
+                    name: "🛡️ Super Administrador",
+                    desc: "Gestión global de usuarios, roles, sedes y configuración del sistema"
+                  }
+                ].map((item) => {
+                  const isCopied = copiedDirectKey === item.path;
+
+                  return (
+                    <div 
+                      key={item.path}
+                      className="p-3 bg-slate-50 hover:bg-blue-50/40 border border-slate-200 hover:border-[#0081f9]/40 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-all"
+                    >
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-slate-900">{item.name}</span>
+                          <span className="text-[8.5px] font-mono text-slate-500 font-bold bg-white px-2 py-0.5 rounded border border-slate-200">
+                            {item.path}
+                          </span>
+                        </div>
+                        <p className="text-[9.5px] text-slate-500 font-medium leading-tight">{item.desc}</p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                        <button
+                          onClick={() => {
+                            setIsDirectLinksModalOpen(false);
+                            if (item.path === "/admin" || item.path === "/super-admin") {
+                              handleTriggerAdminLogin(item.path);
+                            } else {
+                              navigatePreservingOffice(item.path);
+                            }
+                          }}
+                          className="py-1 px-2.5 bg-[#122e70] hover:bg-blue-800 text-white text-[9.5px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                        >
+                          <ExternalLink className="w-3 h-3 text-amber-400" />
+                          <span>Abrir</span>
+                        </button>
+
+                        <button
+                          onClick={(e) => handleCopyDirectLink(item.path, e)}
+                          className={`py-1 px-2.5 text-[9.5px] font-black uppercase tracking-wider rounded-xl border transition-all cursor-pointer flex items-center gap-1 ${
+                            isCopied 
+                              ? "bg-emerald-600 text-white border-emerald-600" 
+                              : "bg-white hover:bg-slate-100 text-slate-700 border-slate-300"
+                          }`}
+                        >
+                          {isCopied ? (
+                            <>
+                              <Check className="w-3 h-3 text-white" />
+                              <span>¡Copiado!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-slate-500" />
+                              <span>Copiar URL</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="pt-2 text-center">
@@ -829,7 +1069,7 @@ export default function App() {
       )}
 
       {/* UPPER NATIONAL FLAG BAR */}
-      {!isHeaderHidden && activeTab !== "citas" && (
+      {!isHeaderHidden && !isCitasRoute && (
         <div className="w-full h-1 flex select-none shrink-0 relative z-35 shadow-sm">
           <div className="bg-[#da121a] flex-1"></div>
           <div className="bg-[#003087] flex-1"></div>
@@ -837,7 +1077,7 @@ export default function App() {
       )}
 
       {/* MASTER SIMULATOR & COMPATIBILITY BAR */}
-      {activeTab !== "citas" && (
+      {!isCitasRoute && !isHeaderHidden && (
         <div className="w-full bg-[#0a1931] text-white py-2.5 px-4 md:px-8 border-b border-[#15305b] flex flex-wrap items-center justify-between gap-3 shadow-lg shrink-0 relative z-30 font-sans premium-glow-blue">
           <div className="flex items-center gap-3.5 flex-wrap">
             <div className="flex items-center gap-1.5 bg-blue-950/80 px-3 py-1 rounded-full border border-blue-800/60 text-[9px] font-black tracking-widest uppercase shrink-0">
@@ -852,11 +1092,11 @@ export default function App() {
                 {gatewaySelection === "registro_civil" ? "Registro Civil" : "Cedulación"}
               </span>
               <button
-                onClick={() => setGatewaySelection("select")}
+                onClick={() => navigatePreservingOffice("/")}
                 className="ml-1.5 px-2.5 py-1 bg-white/10 hover:bg-white/20 hover:text-white border border-white/25 hover:border-white/50 text-blue-100 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all cursor-pointer active:scale-95"
                 title="Volver a la selección inicial"
               >
-                Cambiar Sede/Trámite
+                Portal Unificado
               </button>
               <button
                 onClick={() => setIsDirectLinksModalOpen(true)}
@@ -918,7 +1158,7 @@ export default function App() {
       )}
 
       {/* HEADER SECTION */}
-      {!isHeaderHidden && activeTab !== "citas" && (
+      {!isHeaderHidden && !isCitasRoute && (
         <header className="max-w-7xl mx-auto w-full px-4 md:px-8 pt-6 space-y-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
           
@@ -927,7 +1167,8 @@ export default function App() {
               src="/images/agendate-logo-1.png" 
               referrerPolicy="no-referrer" 
               alt="Tribunal Electoral de Panamá" 
-              className="h-14 md:h-16 w-auto object-contain self-start md:self-center" 
+              className="h-14 md:h-16 w-auto object-contain self-start md:self-center cursor-pointer"
+              onClick={() => navigatePreservingOffice("/")}
             />
             <div className="h-6 w-[1px] bg-slate-250 hidden md:block" />
             <div className="flex flex-col">
@@ -937,7 +1178,7 @@ export default function App() {
               <select
                 id="office-select"
                 value={currentOfficeId}
-                onChange={(e) => setCurrentOfficeId(e.target.value)}
+                onChange={(e) => handleOfficeChange(e.target.value)}
                 className="bg-slate-50 border border-slate-250 hover:bg-slate-100 focus:ring-2 focus:ring-blue-150 text-slate-800 text-[11px] font-black uppercase tracking-wider rounded-xl px-3 py-1.5 cursor-pointer shadow-sm outline-none transition-all"
               >
                 {OFFICES_CONFIG.map(office => (
@@ -969,127 +1210,195 @@ export default function App() {
           </div>
         </div>
 
-        {/* VIEWPORT CONTROLLER TABS */}
-        <div className="flex flex-wrap items-center justify-start gap-2.5 border-b border-slate-200/60 pb-3">
+        {/* VIEWPORT CONTROLLER TABS (ROUTED LINKS) - ROLE & VIEW ISOLATION */}
+        <div className="flex flex-wrap items-center justify-start gap-2 border-b border-slate-200/60 pb-3">
+          {/* BOTÓN 0: Menú Principal / Inicio */}
           <button
-            id="tab-view-citas"
-            onClick={() => setActiveTab("citas")}
-            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
-              activeTab === "citas"
-                ? "bg-gradient-to-r from-amber-600 to-amber-700 text-white border-transparent shadow-md shadow-amber-900/10"
-                : "bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100 shadow-sm"
-            }`}
+            id="tab-view-home"
+            onClick={() => navigatePreservingOffice("/")}
+            className="px-3.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-1.5 rounded-2xl bg-white text-slate-700 border border-slate-200 hover:bg-slate-100 hover:text-slate-950 shadow-sm transition-all cursor-pointer shrink-0"
+            title="Volver al Portal Principal / Menú de Módulos"
           >
-            <CalendarCheck2 className="w-4 h-4 text-amber-600 group-hover:text-amber-800" />
-            <span>Agendamiento Citas (CitasTE)</span>
+            <Home className="w-4 h-4 text-[#003087]" />
+            <span>Inicio</span>
           </button>
 
-          <button
-            id="tab-view-kiosk"
-            onClick={() => setActiveTab("kiosk")}
-            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
-              activeTab === "kiosk"
-                ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
-                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
-            }`}
-          >
-            <Printer className="w-4 h-4 text-amber-500" />
-            <span>Kiosko de Turnos (Clientes)</span>
-          </button>
+          {/* BOTÓN 1: Módulo Kiosko */}
+          {(isKioscoRoute || isAdminRoute || isSuperAdminRoute) && (
+            <button
+              id="tab-view-kiosk"
+              onClick={() => navigatePreservingOffice("/kiosco")}
+              className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+                isKioscoRoute
+                  ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
+                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
+              }`}
+            >
+              <Printer className="w-4 h-4 text-amber-500" />
+              <span>Kiosko de Turnos</span>
+            </button>
+          )}
 
-          <button
-            id="tab-view-tracker"
-            onClick={() => setActiveTab("tracker")}
-            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
-              activeTab === "tracker"
-                ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
-                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
-            }`}
-          >
-            <Smartphone className="w-4 h-4 text-cyan-500" />
-            <span>Seguimiento Móvil (Tracker)</span>
-          </button>
+          {/* BOTÓN 2: Agendamiento CitasTE */}
+          {(isCitasRoute || isAdminRoute || isSuperAdminRoute) && (
+            <button
+              id="tab-view-citas"
+              onClick={() => navigatePreservingOffice("/citas")}
+              className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+                isCitasRoute
+                  ? "bg-gradient-to-r from-amber-600 to-amber-700 text-white border-transparent shadow-md shadow-amber-900/10"
+                  : "bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100 shadow-sm"
+              }`}
+            >
+              <CalendarCheck2 className="w-4 h-4 text-amber-600 group-hover:text-amber-800" />
+              <span>Agendamiento Citas (CitasTE)</span>
+            </button>
+          )}
 
-          <button
-            id="tab-view-tv"
-            onClick={() => setActiveTab("tv")}
-            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
-              activeTab === "tv"
-                ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
-                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
-            }`}
-          >
-            <Tv className="w-4 h-4 text-sky-500" />
-            <span>TV de Sala (Público)</span>
-          </button>
+          {/* BOTÓN 3: Seguimiento Móvil / Tracker */}
+          {(isTrackerRoute || isAdminRoute || isSuperAdminRoute) && (
+            <button
+              id="tab-view-tracker"
+              onClick={() => navigatePreservingOffice("/seguimiento")}
+              className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+                isTrackerRoute
+                  ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
+                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
+              }`}
+            >
+              <Smartphone className="w-4 h-4 text-cyan-500" />
+              <span>Seguimiento Móvil</span>
+            </button>
+          )}
 
-          <button
-            id="tab-view-agent"
-            onClick={() => setActiveTab("agent")}
-            className={`px-5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
-              activeTab === "agent"
-                ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
-                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
-            }`}
-          >
-            <UserCheck className="w-4 h-4 text-emerald-500" />
-            <span>Consola del Agente</span>
-          </button>
+          {/* BOTONES 4: Pantallas TV de Sala */}
+          {(isTvRoute || isKioscoRoute || isAgentRoute || isTrackerRoute || isAdminRoute || isSuperAdminRoute) && (
+            <>
+              {isTvRoute ? (
+                <>
+                  <button
+                    id="tab-view-tv-general"
+                    onClick={() => navigatePreservingOffice("/tv/general")}
+                    className={`px-4 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+                      currentPath === "/tv/general" || currentPath === "/tv"
+                        ? "bg-gradient-to-r from-purple-800 to-indigo-900 text-white border-transparent shadow-md shadow-purple-900/20"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
+                    }`}
+                  >
+                    <Tv className="w-4 h-4 text-purple-400" />
+                    <span>📺 TV Multicanal</span>
+                  </button>
 
-          <button
-            id="tab-view-admin"
-            onClick={() => {
-              if (isAdminAuthenticated) {
-                setActiveTab("admin");
-              } else {
-                setPendingAuthTab("admin");
-                setAdminPasswordInput("");
-                setAdminPasswordError(false);
-                setIsAdminLoginModalOpen(true);
-              }
-            }}
-            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
-              activeTab === "admin"
-                ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
-                : "bg-white text-slate-650 border-slate-205 hover:bg-slate-50 hover:text-slate-900"
-            }`}
-          >
-            <Settings className="w-4 h-4" />
-            <span>Administración</span>
-            {isAdminAuthenticated ? (
-              <Unlock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-            ) : (
-              <Lock className="w-3.5 h-3.5 text-slate-450 shrink-0 animate-pulse" />
-            )}
-          </button>
+                  <button
+                    id="tab-view-tv-caja"
+                    onClick={() => navigatePreservingOffice("/tv/caja")}
+                    className={`px-4 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+                      currentPath === "/tv/caja"
+                        ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/20"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
+                    }`}
+                  >
+                    <Tv className="w-4 h-4 text-amber-400" />
+                    <span>📺 TV 1: Sala de Caja</span>
+                  </button>
 
-          <button
-            id="tab-view-super-admin"
-            onClick={() => {
-              if (isAdminAuthenticated) {
-                setActiveTab("super-admin");
-              } else {
-                setPendingAuthTab("super-admin");
-                setAdminPasswordInput("");
-                setAdminPasswordError(false);
-                setIsAdminLoginModalOpen(true);
-              }
-            }}
-            className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
-              activeTab === "super-admin"
-                ? "bg-rose-700 text-white border-transparent shadow shadow-red-100"
-                : "bg-white text-rose-750 border-rose-200 hover:bg-rose-50 hover:text-rose-900"
-            }`}
-          >
-            <Sparkles className="w-4 h-4 text-amber-500" />
-            <span>Super Administrador</span>
-            {isAdminAuthenticated ? (
-              <Unlock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-            ) : (
-              <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0 animate-pulse" />
-            )}
-          </button>
+                  <button
+                    id="tab-view-tv-triada"
+                    onClick={() => navigatePreservingOffice("/tv/triada")}
+                    className={`px-4 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+                      currentPath === "/tv/triada"
+                        ? "bg-gradient-to-r from-[#003087] to-[#0056b3] text-white border-transparent shadow-md shadow-blue-900/20"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
+                    }`}
+                  >
+                    <Tv className="w-4 h-4 text-cyan-400" />
+                    <span>📺 TV 2: Sala de Tríada / Foto</span>
+                  </button>
 
+                  <button
+                    id="tab-view-tv-extranjeria"
+                    onClick={() => navigatePreservingOffice("/tv/extranjeria")}
+                    className={`px-4 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+                      currentPath === "/tv/extranjeria"
+                        ? "bg-gradient-to-r from-rose-800 to-rose-950 text-white border-transparent shadow-md shadow-rose-900/20"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
+                    }`}
+                  >
+                    <Tv className="w-4 h-4 text-rose-400" />
+                    <span>📺 TV 3: Sala de Extranjería</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  id="tab-view-tv-direct"
+                  onClick={() => navigatePreservingOffice("/tv/general")}
+                  className="px-4 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-1.5 rounded-2xl bg-white text-slate-600 border border-slate-200 hover:bg-purple-50 hover:text-purple-900 hover:border-purple-200 shadow-sm transition-all whitespace-nowrap cursor-pointer"
+                  title="Abrir Pantallas de TV / Monitores de Sala"
+                >
+                  <Tv className="w-4 h-4 text-purple-600" />
+                  <span>Pantalla TV de Sala</span>
+                </button>
+              )}
+            </>
+          )}
+
+          {/* BOTÓN 5: Consola del Agente */}
+          {(isAgentRoute || isAdminRoute || isSuperAdminRoute) && (
+            <button
+              id="tab-view-agent"
+              onClick={() => navigatePreservingOffice("/agente")}
+              className={`px-4.5 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-2xl transition-all whitespace-nowrap cursor-pointer border ${
+                isAgentRoute
+                  ? "bg-gradient-to-r from-[#003087] to-[#122e70] text-white border-transparent shadow-md shadow-blue-900/10 premium-glow-blue"
+                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-sm"
+              }`}
+            >
+              <UserCheck className="w-4 h-4 text-emerald-500" />
+              <span>Consola del Agente</span>
+            </button>
+          )}
+
+          {/* BOTÓN 6: Panel de Administración */}
+          {(isAdminRoute || isSuperAdminRoute) && (
+            <button
+              id="tab-view-admin"
+              onClick={() => handleTriggerAdminLogin("/admin")}
+              className={`px-4 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
+                isAdminRoute
+                  ? "bg-[#122e70] text-white border-transparent shadow shadow-blue-150"
+                  : "bg-white text-slate-650 border-slate-205 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              <Settings className="w-4 h-4" />
+              <span>Administración</span>
+              {isAdminAuthenticated ? (
+                <Unlock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              ) : (
+                <Lock className="w-3.5 h-3.5 text-slate-450 shrink-0 animate-pulse" />
+              )}
+            </button>
+          )}
+
+          {/* BOTÓN 7: Panel de Super Administrador */}
+          {(isSuperAdminRoute || (isAdminRoute && isAdminAuthenticated)) && (
+            <button
+              id="tab-view-super-admin"
+              onClick={() => handleTriggerAdminLogin("/super-admin")}
+              className={`px-4 py-2.5 text-xs font-black uppercase tracking-wider flex items-center gap-2 rounded-xl transition-all whitespace-nowrap cursor-pointer border ${
+                isSuperAdminRoute
+                  ? "bg-rose-700 text-white border-transparent shadow shadow-red-100"
+                  : "bg-white text-rose-750 border-rose-200 hover:bg-rose-50 hover:text-rose-900"
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-amber-500" />
+              <span>Super Administrador</span>
+              {isAdminAuthenticated ? (
+                <Unlock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              ) : (
+                <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0 animate-pulse" />
+              )}
+            </button>
+          )}
           {/* Quick link to Hide Menu/Option Tabs */}
           <button
             id="btn-hide-navigation-menu"
@@ -1119,182 +1428,338 @@ export default function App() {
         <main className={
           viewType === "tablet" 
             ? "w-full flex-grow transition-all duration-300" 
-            : activeTab === "citas"
+            : isCitasRoute
               ? "w-full max-w-none px-0 sm:px-2 flex-grow transition-all duration-300 pt-0"
               : `max-w-[1650px] 2xl:max-w-[95%] mx-auto w-full px-4 md:px-8 flex-grow transition-all duration-300 ${isHeaderHidden ? "pt-8" : ""}`
         }>
-        {/* INDIVIDUAL MAXIMIZED VIEWPORTS */}
-        {activeTab === "citas" && (
-          <div className="w-full py-0">
-            <CitasApp onCreateTicket={createTicket} onNavigateToTurnos={() => setActiveTab("kiosk")} />
-          </div>
-        )}
-
-        {activeTab === "kiosk" && (
-          <div className="w-full py-4">
-            <WelcomeKiosk 
-              onCreateTicket={createTicket} 
-              currentOfficeId={currentOfficeId} 
-              gatewaySelection={gatewaySelection} 
-              onNavigateToCitas={() => setActiveTab("citas")}
-              onNavigateToTracker={(code) => {
-                if (code) setTrackingTicketCode(code);
-                setActiveTab("tracker");
-              }}
+          <Routes>
+            {/* 1. PORTAL UNIFICADO / CITASTE / KIOSCOS / SEGUIMIENTO */}
+            <Route 
+              path="/" 
+              element={
+                <HomePage 
+                  onSelectOption={(option) => {
+                    setGatewaySelection(option);
+                    navigatePreservingOffice("/kiosco");
+                  }} 
+                  onSelectCitas={() => {
+                    setGatewaySelection("cedulacion");
+                    navigatePreservingOffice("/citas");
+                  }} 
+                  onSelectView={(viewKey) => {
+                    setGatewaySelection("cedulacion");
+                    if (viewKey === "tracker" || viewKey === "seguimiento") {
+                      navigatePreservingOffice("/seguimiento");
+                    } else {
+                      navigatePreservingOffice(`/${viewKey}`);
+                    }
+                  }}
+                />
+              } 
             />
-          </div>
-        )}
 
-        {activeTab === "tracker" && (
-          <div className="w-full py-4">
-            <TicketTracker
-              tickets={tickets}
-              cubicles={cubicles}
-              initialTicketCode={trackingTicketCode}
-              onNavigateToKiosk={() => setActiveTab("kiosk")}
-              currentOfficeId={currentOfficeId}
-              officeTickets={officeTickets}
-              officeCubicles={officeCubicles}
-              onSelectOffice={(officeId) => {
-                setCurrentOfficeId(officeId);
-              }}
+            <Route 
+              path="/citas" 
+              element={
+                <CitasPage 
+                  onCreateTicket={createTicket} 
+                  onNavigateToTurnos={() => navigatePreservingOffice("/kiosco")} 
+                />
+              } 
             />
-          </div>
-        )}
 
-        {activeTab === "tv" && (
-          <div className="w-full py-4">
-            <MainScreen
-              tickets={tickets}
-              cubicles={cubicles}
-              activeCall={activeCall}
-              onClearActiveCall={() => setActiveCall(null)}
-              onTestSpeaker={handleTestSpeaker}
-              onRefresh={refreshTickets}
-              currentOfficeId={currentOfficeId}
-              gatewaySelection={gatewaySelection}
+            <Route 
+              path="/citas/:category/:subService" 
+              element={
+                <CitasPage 
+                  onCreateTicket={createTicket} 
+                  onNavigateToTurnos={() => navigatePreservingOffice("/kiosco")} 
+                />
+              } 
             />
-          </div>
-        )}
 
-        {activeTab === "agent" && (
-          <div className="w-full py-4">
-            <AgentConsole
-              tickets={tickets}
-              cubicles={cubicles}
-              isAutoAssignActive={isAutoAssignActive}
-              onCallNext={callNextTicket}
-              onStartAttending={startAttendingTicket}
-              onComplete={completeTicket}
-              onTransferToCajaRC={transferTicketToCajaRC}
-              onMiss={markTicketAsMissed}
-              onRecall={recallCurrentTicket}
-              onChangeStatus={changeCubicleStatus}
-              onUpdateCubicleConfig={updateCubicleConfig}
-              onRefresh={refreshTickets}
-              onResetSystem={resetSystem}
-              currentOfficeId={currentOfficeId}
-              users={users}
-              currentActiveUserId={currentActiveUserId}
-              setCurrentActiveUserId={setCurrentActiveUserId}
-              gatewaySelection={gatewaySelection}
+            <Route 
+              path="/kiosco" 
+              element={
+                <KioscoPage 
+                  onCreateTicket={createTicket} 
+                  currentOfficeId={currentOfficeId} 
+                  gatewaySelection={gatewaySelection} 
+                  onNavigateToCitas={() => navigatePreservingOffice("/citas")}
+                  onNavigateToTracker={(code) => {
+                    if (code) navigatePreservingOffice(`/seguimiento/${encodeURIComponent(code)}`);
+                    else navigatePreservingOffice("/seguimiento");
+                  }}
+                />
+              } 
             />
-          </div>
-        )}
 
-        {activeTab === "admin" && (
-          <div className="w-full py-4">
-            {isAdminAuthenticated ? (
-              <ControlDashboard
-                tickets={tickets}
-                cubicles={cubicles}
-                isSimulationActive={isSimulationActive}
-                onToggleSimulation={setIsSimulationActive}
-                simulationSpeed={simulationSpeed}
-                onSetSimulationSpeed={setSimulationSpeed}
-                onCreateRandomTicket={handleCreateRandomTicket}
-                onResetSystem={resetSystem}
-                isAutoAssignActive={isAutoAssignActive}
-                onToggleAutoAssign={setIsAutoAssignActive}
-                onPurgeOldTickets={purgeOldTickets}
-                currentOfficeId={currentOfficeId}
-                gatewaySelection={gatewaySelection}
-              />
-            ) : (
-              <div className="bg-white border-2 border-dashed border-slate-200 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-6 max-w-lg mx-auto shadow-sm my-8">
-                <div className="w-16 h-16 bg-red-50 text-red-650 rounded-full flex items-center justify-center border border-red-100">
-                  <Lock className="w-8 h-8 text-red-600" />
+            {/* Backwards compatibility aliases for kiosk */}
+            <Route path="/kiosk" element={<Navigate to="/kiosco" replace />} />
+            <Route path="/ticket" element={<Navigate to="/kiosco" replace />} />
+
+            <Route 
+              path="/seguimiento" 
+              element={
+                <SeguimientoPage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  onNavigateToKiosk={() => navigatePreservingOffice("/kiosco")}
+                  currentOfficeId={currentOfficeId}
+                  officeTickets={officeTickets}
+                  officeCubicles={officeCubicles}
+                  onSelectOffice={(officeId) => {
+                    handleOfficeChange(officeId);
+                  }}
+                />
+              } 
+            />
+
+            <Route 
+              path="/seguimiento/:ticketId" 
+              element={
+                <SeguimientoPage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  onNavigateToKiosk={() => navigatePreservingOffice("/kiosco")}
+                  currentOfficeId={currentOfficeId}
+                  officeTickets={officeTickets}
+                  officeCubicles={officeCubicles}
+                  onSelectOffice={(officeId) => {
+                    handleOfficeChange(officeId);
+                  }}
+                />
+              } 
+            />
+
+            {/* Backwards compatibility aliases for tracker */}
+            <Route path="/tracker" element={<Navigate to="/seguimiento" replace />} />
+            <Route path="/tracker/:ticketId" element={<TrackerRedirect />} />
+
+            {/* 2. PANTALLAS DE TV Y MONITORES */}
+            <Route 
+              path="/tv" 
+              element={
+                <TvScreenPage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  activeCall={activeCall}
+                  onClearActiveCall={() => setActiveCall(null)}
+                  onTestSpeaker={handleTestSpeaker}
+                  onRefresh={refreshTickets}
+                  currentOfficeId={currentOfficeId}
+                  gatewaySelection="cedulacion"
+                  channel="general"
+                />
+              } 
+            />
+
+            <Route 
+              path="/tv/general" 
+              element={
+                <TvScreenPage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  activeCall={activeCall}
+                  onClearActiveCall={() => setActiveCall(null)}
+                  onTestSpeaker={handleTestSpeaker}
+                  onRefresh={refreshTickets}
+                  currentOfficeId={currentOfficeId}
+                  gatewaySelection="cedulacion"
+                  channel="general"
+                />
+              } 
+            />
+
+            <Route 
+              path="/tv/caja" 
+              element={
+                <TvScreenPage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  activeCall={activeCall}
+                  onClearActiveCall={() => setActiveCall(null)}
+                  onTestSpeaker={handleTestSpeaker}
+                  onRefresh={refreshTickets}
+                  currentOfficeId={currentOfficeId}
+                  gatewaySelection="cedulacion"
+                  channel={TicketPhase.CAJA}
+                />
+              } 
+            />
+
+            <Route 
+              path="/tv/triada" 
+              element={
+                <TvScreenPage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  activeCall={activeCall}
+                  onClearActiveCall={() => setActiveCall(null)}
+                  onTestSpeaker={handleTestSpeaker}
+                  onRefresh={refreshTickets}
+                  currentOfficeId={currentOfficeId}
+                  gatewaySelection="cedulacion"
+                  channel={TicketPhase.TRIADA}
+                />
+              } 
+            />
+
+            <Route 
+              path="/tv/registro-civil" 
+              element={
+                <TvScreenPage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  activeCall={activeCall}
+                  onClearActiveCall={() => setActiveCall(null)}
+                  onTestSpeaker={handleTestSpeaker}
+                  onRefresh={refreshTickets}
+                  currentOfficeId={currentOfficeId}
+                  gatewaySelection="registro_civil"
+                  channel="general"
+                />
+              } 
+            />
+
+            <Route 
+              path="/tv/registro-civil/or" 
+              element={
+                <TvScreenPage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  activeCall={activeCall}
+                  onClearActiveCall={() => setActiveCall(null)}
+                  onTestSpeaker={handleTestSpeaker}
+                  onRefresh={refreshTickets}
+                  currentOfficeId={currentOfficeId}
+                  gatewaySelection="registro_civil"
+                  channel="OR"
+                />
+              } 
+            />
+
+            <Route 
+              path="/tv/registro-civil/ohv" 
+              element={
+                <TvScreenPage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  activeCall={activeCall}
+                  onClearActiveCall={() => setActiveCall(null)}
+                  onTestSpeaker={handleTestSpeaker}
+                  onRefresh={refreshTickets}
+                  currentOfficeId={currentOfficeId}
+                  gatewaySelection="registro_civil"
+                  channel="OHV"
+                />
+              } 
+            />
+
+            <Route path="/extranjeria/pantalla" element={<Navigate to="/tv/extranjeria" replace />} />
+            <Route path="/pantalla-extranjeria" element={<Navigate to="/tv/extranjeria" replace />} />
+            <Route 
+              path="/tv/extranjeria" 
+              element={
+                <div className="w-full flex-grow flex flex-col">
+                  <ExtranjeriaController currentRole="super" forceSubRole="pantalla" />
                 </div>
-                <div className="space-y-2">
-                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-900">Acceso a Administración Bloqueado</h3>
-                  <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
-                    Usted no ha iniciado sesión de administración. Por favor introduzca la clave autorizada para abrir las herramientas de simulación, configuración y reinicio.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
+              } 
+            />
+
+            {/* 3. OPERACIÓN Y ADMINISTRACIÓN */}
+            <Route 
+              path="/agente" 
+              element={
+                <AgentePage
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  isAutoAssignActive={isAutoAssignActive}
+                  onToggleAutoAssign={setIsAutoAssignActive}
+                  onCallNext={callNextTicket}
+                  onStartAttending={startAttendingTicket}
+                  onComplete={completeTicket}
+                  onTransferToCajaRC={transferTicketToCajaRC}
+                  onMiss={markTicketAsMissed}
+                  onRecall={recallCurrentTicket}
+                  onChangeStatus={changeCubicleStatus}
+                  onUpdateCubicleConfig={updateCubicleConfig}
+                  onRefresh={refreshTickets}
+                  onResetSystem={resetSystem}
+                  currentOfficeId={currentOfficeId}
+                  users={users}
+                  currentActiveUserId={currentActiveUserId}
+                  setCurrentActiveUserId={setCurrentActiveUserId}
+                  gatewaySelection={gatewaySelection}
+                />
+              } 
+            />
+
+            <Route path="/agent" element={<Navigate to="/agente" replace />} />
+
+            <Route 
+              path="/admin" 
+              element={
+                <AdminPage
+                  isAuthenticated={isAdminAuthenticated}
+                  onOpenLoginModal={() => {
+                    setPendingAuthPath("/admin");
                     setAdminPasswordInput("");
                     setAdminPasswordError(false);
                     setIsAdminLoginModalOpen(true);
                   }}
-                  className="px-6 py-3 bg-[#122e70] hover:bg-blue-800 text-white text-xs font-black uppercase tracking-widest rounded-xl transition-all cursor-pointer shadow-md flex items-center justify-center gap-2"
-                >
-                  <Unlock className="w-4 h-4 text-amber-400" />
-                  <span>Desbloquear Administración</span>
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+                  tickets={tickets}
+                  cubicles={cubicles}
+                  isSimulationActive={isSimulationActive}
+                  onToggleSimulation={setIsSimulationActive}
+                  simulationSpeed={simulationSpeed}
+                  onSetSimulationSpeed={setSimulationSpeed}
+                  onCreateRandomTicket={handleCreateRandomTicket}
+                  onResetSystem={resetSystem}
+                  isAutoAssignActive={isAutoAssignActive}
+                  onToggleAutoAssign={setIsAutoAssignActive}
+                  onPurgeOldTickets={purgeOldTickets}
+                  currentOfficeId={currentOfficeId}
+                  gatewaySelection={gatewaySelection}
+                />
+              } 
+            />
 
-        {activeTab === "super-admin" && (
-          <div className="w-full py-4">
-            {isAdminAuthenticated ? (
-              <SuperAdminConsole
-                officeTickets={officeTickets}
-                setOfficeTickets={setOfficeTickets}
-                officeCubicles={officeCubicles}
-                setOfficeCubicles={setOfficeCubicles}
-                users={users}
-                setUsers={setUsers}
-                currentOfficeId={currentOfficeId}
-                gatewaySelection={gatewaySelection}
-              />
-            ) : (
-              <div className="bg-white border-2 border-dashed border-slate-200 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-6 max-w-lg mx-auto shadow-sm my-8">
-                <div className="w-16 h-16 bg-red-50 text-red-650 rounded-full flex items-center justify-center border border-red-100">
-                  <Lock className="w-8 h-8 text-red-600" />
-                </div>
-                <div className="space-y-2">
-                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-900">Acceso a Super Administrador Bloqueado</h3>
-                  <p className="text-xs text-slate-500 max-w-sm leading-relaxed">
-                    Usted no ha iniciado sesión de super administración. Por favor introduzca la clave autorizada para abrir el panel de control unificado y clasificador de las 16 oficinas.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
+            <Route 
+              path="/super-admin" 
+              element={
+                <SuperAdminPage
+                  isAuthenticated={isAdminAuthenticated}
+                  onOpenLoginModal={() => {
+                    setPendingAuthPath("/super-admin");
                     setAdminPasswordInput("");
                     setAdminPasswordError(false);
                     setIsAdminLoginModalOpen(true);
                   }}
-                  className="px-6 py-3 bg-[#122e70] hover:bg-blue-800 text-white text-xs font-black uppercase tracking-widest rounded-xl transition-all cursor-pointer shadow-md flex items-center justify-center gap-2"
-                >
-                  <Unlock className="w-4 h-4 text-amber-400" />
-                  <span>Desbloquear Super Administrador</span>
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-       </main>
+                  officeTickets={officeTickets}
+                  setOfficeTickets={setOfficeTickets}
+                  officeCubicles={officeCubicles}
+                  setOfficeCubicles={setOfficeCubicles}
+                  users={users}
+                  setUsers={setUsers}
+                  currentOfficeId={currentOfficeId}
+                  gatewaySelection={gatewaySelection}
+                />
+              } 
+            />
+
+            <Route path="/superadmin" element={<Navigate to="/super-admin" replace />} />
+
+            {/* Fallback to home */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </main>
         
         {viewType === "tablet" && (
           /* Tablet Home Bar indicator */
           <div className="w-36 h-1 bg-slate-950 rounded-full mx-auto mt-5 opacity-35 shrink-0" />
         )}
       </div>
-
-      {/* FOOTER BAR REMOVED */}
     </div>
   );
 }

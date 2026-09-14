@@ -6,9 +6,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Ticket, Cubicle, TicketStatus, CubicleStatus, SERVICES_CONFIG, TicketPhase, PHASES_CONFIG, OFFICES_CONFIG, ServiceType } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { Volume2, VolumeX, Tv, UserCheck, Users, HelpCircle, ArrowRight, UserMinus, ShieldAlert, Clock } from "lucide-react";
+import { Volume2, VolumeX, Tv, UserCheck, Users, HelpCircle, ArrowRight, UserMinus, ShieldAlert, Clock, Copy, Check } from "lucide-react";
 import { getOfficeSchedule } from "../utils/scheduleStorage";
-import { announceAndCall } from "../utils/audio";
+import { announceAndCall, stopAllAudio } from "../utils/audio";
 import { getServerTime } from "../utils/serverTime";
 
 interface MainScreenProps {
@@ -20,19 +20,30 @@ interface MainScreenProps {
   onRefresh?: () => void;
   currentOfficeId?: string;
   gatewaySelection?: "select" | "cedulacion" | "registro_civil";
+  initialChannel?: "general" | TicketPhase | "OR" | "OHV" | "RC_OTROS";
 }
 
-export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, onRefresh, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion" }: MainScreenProps) {
+export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, onRefresh, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion", initialChannel }: MainScreenProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [voiceCallRepeat, setVoiceCallRepeat] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("tv_speech_repeat_count");
+        if (saved) return parseInt(saved, 10);
+      } catch (e) {}
+    }
+    return 1; // Modo 1 Llamado Rápido por defecto para evitar cuellos de botella
+  });
   const [selectedChannel, setSelectedChannel] = useState<"general" | TicketPhase | "OR" | "OHV" | "RC_OTROS">(() => {
+    if (initialChannel) return initialChannel;
     if (typeof window !== "undefined") {
       try {
         const params = new URLSearchParams(window.location.search);
-        const ch = (params.get("channel") || params.get("fase") || params.get("pantalla") || params.get("canal") || "").toLowerCase();
+        const ch = (params.get("channel") || params.get("fase") || params.get("pantalla") || params.get("canal") || params.get("tv") || "").toLowerCase();
         const v = (params.get("view") || "").toLowerCase();
-        if (ch === "caja" || v === "tv-caja" || v === "caja-tv") return TicketPhase.CAJA;
-        if (ch === "triada" || ch === "fotografia" || ch === "foto" || v === "tv-triada" || v === "triada-tv") return TicketPhase.TRIADA;
+        if (ch === "caja" || v === "tv-caja" || v === "caja-tv" || ch === "1") return TicketPhase.CAJA;
+        if (ch === "triada" || ch === "fotografia" || ch === "foto" || v === "tv-triada" || v === "triada-tv" || ch === "2") return TicketPhase.TRIADA;
         if (ch === "or") return "OR";
         if (ch === "ohv") return "OHV";
         if (ch === "rc_otros") return "RC_OTROS";
@@ -40,8 +51,36 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     }
     return "general";
   });
+
+  useEffect(() => {
+    if (initialChannel) {
+      setSelectedChannel(initialChannel);
+    }
+  }, [initialChannel]);
   const [layoutFocus, setLayoutFocus] = useState<"both" | "cubicles" | "queue" >("both");
   const [isImmersiveFullscreen, setIsImmersiveFullscreen] = useState(false);
+  const [copiedTvUrl, setCopiedTvUrl] = useState(false);
+
+  const handleCopyTvUrl = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (typeof window === "undefined") return;
+    const origin = window.location.origin;
+    let path = "/tv/general";
+    if (gatewaySelection === "registro_civil") {
+      if (selectedChannel === "OR") path = "/tv/registro-civil/or";
+      else if (selectedChannel === "OHV") path = "/tv/registro-civil/ohv";
+      else path = "/tv/registro-civil";
+    } else {
+      if (selectedChannel === TicketPhase.CAJA) path = "/tv/caja";
+      else if (selectedChannel === TicketPhase.TRIADA) path = "/tv/triada";
+      else path = "/tv/general";
+    }
+    const officeQuery = (currentOfficeId && currentOfficeId !== "OFF-1") ? `?office=${encodeURIComponent(currentOfficeId)}` : "";
+    const fullUrl = `${origin}${path}${officeQuery}`;
+    navigator.clipboard.writeText(fullUrl);
+    setCopiedTvUrl(true);
+    setTimeout(() => setCopiedTvUrl(false), 2000);
+  };
 
   // Auto-refresh interval specifically for the TV screen (polling live tickets & calls safely)
   useEffect(() => {
@@ -50,15 +89,21 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     // Poll initially
     onRefresh();
 
-    const interval = setInterval(() => {
-      // Avoid spamming requests if tab is minimized/hidden
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        return;
-      }
-      onRefresh();
-    }, 2500);
+    // SERVER-SENT EVENTS (SSE) - Real-time push
+    const eventSource = new EventSource("/api/stream/events");
+    eventSource.addEventListener("tickets_updated", () => {
+      onRefresh(); // Trigger instant refresh on push event immediately
+    });
 
-    return () => clearInterval(interval);
+    // Fallback polling (backed off to 2000ms for high-speed responsiveness)
+    const interval = setInterval(() => {
+      onRefresh();
+    }, 2000); 
+
+    return () => {
+      clearInterval(interval);
+      eventSource.close();
+    };
   }, [onRefresh]);
 
   useEffect(() => {
@@ -162,14 +207,21 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   // Isolate tickets strictly by system ecosystem (Cedulación vs Registro Civil)
   const ecosystemTickets = React.useMemo(() => {
     return tickets.filter(t => {
+      const isRc = t.serviceType === ServiceType.REGISTRO || t.serviceType === ServiceType.REG_CERTIFICATION;
+      if (selectedChannel === "OR" || selectedChannel === "OHV" || selectedChannel === "RC_OTROS") {
+        return isRc;
+      }
+      if (selectedChannel === TicketPhase.CAJA || selectedChannel === TicketPhase.TRIADA) {
+        return !isRc;
+      }
       if (gatewaySelection === "registro_civil") {
-        return t.serviceType === ServiceType.REGISTRO;
+        return isRc;
       } else if (gatewaySelection === "cedulacion") {
-        return t.serviceType !== ServiceType.REGISTRO;
+        return !isRc;
       }
       return true;
     });
-  }, [tickets, gatewaySelection]);
+  }, [tickets, gatewaySelection, selectedChannel]);
 
   // Fetch tickets currently waiting
   const waitingTickets = React.useMemo(() => {
@@ -211,31 +263,29 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   ): boolean => {
     if (!call || !call.ticket || !call.cubicle) return false;
 
-    // 1. Ecosystem match
-    if (gateway === "registro_civil") {
-      if (call.ticket.serviceType !== ServiceType.REGISTRO) return false;
-    } else {
-      if (call.ticket.serviceType === ServiceType.REGISTRO) return false;
-    }
-
-    // 2. Channel match
+    // 1. If channel is "general", it displays all calls across the system
     if (channel === "general") return true;
+
+    // 2. Channel & Procedure match for Registro Civil
     if (channel === "OR") return call.ticket.procedure === "OR";
     if (channel === "OHV") return call.ticket.procedure === "OHV";
     if (channel === "RC_OTROS") return call.ticket.procedure !== "OR" && call.ticket.procedure !== "OHV";
     
-    // For Cedulación phases: CAJA vs TRIADA
+    // 3. For Cedulación phases: CAJA and TRIADA
     if (channel === TicketPhase.CAJA) {
-      const isCajaPhase = call.ticket.currentPhase === TicketPhase.CAJA;
-      const isCajaCubicle = call.cubicle.supportedPhases?.includes(TicketPhase.CAJA) || call.cubicle.name.toLowerCase().startsWith("caja");
-      return isCajaPhase || isCajaCubicle;
+      if (call.ticket.currentPhase === TicketPhase.CAJA) return true;
+      const cubiclePhases = call.cubicle.supportedPhases || [];
+      const cubicleNameLower = (call.cubicle.name || "").toLowerCase();
+      const cubicleAreaLower = (call.cubicle.area || "").toLowerCase();
+      return (cubiclePhases.includes(TicketPhase.CAJA) || cubicleAreaLower.includes("caja") || cubicleNameLower.includes("caja")) && call.ticket.currentPhase !== TicketPhase.TRIADA;
     }
+
     if (channel === TicketPhase.TRIADA) {
-      const isTriadaPhase = call.ticket.currentPhase === TicketPhase.TRIADA;
-      const isTriadaCubicle = call.cubicle.supportedPhases?.includes(TicketPhase.TRIADA) || 
-        call.cubicle.name.toLowerCase().startsWith("módulo") || 
-        call.cubicle.name.toLowerCase().startsWith("modulo");
-      return isTriadaPhase || isTriadaCubicle;
+      if (call.ticket.currentPhase === TicketPhase.TRIADA) return true;
+      const cubiclePhases = call.cubicle.supportedPhases || [];
+      const cubicleNameLower = (call.cubicle.name || "").toLowerCase();
+      const cubicleAreaLower = (call.cubicle.area || "").toLowerCase();
+      return (cubiclePhases.includes(TicketPhase.TRIADA) || cubicleAreaLower.includes("triada") || cubicleAreaLower.includes("tríada") || cubicleNameLower.includes("triada") || cubicleNameLower.includes("tríada") || cubicleNameLower.includes("fotograf") || cubicleNameLower.startsWith("módulo") || cubicleNameLower.startsWith("modulo")) && call.ticket.currentPhase !== TicketPhase.CAJA;
     }
 
     return call.ticket.currentPhase === channel;
@@ -243,6 +293,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
   // Filter active call based on channel selection and strictly match ecosystem
   const displayedActiveCall = React.useMemo(() => {
+    if (!activeCall || !activeCall.ticket) return null;
     return isCallMatchingChannel(activeCall, selectedChannel, gatewaySelection)
       ? activeCall
       : null;
@@ -250,7 +301,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
   // Persistent tracking of the latest called ticket so the giant call view stays active on the TV screen
   const [latestCall, setLatestCall] = useState<{ ticket: Ticket; cubicle: Cubicle } | null>(() => {
-    if (activeCall && isCallMatchingChannel(activeCall, selectedChannel, gatewaySelection)) {
+    if (activeCall && activeCall.ticket.status === TicketStatus.CALLING && isCallMatchingChannel(activeCall, selectedChannel, gatewaySelection)) {
       return activeCall;
     }
     return null;
@@ -258,6 +309,18 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
   // Recent call history for display in TV lower section
   const [callHistory, setCallHistory] = useState<Array<{ ticket: Ticket; cubicle: Cubicle; timestamp: number }>>([]);
+
+  // Filter callHistory strictly for current channel & ecosystem
+  const matchingCallHistory = React.useMemo(() => {
+    return callHistory.filter(item => isCallMatchingChannel(item, selectedChannel, gatewaySelection));
+  }, [callHistory, selectedChannel, gatewaySelection, isCallMatchingChannel]);
+
+  // Reset or re-evaluate latestCall when channel changes
+  useEffect(() => {
+    if (latestCall && !isCallMatchingChannel(latestCall, selectedChannel, gatewaySelection)) {
+      setLatestCall(null);
+    }
+  }, [selectedChannel, gatewaySelection, isCallMatchingChannel]);
 
   // Whenever a new active call comes in that matches our channel, update latestCall and callHistory
   useEffect(() => {
@@ -267,15 +330,34 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         const filtered = prev.filter(item => item.ticket.id !== displayedActiveCall.ticket.id);
         return [{ ...displayedActiveCall, timestamp: Date.now() }, ...filtered].slice(0, 8);
       });
+
+      // Auto-dismiss call alert banner after 8 seconds for a clean and snappy experience
+      const timer = setTimeout(() => {
+        setLatestCall(null);
+      }, 8000);
+
+      return () => clearTimeout(timer);
     }
   }, [displayedActiveCall]);
+
+  // If the active ticket is attended (Iniciar Atención), completed, or missed, dismiss call alert banner immediately and stop speech
+  useEffect(() => {
+    if (latestCall) {
+      const liveTicket = ecosystemTickets.find(t => t.id === latestCall.ticket.id);
+      if (liveTicket && liveTicket.status !== TicketStatus.CALLING) {
+        setLatestCall(null);
+        stopAllAudio();
+      }
+    }
+  }, [latestCall, ecosystemTickets]);
 
   // Validated latestCall against current live ecosystem tickets
   const validatedLatestCall = React.useMemo(() => {
     if (!latestCall) return null;
     const liveTicket = ecosystemTickets.find(t => t.id === latestCall.ticket.id);
     if (liveTicket) {
-      if (liveTicket.status === TicketStatus.COMPLETED || liveTicket.status === TicketStatus.MISSED) {
+      // Must be strictly in CALLING status; if ATTENDING, COMPLETED, or MISSED, dismiss immediately
+      if (liveTicket.status !== TicketStatus.CALLING) {
         return null;
       }
       if (isCallMatchingChannel({ ticket: liveTicket, cubicle: latestCall.cubicle }, selectedChannel, gatewaySelection)) {
@@ -283,16 +365,19 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       }
       return null;
     }
+    if (latestCall.ticket.status !== TicketStatus.CALLING) {
+      return null;
+    }
     return isCallMatchingChannel(latestCall, selectedChannel, gatewaySelection) ? latestCall : null;
   }, [latestCall, ecosystemTickets, selectedChannel, gatewaySelection, isCallMatchingChannel]);
 
-  // Fallback: If no displayed active call or validated latestCall, check for any ticket currently in explicit CALLING or ATTENDING state
+  // Fallback: Check for any ticket currently in explicit CALLING state
   const fallbackActiveCall = React.useMemo(() => {
     if (displayedActiveCall || validatedLatestCall) return null;
     const activeTickets = ecosystemTickets
       .filter(t => {
-        const isCallingOrAttending = (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING) && !!t.assignedCubicleId;
-        if (!isCallingOrAttending) return false;
+        const isCalling = t.status === TicketStatus.CALLING && !!t.assignedCubicleId;
+        if (!isCalling) return false;
         
         if (selectedChannel === "general") return true;
         if (selectedChannel === "OR") return t.procedure === "OR";
@@ -353,15 +438,16 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       ? `Caja ${cubicle.name.replace(/\D/g, '') || cubicle.name}`
       : cubicle.name;
 
-    // Play 2 consecutive calls (Primer llamado + Segundo llamado) with chime and voice
-    announceAndCall(ticket.numberCode, ticket.name, destName, 2, { 
+    // Immediately stop any prior audio and start new consecutive calls
+    stopAllAudio();
+    announceAndCall(ticket.numberCode, ticket.name, destName, voiceCallRepeat, { 
       isCaja, 
       isTriada, 
       phase: ticket.currentPhase 
     }).catch(err => {
       console.warn("Speech synthesis error on TV screen:", err);
     });
-  }, [displayedActiveCall, soundEnabled, selectedChannel, gatewaySelection]);
+  }, [displayedActiveCall, soundEnabled, selectedChannel, gatewaySelection, voiceCallRepeat]);
 
   // Filter cubicles strictly based on active ecosystem
   const ecosystemCubicles = cubicles.filter(c => {
@@ -380,8 +466,11 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         c.name.includes("(STR)");
       if (isRcName) return false;
 
-      const hasCaja = c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().startsWith("caja");
-      const hasTriada = c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().startsWith("módulo") || c.name.toLowerCase().startsWith("modulo");
+      const hasCaja = (c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().startsWith("caja")) &&
+        !c.name.toLowerCase().startsWith("módulo") &&
+        !c.name.toLowerCase().startsWith("modulo");
+      const hasTriada = (c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().startsWith("módulo") || c.name.toLowerCase().startsWith("modulo")) &&
+        !c.name.toLowerCase().startsWith("caja");
       return hasCaja || hasTriada;
     }
   });
@@ -406,7 +495,11 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               const isOhv = (num >= 16 && num <= 20) || c.name.includes("(OHV)");
               return !isOr && !isOhv;
             })
-          : ecosystemCubicles.filter(c => c.supportedPhases?.includes(selectedChannel as TicketPhase));
+          : selectedChannel === TicketPhase.CAJA
+            ? ecosystemCubicles.filter(c => (c.supportedPhases?.includes(TicketPhase.CAJA) || c.name.toLowerCase().startsWith("caja")) && !c.name.toLowerCase().startsWith("módulo") && !c.name.toLowerCase().startsWith("modulo"))
+            : selectedChannel === TicketPhase.TRIADA
+              ? ecosystemCubicles.filter(c => (c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().startsWith("módulo") || c.name.toLowerCase().startsWith("modulo") || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada")) && !c.name.toLowerCase().startsWith("caja"))
+              : ecosystemCubicles.filter(c => c.supportedPhases?.includes(selectedChannel as TicketPhase));
 
   // Recent completed or missed tickets strictly for active ecosystem
   const recentHistory = ecosystemTickets
@@ -676,6 +769,23 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 </button>
                 <div className="h-3 w-[1px] bg-slate-250" />
                 <button
+                  id="btn-toggle-voice-repeat-light"
+                  onClick={() => {
+                    const next = voiceCallRepeat === 1 ? 2 : 1;
+                    setVoiceCallRepeat(next);
+                    try { localStorage.setItem("tv_speech_repeat_count", String(next)); } catch (e) {}
+                  }}
+                  className={`px-2 py-0.5 rounded font-black text-[9px] uppercase cursor-pointer transition-colors ${
+                    voiceCallRepeat === 1 
+                      ? "bg-amber-100 text-amber-900 border border-amber-300" 
+                      : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                  }`}
+                  title={voiceCallRepeat === 1 ? "1 llamado rápido activo (recomendado para alta afluencia)" : "2 llamados consecutivos activos"}
+                >
+                  {voiceCallRepeat === 1 ? "⚡ 1 LLAMADO RÁPIDO" : "🔊 2 LLAMADOS"}
+                </button>
+                <div className="h-3 w-[1px] bg-slate-250" />
+                <button
                   id="btn-toggle-sound"
                   onClick={() => setSoundEnabled(!soundEnabled)}
                   className={`p-1 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer ${soundEnabled ? 'text-[#003087] font-bold' : 'text-slate-400'}`}
@@ -803,6 +913,23 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 </button>
                 <div className="h-3 w-[1px] bg-white/15" />
                 <button
+                  id="btn-toggle-voice-repeat-dark"
+                  onClick={() => {
+                    const next = voiceCallRepeat === 1 ? 2 : 1;
+                    setVoiceCallRepeat(next);
+                    try { localStorage.setItem("tv_speech_repeat_count", String(next)); } catch (e) {}
+                  }}
+                  className={`px-2 py-0.5 rounded font-black text-[9px] uppercase cursor-pointer transition-colors ${
+                    voiceCallRepeat === 1 
+                      ? "bg-amber-400 text-slate-950 font-black" 
+                      : "bg-white/10 text-slate-300 hover:bg-white/20"
+                  }`}
+                  title={voiceCallRepeat === 1 ? "1 llamado rápido activo (recomendado para alta afluencia)" : "2 llamados consecutivos activos"}
+                >
+                  {voiceCallRepeat === 1 ? "⚡ 1 LLAMADO RÁPIDO" : "🔊 2 LLAMADOS"}
+                </button>
+                <div className="h-3 w-[1px] bg-white/15" />
+                <button
                   id="btn-toggle-sound"
                   onClick={() => setSoundEnabled(!soundEnabled)}
                   className={`p-1 hover:bg-white/5 rounded-lg transition-colors cursor-pointer ${soundEnabled ? 'text-[#00aaff] font-bold' : 'text-slate-400'}`}
@@ -823,45 +950,22 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                   <Tv className="w-3.5 h-3.5 text-white/90" />
                   <span>🖥️ PANTALLA COMPLETA</span>
                 </button>
-                {gatewaySelection === "cedulacion" ? (
-                  <>
-                    <button
-                      onClick={() => launchFullscreenForChannel(TicketPhase.CAJA)}
-                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
-                      title="📺 PANTALLA COMPLETA: CAJA (Cedulación)"
-                    >
-                      <Tv className="w-3 h-3 text-white" />
-                      <span>CAJA</span>
-                    </button>
-                    <button
-                      onClick={() => launchFullscreenForChannel(TicketPhase.TRIADA)}
-                      className="px-2.5 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
-                      title="📺 PANTALLA COMPLETA: TRÍADA / FOTOGRAFÍA"
-                    >
-                      <Tv className="w-3 h-3 text-slate-950" />
-                      <span>TRÍADA</span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => launchFullscreenForChannel("OR")}
-                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
-                      title="📺 PANTALLA CUBÍCULOS OR (Oficial de Recepción)"
-                    >
-                      <Tv className="w-3 h-3 text-white" />
-                      <span>OR</span>
-                    </button>
-                    <button
-                      onClick={() => launchFullscreenForChannel("OHV")}
-                      className="px-2.5 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
-                      title="📺 PANTALLA CUBÍCULOS OHV (Oficial de Hechos Vitales)"
-                    >
-                      <Tv className="w-3 h-3 text-slate-950" />
-                      <span>OHV</span>
-                    </button>
-                  </>
-                )}
+                <button
+                  onClick={() => launchFullscreenForChannel(TicketPhase.CAJA)}
+                  className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-blue-500/20 active:scale-95"
+                  title="📺 PANTALLA COMPLETA: CAJA (Cedulación)"
+                >
+                  <Tv className="w-3 h-3 text-white" />
+                  <span>CAJA</span>
+                </button>
+                <button
+                  onClick={() => launchFullscreenForChannel(TicketPhase.TRIADA)}
+                  className="px-2.5 py-1.5 bg-[#00aaff] hover:bg-sky-500 text-slate-950 rounded-lg font-black text-[9px] uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer border border-sky-400/20 active:scale-95"
+                  title="📺 PANTALLA COMPLETA: TRÍADA / FOTOGRAFÍA"
+                >
+                  <Tv className="w-3 h-3 text-slate-950" />
+                  <span>TRÍADA</span>
+                </button>
               </div>
 
               {/* Smart Digital Clock Badge styled matching the Photo */}
@@ -997,6 +1101,31 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               );
             })
           )}
+
+          {/* Quick Direct Link Copy Button */}
+          <button
+            onClick={handleCopyTvUrl}
+            className={`ml-auto px-3.5 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 border transition-all cursor-pointer shadow-sm ${
+              copiedTvUrl
+                ? "bg-emerald-600 text-white border-emerald-500 shadow-emerald-900/40"
+                : isTriadaChannel
+                  ? "bg-white text-[#003087] border-blue-200 hover:bg-blue-50"
+                  : "bg-blue-600/30 text-sky-200 border-blue-400/30 hover:bg-blue-600/50"
+            }`}
+            title="Copiar URL directa de este canal para Smart TV o navegador"
+          >
+            {copiedTvUrl ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-white" />
+                <span>¡URL Copiada!</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5 text-amber-400" />
+                <span>Copiar URL de este TV</span>
+              </>
+            )}
+          </button>
         </div>
 
         {/* --- DEDICATED VIEW MODE SELECTOR (ESTRUCTURA DE PANTALLA) --- */}
@@ -1227,11 +1356,13 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 </div>
 
                 {/* Dismiss / Clear Call indicator (for manual dismiss) */}
-                {displayedActiveCall && (
+                {primaryCallToDisplay && (
                   <button
                     id="btn-dismiss-active-call"
                     onClick={() => {
-                      onClearActiveCall();
+                      if (onClearActiveCall) {
+                        onClearActiveCall();
+                      }
                       setLatestCall(null);
                     }}
                     className="absolute top-4 right-4 text-sky-200 hover:text-white p-2 text-xs rounded-full transition-colors cursor-pointer bg-white/10 border border-white/10 hover:bg-white/20"
@@ -1305,7 +1436,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
              <div className={`space-y-4 animate-fade-in ${layoutFocus === "both" ? "lg:col-span-7" : ""}`}>
                
                {/* Sección Destacada: Últimos Turnos Llamados */}
-               {callHistory.length > 0 && (
+               {matchingCallHistory.length > 0 && (
                  <div className={`p-3.5 rounded-2xl shadow-md border ${
                    isTriadaChannel
                      ? "bg-white border-slate-200"
@@ -1323,12 +1454,12 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                      <span className={`text-[10px] font-mono font-bold uppercase ${
                        isTriadaChannel ? "text-slate-500" : "text-sky-300/70"
                      }`}>
-                       {callHistory.length} EN HISTORIAL RECIENTE
+                       {matchingCallHistory.length} EN HISTORIAL RECIENTE
                      </span>
                    </div>
 
                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-                     {callHistory.slice(0, 3).map((item, idx) => (
+                     {matchingCallHistory.slice(0, 3).map((item, idx) => (
                        <div
                          key={idx}
                          className={`p-3 rounded-xl flex flex-col justify-between shadow-sm border ${

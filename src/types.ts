@@ -236,10 +236,12 @@ export const OFFICES_CONFIG: Office[] = [
 
 export enum UserRole {
   SUPERADMIN = "SUPERADMIN",
-  SUPERVISOR = "SUPERVISOR",      // Administrador / Supervisor por Regional
-  AGENT_CAJA = "AGENT_CAJA",      // Consola de Agente - Caja por Regional
-  AGENT_TRIADA = "AGENT_TRIADA",  // Consola de Agente - Tríada por Regional
-  AGENT_REGISTRO_CIVIL = "AGENT_REGISTRO_CIVIL" // Consola de Agente - Registro Civil por Regional
+  SUPERVISOR = "SUPERVISOR",          // Administrador / Supervisor por Regional (Citas y Tickets)
+  AGENT_CAJA = "AGENT_CAJA",          // Consola de Agente - Caja por Regional (Tickets en vivo)
+  AGENT_TRIADA = "AGENT_TRIADA",      // Consola de Agente - Tríada por Regional (Tickets en vivo)
+  AGENT_REGISTRO_CIVIL = "AGENT_REGISTRO_CIVIL", // Consola de Agente - Registro Civil por Regional
+  GESTOR_CITAS = "GESTOR_CITAS",      // Gestor de Citas Previas e Inscripción
+  GESTOR_EXTRANJERIA = "GESTOR_EXTRANJERIA" // Gestor de Extranjería / Inmigración
 }
 
 export interface SystemUser {
@@ -304,6 +306,7 @@ export interface Sucursal {
   direccion: string;
   telefono: string;
   horario: string;
+  acceptsNationalAppointments?: boolean;
 }
 
 export interface Cita {
@@ -321,6 +324,9 @@ export interface Cita {
   creadoPor?: string;
   ticketTurnoCode?: string;
   llegadaConfirmadaAuto?: boolean;
+  numeroCitaDia?: number; // Secuencia de cita del día (1 a 56 en extranjería)
+  resolucion?: string;
+  nombre?: string;
 }
 
 export interface ExtranjeriaRecord {
@@ -329,9 +335,13 @@ export interface ExtranjeriaRecord {
   nacionalidad?: string;
   elegible: boolean;
   motivo: string;
+  fecha?: string;
+  hora?: string;
+  numeroCitaDia?: number;
+  resolucion?: string;
 }
 
-export type AdminRole = 'sencillo' | 'super' | 'extranjeria' | 'pasado_edad' | 'extranjeria_supervisor' | 'extranjeria_atencion' | 'extranjeria_cubiculo' | 'pasado_edad_supervisor' | 'pasado_edad_admin' | 'agent_caja' | 'agent_triada' | 'agent_registro_civil';
+export type AdminRole = 'sencillo' | 'super' | 'extranjeria' | 'pasado_edad' | 'extranjeria_supervisor' | 'extranjeria_atencion' | 'extranjeria_cubiculo' | 'pasado_edad_supervisor' | 'pasado_edad_admin' | 'agent_caja' | 'agent_triada' | 'agent_registro_civil' | 'triada_supervisor' | 'caja_supervisor';
 
 export interface AdminUser {
   username: string;

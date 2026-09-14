@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Sucursal } from '../types';
 import { SUCURSALES_TE, HORAS_DISPONIBLES } from '../data';
-import { ArrowLeft, ArrowRight, MapPin, Calendar, Clock, Sparkles, ChevronLeft, ChevronRight, Info } from 'lucide-react';
+import { ArrowLeft, ArrowRight, MapPin, Calendar, Clock, Sparkles, ChevronLeft, ChevronRight, Info, ShieldAlert } from 'lucide-react';
 
 interface AgendamientoCitaProps {
   selectedSucursalId: string | null;
@@ -70,6 +70,38 @@ function generateExtranjeriaSlots(inicio: string, fin: string, intervaloMinutos:
   return slots;
 }
 
+const OFFICIAL_PANAMA_HOLIDAYS = [
+  // 2026
+  "2026-01-01", // Año Nuevo
+  "2026-01-09", // Día de los Mártires
+  "2026-02-17", // Martes de Carnaval
+  "2026-04-03", // Viernes Santo
+  "2026-05-01", // Día del Trabajo
+  "2026-11-03", // Separación de Panamá de Colombia
+  "2026-11-05", // Día de Colón
+  "2026-11-10", // Grito en La Villa de Los Santos
+  "2026-11-28", // Independencia de Panamá de España
+  "2026-12-08", // Día de las Madres
+  "2026-12-24", // Víspera de Navidad (Feriado Especial)
+  "2026-12-25", // Navidad
+  "2026-12-31", // Fin de Año (Feriado Especial)
+
+  // 2027
+  "2027-01-01", // Año Nuevo
+  "2027-01-09", // Día de los Mártires
+  "2027-02-09", // Martes de Carnaval
+  "2027-03-26", // Viernes Santo
+  "2027-05-01", // Día del Trabajo
+  "2027-11-03", // Separación de Panamá de Colombia
+  "2027-11-05", // Día de Colón
+  "2027-11-10", // Grito en La Villa de Los Santos
+  "2027-11-28", // Independencia de Panamá de España
+  "2027-12-08", // Día de las Madres
+  "2027-12-24", // Víspera de Navidad (Feriado Especial)
+  "2027-12-25", // Navidad
+  "2027-12-31", // Fin de Año (Feriado Especial)
+];
+
 export default function AgendamientoCita({
   selectedSucursalId,
   selectedFecha,
@@ -85,6 +117,26 @@ export default function AgendamientoCita({
   }, [selectedCategoria, selectedSubServicioId]);
 
   const isPastAgeTrámiteSelected = selectedSubServicioId === 'ced_pasados_edad';
+
+  // Load custom specific holidays configured for the offices
+  const customHolidays = useMemo(() => {
+    try {
+      const saved = localStorage.getItem("ticket_system_office_schedules_v1");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const list: string[] = [];
+        Object.keys(parsed).forEach(key => {
+          if (parsed[key] && Array.isArray(parsed[key].specificHolidays)) {
+            list.push(...parsed[key].specificHolidays);
+          }
+        });
+        return Array.from(new Set(list));
+      }
+    } catch (e) {
+      console.warn("Could not load custom office schedules in AgendamientoCita", e);
+    }
+    return [];
+  }, []);
 
   // Load custom settings from localStorage or fallback to standard properties
   const [extranjeriaConfig, setExtranjeriaConfig] = useState(() => {
@@ -183,49 +235,131 @@ export default function AgendamientoCita({
   }, []);
 
   const [serverBookings, setServerBookings] = useState<any[]>([]);
+  const [serverOccupiedInfo, setServerOccupiedInfo] = useState<{
+    hasCsvDec30: boolean;
+    csvDates: string[];
+    csvCount: number;
+    blockedPeriod: any;
+  }>({ hasCsvDec30: false, csvDates: [], csvCount: 0, blockedPeriod: null });
 
   React.useEffect(() => {
-    fetch('/api/public/occupied-slots')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.success && Array.isArray(data.appointments)) {
-          setServerBookings(data.appointments);
-        }
-      })
-      .catch((err) => console.warn("Failed to retrieve server appointments:", err));
+    const fetchSlots = () => {
+      fetch('/api/public/occupied-slots')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data && data.success) {
+            if (Array.isArray(data.appointments)) {
+              setServerBookings(data.appointments);
+            }
+            setServerOccupiedInfo({
+              hasCsvDec30: Boolean(data.hasCsvDec30),
+              csvDates: Array.isArray(data.csvDates) ? data.csvDates : [],
+              csvCount: data.csvCount || 0,
+              blockedPeriod: data.blockedPeriod || null
+            });
+          }
+        })
+        .catch((err) => console.warn("Failed to retrieve server appointments:", err));
+    };
+
+    fetchSlots();
+    window.addEventListener('citas_updated', fetchSlots);
+    window.addEventListener('appointments_updated', fetchSlots);
+    return () => {
+      window.removeEventListener('citas_updated', fetchSlots);
+      window.removeEventListener('appointments_updated', fetchSlots);
+    };
   }, []);
 
   const mergedBookings = useMemo(() => {
     const map = new Map<string, any>();
     // Add local bookings
-    activeBookings.forEach((b) => {
-      if (b.id) map.set(b.id, b);
+    activeBookings.forEach((b, idx) => {
+      const key = b.id || `local-${b.fecha}-${b.hora}-${idx}`;
+      map.set(key, {
+        ...b,
+        id: key,
+        isCsv: Boolean(b.isCsv) || String(b.id || '').includes('CSV') || String(b.codigoTransaccion || '').includes('CSV') || String(b.creadoPor || '').toLowerCase().includes('csv')
+      });
     });
-    // Add server bookings (overwriting if same ID)
-    serverBookings.forEach((sb) => {
+    // Add server bookings
+    serverBookings.forEach((sb, idx) => {
+      const key = sb.id || `server-${sb.fecha}-${sb.hora}-${idx}`;
       const mapped = {
-        id: sb.id,
+        id: key,
         fecha: sb.fecha,
         hora: sb.hora,
         subServicioId: sb.subServicioId || (sb.subServicioNombre?.toLowerCase().includes('pasado') || sb.subServicioNombre?.toLowerCase().includes('tardía') ? 'ced_pasados_edad' : undefined),
-        servicioCategoria: sb.categoriaNombre,
-        estado: sb.estado
+        servicioCategoria: sb.servicioCategoria || sb.categoriaNombre || (sb.isCsv ? 'extranjeria' : undefined),
+        categoriaNombre: sb.categoriaNombre,
+        estado: sb.estado || 'confirmada',
+        creadoPor: sb.creadoPor,
+        codigoTransaccion: sb.codigoTransaccion,
+        isCsv: Boolean(sb.isCsv) || String(key).includes('CSV') || String(sb.codigoTransaccion || '').includes('CSV') || String(sb.creadoPor || '').toLowerCase().includes('csv')
       };
-      map.set(sb.id, mapped);
+      map.set(key, mapped);
     });
     return Array.from(map.values());
   }, [activeBookings, serverBookings]);
+
+  // Check if CSV appointments exist for Extranjería covering up to Dec 30 (Sep to Dec 30, 2026)
+  const hasExtranjeriaCsvLoaded = useMemo(() => {
+    if (serverOccupiedInfo.hasCsvDec30) return true;
+    return mergedBookings.some((c) => {
+      const isExt = c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_');
+      const isCsv = c.isCsv || 
+                    String(c.id || '').includes('CSV') || 
+                    String(c.codigoTransaccion || '').includes('CSV') || 
+                    String(c.creadoPor || '').toLowerCase().includes('csv') || 
+                    String(c.creadoPor || '').toLowerCase().includes('importaci');
+      return isExt && isCsv && c.fecha >= '2026-09-01' && c.fecha <= '2026-12-30';
+    });
+  }, [serverOccupiedInfo, mergedBookings]);
+
+  // Set of specific dates that have CSV appointments
+  const datesWithExtranjeriaCsv = useMemo(() => {
+    const set = new Set<string>(serverOccupiedInfo.csvDates || []);
+    mergedBookings.forEach((c) => {
+      const isExt = c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_');
+      const isCsv = c.isCsv || 
+                    String(c.id || '').includes('CSV') || 
+                    String(c.codigoTransaccion || '').includes('CSV') || 
+                    String(c.creadoPor || '').toLowerCase().includes('csv') || 
+                    String(c.creadoPor || '').toLowerCase().includes('importaci');
+      if (isExt && isCsv && c.fecha) {
+        set.add(c.fecha);
+      }
+    });
+    return set;
+  }, [serverOccupiedInfo, mergedBookings]);
 
   const [selectedProvincia, setSelectedProvincia] = useState<string>(isExtranjeria ? 'Panamá' : 'Todos');
   const [sucursalId, setSucursalId] = useState<string>(isExtranjeria ? 'anc_main' : (selectedSucursalId || ''));
   const [fecha, setFecha] = useState<string>(selectedFecha || '');
   const [hora, setHora] = useState<string>(selectedHora || '');
 
+  // Is selected date blocked by CSV import?
+  const isSelectedDateBlocked = useMemo(() => {
+    if (!fecha || !isExtranjeria) return false;
+    if (datesWithExtranjeriaCsv.has(fecha)) return true;
+    if (hasExtranjeriaCsvLoaded && fecha >= '2026-09-01' && fecha <= '2026-12-30') return true;
+    return false;
+  }, [fecha, isExtranjeria, datesWithExtranjeriaCsv, hasExtranjeriaCsvLoaded]);
+
   const countPasadosEdadForSelectedDay = useMemo(() => {
     if (!fecha) return 0;
     return mergedBookings.filter((c) => 
       c.fecha === fecha && 
       (c.subServicioId === 'ced_pasados_edad' || c.subServicioNombre?.toLowerCase().includes('pasado') || c.subServicioNombre?.toLowerCase().includes('tardía')) &&
+      c.estado !== 'cancelada'
+    ).length;
+  }, [fecha, mergedBookings]);
+
+  const countExtranjeriaForSelectedDay = useMemo(() => {
+    if (!fecha) return 0;
+    return mergedBookings.filter((c) => 
+      c.fecha === fecha && 
+      (c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_')) &&
       c.estado !== 'cancelada'
     ).length;
   }, [fecha, mergedBookings]);
@@ -240,22 +374,24 @@ export default function AgendamientoCita({
 
   // Extract unique provinces
   const provincias = useMemo(() => {
+    const activeSucursales = SUCURSALES_TE.filter((s) => s.acceptsNationalAppointments !== false);
     if (isExtranjeria || isPastAgeTrámiteSelected) {
       return ['Panamá'];
     }
-    const list = SUCURSALES_TE.map((s) => s.provincia);
+    const list = activeSucursales.map((s) => s.provincia);
     return ['Todos', ...Array.from(new Set(list))];
   }, [isExtranjeria, isPastAgeTrámiteSelected]);
 
   // Filter sucursales based on selected province
   const filteredSucursales = useMemo(() => {
+    const activeSucursales = SUCURSALES_TE.filter((s) => s.acceptsNationalAppointments !== false);
     if (isExtranjeria || isPastAgeTrámiteSelected) {
-      return SUCURSALES_TE.filter((s) => s.id === 'anc_main');
+      return activeSucursales.filter((s) => s.id === 'anc_main');
     }
     if (selectedProvincia === 'Todos') {
-      return SUCURSALES_TE;
+      return activeSucursales;
     }
-    return SUCURSALES_TE.filter((s) => s.provincia === selectedProvincia);
+    return activeSucursales.filter((s) => s.provincia === selectedProvincia);
   }, [selectedProvincia, isExtranjeria, isPastAgeTrámiteSelected]);
 
   const selectedSucursal = useMemo(() => {
@@ -279,6 +415,14 @@ export default function AgendamientoCita({
     return new Date().getFullYear();
   });
 
+  // Auto-jump to 2027 if Extranjería is selected and 2026 is fully blocked by CSV
+  React.useEffect(() => {
+    if (isExtranjeria && hasExtranjeriaCsvLoaded && currentYear < 2027) {
+      setCurrentMonth(0); // January
+      setCurrentYear(2027);
+    }
+  }, [isExtranjeria, hasExtranjeriaCsvLoaded, currentYear]);
+
   const MONTH_NAMES_ES = [
     'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
     'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
@@ -296,9 +440,11 @@ export default function AgendamientoCita({
       isPast: boolean; 
       isValidWorkingDay: boolean; 
       isFull: boolean;
+      isBlockedByCsv?: boolean;
       bookedCount: number;
       isToday: boolean;
       isEmptyCell: boolean;
+      isHoliday?: boolean;
     }[] = [];
 
     // Empty cells at the start of the month
@@ -310,6 +456,7 @@ export default function AgendamientoCita({
         isPast: true,
         isValidWorkingDay: false,
         isFull: false,
+        isBlockedByCsv: false,
         bookedCount: 0,
         isToday: false,
         isEmptyCell: true
@@ -337,8 +484,15 @@ export default function AgendamientoCita({
 
       // Verify sucursal working day
       const dayOfWeek = targetDate.getDay();
+      const isOfficialHoliday = OFFICIAL_PANAMA_HOLIDAYS.includes(dateString);
+      const isCustomHoliday = customHolidays.includes(dateString);
+      const isHoliday = isOfficialHoliday || isCustomHoliday;
+
       let isValidWorkingDay = false;
-      if (isPastAgeTrámiteSelected) {
+
+      if (isHoliday) {
+        isValidWorkingDay = false;
+      } else if (isPastAgeTrámiteSelected) {
         // Only lunes a jueves (Monday to Thursday) are permitted
         if (dayOfWeek >= 1 && dayOfWeek <= 4) {
           isValidWorkingDay = true;
@@ -370,16 +524,26 @@ export default function AgendamientoCita({
       // Counting bookings
       let isFull = false;
       let bookedCount = 0;
+      let isBlockedByCsv = false;
 
       if (isExtranjeria) {
-        // Daily quota limit for Extranjería = 20
+        // Daily quota limit for Extranjería = 56 citas por día (28 intervalos x 2 cupos)
         bookedCount = mergedBookings.filter((c) => 
           c.fecha === dateString && 
           (c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_')) &&
           c.estado !== 'cancelada'
         ).length;
         
-        if (bookedCount >= 20) {
+        if (bookedCount >= 56) {
+          isFull = true;
+        }
+
+        // Enforce user instruction: If CSV appointments were uploaded up to Dec 30 (Sep to Dec 30), block appointments
+        if (hasExtranjeriaCsvLoaded && dateString >= '2026-09-01' && dateString <= '2026-12-30') {
+          isBlockedByCsv = true;
+          isFull = true;
+        } else if (datesWithExtranjeriaCsv.has(dateString)) {
+          isBlockedByCsv = true;
           isFull = true;
         }
       } else if (isPastAgeTrámiteSelected) {
@@ -401,14 +565,16 @@ export default function AgendamientoCita({
         isPast,
         isValidWorkingDay,
         isFull,
+        isBlockedByCsv,
         bookedCount,
         isToday,
-        isEmptyCell: false
+        isEmptyCell: false,
+        isHoliday
       });
     }
 
     return cells;
-  }, [currentMonth, currentYear, selectedSucursal, isExtranjeria, isPastAgeTrámiteSelected, mergedBookings, tardiaConfig, extranjeriaConfig]);
+  }, [currentMonth, currentYear, selectedSucursal, isExtranjeria, isPastAgeTrámiteSelected, mergedBookings, tardiaConfig, extranjeriaConfig, hasExtranjeriaCsvLoaded, datesWithExtranjeriaCsv, customHolidays]);
 
   const handlePrevMonth = () => {
     const sysDate = new Date();
@@ -481,6 +647,15 @@ export default function AgendamientoCita({
   };
 
   const handleBookingSubmit = () => {
+    if (isSelectedDateBlocked) {
+      alert("No es posible programar una cita para esta fecha: Las citas para el periodo de septiembre a diciembre 30 de 2026 ya han sido asignadas en su totalidad mediante importación de listados oficiales (CSV).");
+      return;
+    }
+    const isHoliday = OFFICIAL_PANAMA_HOLIDAYS.includes(fecha) || customHolidays.includes(fecha);
+    if (isHoliday) {
+      alert("No es posible programar una cita en un día feriado o no laborable.");
+      return;
+    }
     if (sucursalId && fecha && hora) {
       onSubmit(sucursalId, fecha, hora);
     }
@@ -603,6 +778,19 @@ export default function AgendamientoCita({
           {selectedSucursal ? (
             <div className="space-y-5">
               
+              {/* Prominent warning if CSV was imported covering Sep - Dec 30 */}
+              {isExtranjeria && hasExtranjeriaCsvLoaded && (
+                <div className="bg-amber-50 border-2 border-amber-500/30 text-amber-950 p-4 rounded-xl shadow-sm space-y-1.5">
+                  <div className="flex items-center gap-2 text-amber-800 font-extrabold text-xs uppercase tracking-wide">
+                    <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Citas disponibles a partir del 4 de enero de 2027</span>
+                  </div>
+                  <p className="text-xs font-semibold text-slate-700 leading-relaxed">
+                    Los cupos de atención presencial para trámites de Extranjería para el periodo actual han sido asignados en su totalidad. El agendamiento en línea se encuentra disponible únicamente a partir del <strong>4 de enero de 2027</strong>.
+                  </p>
+                </div>
+              )}
+
               {/* DATE PICKING (ANNUAL CALENDAR VIEW) */}
               <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200">
@@ -614,7 +802,7 @@ export default function AgendamientoCita({
                     </label>
                     <p className="text-[11px] text-slate-500 font-medium">
                       {isExtranjeria 
-                        ? 'Citas de Extranjería limitadas a un cupo diario máximo de 20 personas.' 
+                        ? 'Citas de Extranjería reguladas a un cupo estricto de 56 citas por día (secuencia N° 1 a 56).' 
                         : 'Seleccione un día laborable del año para agendar su cita.'}
                     </p>
                   </div>
@@ -662,19 +850,41 @@ export default function AgendamientoCita({
                     const isSelected = fecha === cell.dateString;
                     const isDisabled = cell.isPast || !cell.isValidWorkingDay;
 
-                    // If full, the day disappears as an option (renders empty / faded empty with alert)
-                    if (cell.isFull) {
+                    // If it is a holiday, show as beautifully disabled and labeled "Feriado"
+                    if (cell.isHoliday) {
                       return (
                         <div 
                           key={cell.dateString} 
-                          title="Fila de cupos agotada para este día (Desaparecido para agendar)" 
-                          className="h-11 sm:h-12 border border-dashed border-red-200 rounded bg-red-10 border-red-300 bg-red-50/50 flex flex-col items-center justify-center opacity-40 select-none relative overflow-hidden"
+                          title="Feriado Oficial de Panamá o Día libre decretado" 
+                          className="h-11 sm:h-12 border border-red-200 bg-red-50/70 text-red-700 rounded flex flex-col items-center justify-center select-none relative overflow-hidden cursor-not-allowed"
                         >
-                          <span className="text-[10px] font-mono font-black text-red-500 strikethrough line-through">
+                          <span className="text-[12px] font-bold text-red-800">
                             {cell.dayNumber}
                           </span>
-                          <span className="text-[7.5px] font-black text-red-600 uppercase tracking-tighter leading-none mt-0.5 scale-90">
-                            Agotado
+                          <span className="text-[6.5px] sm:text-[7px] font-black uppercase tracking-tighter leading-none mt-0.5 text-center px-0.5 text-red-500">
+                            Feriado
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    // If blocked by CSV or full, the day is disabled and shows the appropriate status
+                    if (cell.isBlockedByCsv || cell.isFull) {
+                      return (
+                        <div 
+                          key={cell.dateString} 
+                          title={cell.isBlockedByCsv ? "Periodo bloqueado: Citas asignadas por importación oficial (CSV)" : "Fila de cupos agotada para este día"} 
+                          className={`h-11 sm:h-12 border border-dashed rounded flex flex-col items-center justify-center select-none relative overflow-hidden cursor-not-allowed ${
+                            cell.isBlockedByCsv 
+                              ? 'border-red-400 bg-red-100/70 text-red-800' 
+                              : 'border-red-300 bg-red-50/50 opacity-40 text-red-600'
+                          }`}
+                        >
+                          <span className="text-[10px] font-mono font-black line-through">
+                            {cell.dayNumber}
+                          </span>
+                          <span className="text-[6.5px] sm:text-[7px] font-black uppercase tracking-tighter leading-none mt-0.5 text-center px-0.5">
+                            {cell.isBlockedByCsv ? "Bloqueado CSV" : "Agotado"}
                           </span>
                         </div>
                       );
@@ -707,7 +917,7 @@ export default function AgendamientoCita({
                           <span className="text-[7.5px] font-bold uppercase tracking-tight scale-90">
                             {isExtranjeria ? (
                               <span className="text-slate-500 font-mono">
-                                {20 - cell.bookedCount} L
+                                {56 - cell.bookedCount} L
                               </span>
                             ) : isPastAgeTrámiteSelected ? (
                               <span className="text-blue-600 font-mono">
@@ -766,7 +976,42 @@ export default function AgendamientoCita({
                     </div>
                   )}
 
-                  {isPastAgeTrámiteSelected && countPasadosEdadForSelectedDay >= tardiaConfig.capacityTotal ? (
+                  {isExtranjeria && (
+                    <div className="bg-amber-50/70 border border-amber-300 text-amber-950 p-3.5 rounded text-xs leading-relaxed space-y-1">
+                      <div className="flex items-center justify-between">
+                        <strong className="text-amber-900 font-black uppercase tracking-wide flex items-center gap-1">
+                          🏛️ Regulación de Citas de Extranjería (56 Citas Máximas por Día)
+                        </strong>
+                        <span className="bg-amber-500 text-slate-950 px-2 py-0.5 rounded font-mono font-black text-[10px]">
+                          {countExtranjeriaForSelectedDay} / 56 Citas
+                        </span>
+                      </div>
+                      <p className="font-medium text-slate-700">
+                        La Dirección Nacional de Cedulación establece una capacidad estricta de <strong>56 citas diarias</strong>. El sistema asigna automáticamente el orden secuencial de atención: <strong>Cita N° {Math.min(56, countExtranjeriaForSelectedDay + 1)} de 56</strong> para esta jornada.
+                      </p>
+                    </div>
+                  )}
+
+                  {isSelectedDateBlocked ? (
+                    <div className="bg-red-50 border-2 border-red-400 text-red-950 p-4 rounded-xl text-center space-y-2 shadow-sm">
+                      <p className="font-extrabold text-sm uppercase text-red-700 tracking-wide flex items-center justify-center gap-1.5">
+                        <ShieldAlert className="w-5 h-5 text-red-600 shrink-0" />
+                        <span>Fecha Bloqueada por Carga Oficial CSV</span>
+                      </p>
+                      <p className="text-xs font-semibold text-slate-700 max-w-md mx-auto leading-relaxed">
+                        La fecha seleccionada (<strong>{formatFechaEs(fecha)}</strong>) corresponde al periodo de Septiembre a Diciembre 30 de 2026, el cual fue asignado en su totalidad mediante importación de listados oficiales en CSV. No se admiten nuevas citas en línea para este periodo.
+                      </p>
+                    </div>
+                  ) : isExtranjeria && countExtranjeriaForSelectedDay >= 56 ? (
+                    <div className="bg-red-50 border border-red-200 text-red-950 p-4 rounded text-center space-y-2.5 shadow-sm">
+                      <p className="font-extrabold text-sm uppercase text-red-700 tracking-wide">
+                        🚫 Límite Diario de Extranjería Agotado (56/56)
+                      </p>
+                      <p className="text-xs font-semibold text-slate-605 max-w-sm mx-auto leading-relaxed">
+                        Este día ya alcanzó el límite máximo regulatorio de **56 citas de Extranjería**. Por favor, seleccione un día diferente en el calendario.
+                      </p>
+                    </div>
+                  ) : isPastAgeTrámiteSelected && countPasadosEdadForSelectedDay >= tardiaConfig.capacityTotal ? (
                     <div className="bg-red-50 border border-red-200 text-red-950 p-4 rounded text-center space-y-2.5 shadow-sm">
                       <p className="font-extrabold text-sm uppercase text-red-700 tracking-wide">
                         🚫 Límite de Cupos Agotado
@@ -944,14 +1189,14 @@ export default function AgendamientoCita({
         <button
           type="button"
           onClick={handleBookingSubmit}
-          disabled={!sucursalId || !fecha || !hora}
+          disabled={!sucursalId || !fecha || !hora || isSelectedDateBlocked}
           className={`w-full sm:w-auto h-12 font-bold px-8 rounded shadow-lg uppercase tracking-wider text-xs transition duration-150 flex items-center justify-center gap-2 ${
-            sucursalId && fecha && hora
+            sucursalId && fecha && hora && !isSelectedDateBlocked
               ? 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer shadow-blue-100'
               : 'bg-slate-200 text-slate-400 cursor-not-allowed'
           }`}
         >
-          <span>Agendar Cita Oficial</span>
+          <span>{isSelectedDateBlocked ? 'Periodo Bloqueado (CSV)' : 'Agendar Cita Oficial'}</span>
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>

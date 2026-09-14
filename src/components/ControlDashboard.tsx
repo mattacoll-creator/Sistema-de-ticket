@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Ticket, Cubicle, TicketStatus, SERVICES_CONFIG, ServiceType, OFFICES_CONFIG } from "../types";
+import { Ticket, Cubicle, TicketStatus, SERVICES_CONFIG, ServiceType, OFFICES_CONFIG, TicketPhase } from "../types";
 import { 
   Settings, 
   Trash2, 
@@ -38,7 +38,8 @@ import {
   Plus,
   Trash,
   MapPin,
-  Building2
+  Building2,
+  BarChart3
 } from "lucide-react";
 import { generatePDFReport } from "../utils/reportGenerator";
 import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES } from "./WelcomeKiosk";
@@ -72,7 +73,7 @@ export default function ControlDashboard({
   onSetSimulationSpeed,
   onCreateRandomTicket,
   onResetSystem,
-  isAutoAssignActive = true,
+  isAutoAssignActive = false,
   onToggleAutoAssign,
   onPurgeOldTickets,
   currentOfficeId = "OFF-1",
@@ -222,10 +223,89 @@ export default function ControlDashboard({
       ratedTicketsCount++;
     });
     
-    const avgWait = ratedTicketsCount > 0 ? Math.round(totalWaitMins / ratedTicketsCount) : 8;
-    const avgService = ratedTicketsCount > 0 ? Math.round(totalServiceMins / ratedTicketsCount) : 11;
+    const avgWait = ratedTicketsCount > 0 ? Math.round(totalWaitMins / ratedTicketsCount) : 0;
+    const avgService = ratedTicketsCount > 0 ? Math.round(totalServiceMins / ratedTicketsCount) : 0;
     return { rcAvgWaitTime: avgWait, rcAvgServiceTime: avgService };
   }, [completedRegistroTickets]);
+
+  const META_MINUTOS = 10;
+
+  const cubicleMetrics = React.useMemo(() => {
+    const filteredCubicles = cubicles.filter(c => {
+      const lowerName = (c.name || "").toLowerCase();
+      const hasCaja = c.supportedPhases?.includes(TicketPhase.CAJA);
+      const hasTriada = c.supportedPhases?.includes(TicketPhase.TRIADA);
+      return (
+        hasCaja ||
+        hasTriada ||
+        lowerName.includes("caja") ||
+        lowerName.includes("triada") ||
+        lowerName.includes("tríada") ||
+        lowerName.includes("fotografía") ||
+        lowerName.includes("fotografia") ||
+        lowerName.includes("foto")
+      );
+    });
+
+    return filteredCubicles.map((c, index) => {
+      const completedTickets = tickets.filter(t => {
+        if (t.status !== TicketStatus.COMPLETED) return false;
+        if (t.assignedCubicleId === c.id) return true;
+        return t.phaseHistory?.some(ph => ph.cubicleId === c.id);
+      });
+
+      let totalMins = 0;
+      let validCount = 0;
+
+      completedTickets.forEach(t => {
+        const ph = t.phaseHistory?.find(p => p.cubicleId === c.id);
+        if (ph && ph.completedAt && ph.timestamp) {
+          const m = (ph.completedAt - ph.timestamp) / 1000 / 60;
+          if (m > 0) {
+            totalMins += m;
+            validCount++;
+          }
+        } else if (t.assignedCubicleId === c.id && t.completedAt) {
+          const start = t.attendedAt || t.calledAt || t.createdAt;
+          const m = (t.completedAt - start) / 1000 / 60;
+          if (m > 0) {
+            totalMins += m;
+            validCount++;
+          }
+        }
+      });
+
+      let avgTime = 0;
+      let hasRealData = false;
+      if (validCount > 0) {
+        avgTime = Math.round((totalMins / validCount) * 10) / 10;
+        hasRealData = true;
+      } else {
+        avgTime = 0;
+      }
+
+      return {
+        id: c.id,
+        name: c.name,
+        agentName: c.agentName || "Sin Agente",
+        status: c.status,
+        avgTime,
+        hasRealData,
+        count: validCount
+      };
+    });
+  }, [cubicles, tickets]);
+
+  const maxTimeForScale = React.useMemo(() => {
+    const times = cubicleMetrics.map(m => m.avgTime);
+    return Math.max(15, ...times) + 2;
+  }, [cubicleMetrics]);
+
+  const bottleneckCubicles = React.useMemo(() => {
+    return cubicleMetrics.filter(m => m.avgTime > META_MINUTOS && m.status !== "OFFLINE");
+  }, [cubicleMetrics]);
+
+  const hasBottlenecks = bottleneckCubicles.length > 0;
 
   return (
     <div id="control-dashboard-panel" className="max-w-6xl mx-auto w-full bg-white border border-slate-250 rounded-2xl p-6 flex flex-col justify-between h-full min-h-[580px] shadow-sm">
@@ -254,85 +334,7 @@ export default function ControlDashboard({
           {/* COLUMNA IZQUIERDA: Configuración y Operación */}
           <div className="space-y-5">
 
-        {/* --- SIMULATED USER GENERATOR ENGINE --- */}
-        <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3.5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h4 className="text-[10px] font-extrabold text-slate-700 uppercase tracking-widest flex items-center gap-1.5">
-              <Zap className="w-4 h-4 text-amber-500 animate-pulse" />
-              Generador de Tráfico
-            </h4>
-            <span className={`px-2 py-0.5 rounded text-[8px] border font-black uppercase transition-colors ${
-              isSimulationActive ? "bg-emerald-50 text-emerald-800 border-emerald-200 shadow-sm" : "bg-slate-200 text-slate-500 border-slate-300"
-            }`}>
-              {isSimulationActive ? "AUTOMÁTICO" : "MANUAL"}
-            </span>
-          </div>
 
-          <p className="text-[10.5px] font-medium text-slate-550 leading-relaxed">
-            Simula la llegada continua de ciudadanos solicitando turnos a los módulos activos.
-          </p>
-
-          <div className="grid grid-cols-2 gap-2">
-            {/* Auto arrivals button toggle */}
-            <button
-              id="btn-toggle-traffic-simulation"
-              onClick={() => onToggleSimulation(!isSimulationActive)}
-              className={`p-3 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm ${
-                isSimulationActive
-                  ? "bg-amber-600 hover:bg-amber-700 text-white shadow-amber-100"
-                  : "bg-[#122e70] hover:bg-[#1d428a] text-white shadow-blue-105"
-              }`}
-            >
-              {isSimulationActive ? (
-                <>
-                  <Pause className="w-3.5 h-3.5" />
-                  PAUSAR FLUJO
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5" />
-                  AUTOMÁTICO
-                </>
-              )}
-            </button>
-
-            {/* Instant Random Single Arrival custom client */}
-            <button
-              id="btn-trigger-single-instant-client"
-              onClick={onCreateRandomTicket}
-              className="p-3 bg-white hover:bg-slate-100 border border-slate-250 text-slate-800 rounded-xl font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-sm"
-            >
-              <UserPlus className="w-3.5 h-3.5 text-[#122e70]" />
-              NUEVO CLIENTE
-            </button>
-          </div>
-
-          {/* Speed settings slider */}
-          {isSimulationActive && (
-            <div className="space-y-2 pt-2.5 border-t border-slate-200">
-              <div className="flex justify-between text-[8px] font-extrabold uppercase text-slate-500 font-mono">
-                <span className="flex items-center gap-1">
-                  <Sliders className="w-3 h-3 text-[#122e70]" /> Frecuencia de Llegada:
-                </span>
-                <span className="text-[#122e70] font-black">Cada {simulationSpeed / 1000}s</span>
-              </div>
-              <input
-                id="range-simulation-frequency"
-                type="range"
-                min={3000}
-                max={30000}
-                step={1000}
-                value={simulationSpeed}
-                onChange={(e) => onSetSimulationSpeed(Number(e.target.value))}
-                className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-700"
-              />
-              <div className="flex justify-between text-[8px] text-slate-400 font-mono font-bold">
-                <span>Rápido (3s)</span>
-                <span>Pausado (30s)</span>
-              </div>
-            </div>
-          )}
-        </div>
 
         {/* --- SYSTEM AUTO-ASSIGN SERVICE --- */}
         <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3 shadow-sm">
@@ -648,6 +650,119 @@ export default function ControlDashboard({
               <span className="text-[8px] uppercase text-slate-405 font-mono font-bold">de {totalCreated}</span>
             </div>
           </div>
+        </div>
+
+        {/* --- EFICIENCIA DE ATENCIÓN VS META (BAR CHART COMPARING TO GOAL) --- */}
+        <div id="cubicle-service-efficiency-chart" className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col space-y-4 text-left">
+          <div className="border-b border-slate-100 pb-3.5 space-y-1">
+            <h3 className="text-xs font-black uppercase tracking-widest text-[#122e70] flex items-center gap-1.5">
+              <BarChart3 className="w-4 h-4 text-amber-500 shrink-0" />
+              Rendimiento de Módulos vs. Meta (10 min)
+            </h3>
+            <p className="text-[9.5px] font-medium text-slate-400 leading-normal font-sans">
+              Tiempo promedio real o proyectado de servicio por cubículo activo comparado con el objetivo regional.
+            </p>
+          </div>
+
+          {/* Compact Legend */}
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-2.5 rounded-xl border border-slate-200/65 text-[8.5px] font-bold text-slate-500 font-mono">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 rounded shadow-xs"></span>
+              <span>≤ {META_MINUTOS} min (Cumple Meta)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 bg-gradient-to-r from-amber-500 to-amber-600 rounded shadow-xs"></span>
+              <span>&gt; {META_MINUTOS} min (Excede Meta)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="border-t-2 border-dashed border-rose-500/80 w-4 inline-block"></span>
+              <span>Meta Establecida</span>
+            </div>
+          </div>
+
+          {/* Bars List */}
+          <div className="space-y-3.5">
+            {cubicleMetrics.map((metric) => {
+              const pctFill = Math.min(100, (metric.avgTime / maxTimeForScale) * 100);
+              const targetPct = (META_MINUTOS / maxTimeForScale) * 100;
+              const isExceeded = metric.avgTime > META_MINUTOS;
+
+              return (
+                <div key={metric.id} className="space-y-1.5">
+                  {/* Cubicle metadata header */}
+                  <div className="flex items-center justify-between text-[10px]">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${metric.status !== "OFFLINE" ? "bg-emerald-500 animate-pulse shadow-[0_0_6px_rgba(16,185,129,0.7)]" : "bg-slate-300"}`} />
+                      <span className="font-extrabold text-slate-800 uppercase tracking-wide">{metric.name}</span>
+                      <span className="text-slate-400 font-bold text-[8.5px]">({metric.agentName})</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span className={`font-mono font-black text-[11px] ${isExceeded ? "text-amber-600" : "text-emerald-600"}`}>
+                        {metric.avgTime} min
+                      </span>
+                      {metric.hasRealData && (
+                        <span className="px-1 py-0.5 bg-blue-50 border border-blue-100 text-[#122e70] font-black uppercase text-[7px] tracking-wide rounded">
+                          Real
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Horizontal Bar Chart Row */}
+                  <div className="relative h-5 w-full bg-slate-100/80 border border-slate-200/60 rounded-xl overflow-hidden shadow-inner flex items-center">
+                    {/* Meta Vertical Dashed Marker Line */}
+                    <div 
+                      className="absolute top-0 bottom-0 border-l-2 border-dashed border-rose-500/75 z-20 pointer-events-none"
+                      style={{ left: `${targetPct}%` }}
+                      title="Meta: 10 min"
+                    />
+
+                    {/* Progress Fill Bar */}
+                    <div 
+                      className={`h-full rounded-l-md transition-all duration-500 ease-out flex items-center justify-end pr-2.5 text-[8.5px] font-black text-white relative z-10 ${
+                        isExceeded 
+                          ? "bg-gradient-to-r from-amber-500 to-amber-600 shadow-[inset_0_-1px_0_rgba(0,0,0,0.1)]" 
+                          : "bg-gradient-to-r from-emerald-500 to-emerald-600 shadow-[inset_0_-1px_0_rgba(0,0,0,0.1)]"
+                      }`}
+                      style={{ width: `${pctFill}%` }}
+                    >
+                      {pctFill > 15 && (
+                        <span className="drop-shadow-xs">{metric.avgTime}m</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Peak Flow Recommendation Box */}
+          {hasBottlenecks ? (
+            <div className="bg-amber-50 border border-amber-250 p-3.5 rounded-xl flex items-start gap-2.5 text-left transition-all">
+              <AlertTriangle className="w-4.5 h-4.5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="block text-[8.5px] font-extrabold text-amber-850 uppercase tracking-wide">
+                  Alerta de Flujo en Horas Pico (Optimización Necesaria)
+                </span>
+                <p className="text-[8.5px] leading-relaxed font-semibold text-amber-700">
+                  Los módulos <strong className="text-amber-900 font-extrabold">{bottleneckCubicles.map(c => c.name).join(", ")}</strong> están excediendo la meta de atención. 
+                  Para mitigar la congestión en horas pico, considere derivar los trámites de Cedulación de estos cubículos o habilitar un agente de apoyo adicional.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-emerald-50 border border-emerald-250 p-3.5 rounded-xl flex items-start gap-2.5 text-left transition-all">
+              <ShieldCheck className="w-4.5 h-4.5 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <span className="block text-[8.5px] font-extrabold text-emerald-850 uppercase tracking-wide">
+                  Flujo de Operación Altamente Optimizado
+                </span>
+                <p className="text-[8.5px] leading-relaxed font-semibold text-emerald-700">
+                  Todos los cubículos activos cumplen con el límite de atención de 10 minutos. La eficiencia de flujo para los ciudadanos en esta sede es excelente.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* --- INSPECTOR DE SEDE REGIONAL --- */}

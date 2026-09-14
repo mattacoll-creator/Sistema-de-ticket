@@ -159,7 +159,7 @@ export function generatePDFReport(
   // 2. GRID OF KPI CARDS (2x2 Grid)
   const cardWidth = (printableWidth - 6) / 2; // ~87mm
   const cardHeight = 24;
-  const gridY = 72;
+  const gridY = Math.max(72, 54 + (splitSummary.length * 4.2) + 6);
 
   // Let's draw 4 cards
   // Card A: Volumen General
@@ -283,19 +283,9 @@ export function generatePDFReport(
     const srvCompleted = srvTickets.filter(t => t.status === TicketStatus.COMPLETED).length;
     const srvPriority = srvTickets.filter(t => t.priority).length;
     
-    // Add mock background padding so table never looks deserted
     let createdCount = srvTickets.length;
     let completedCount = srvCompleted;
     let priorityCount = srvPriority;
-    
-    if (period === "semana" || period === "mes" || isCustomRange || createdCount === 0) {
-      // populate with realistic proportions if empty or weekly/monthly aggregates
-      const multiplier = period === "dia" ? 4 : period === "semana" ? 28 : 120;
-      const baseRatio = srv.id === "CEDULACION" ? 0.35 : srv.id === "REGISTRO" ? 0.25 : srv.id === "ELECTORAL" ? 0.20 : 0.20;
-      createdCount += Math.round(multiplier * baseRatio);
-      completedCount += Math.round(multiplier * baseRatio * 0.9);
-      priorityCount += Math.round(multiplier * baseRatio * 0.15);
-    }
 
     const efficiency = createdCount > 0 ? Math.round((completedCount / createdCount) * 100) : 100;
 
@@ -337,7 +327,8 @@ export function generatePDFReport(
 
     // Name
     doc.setFont("helvetica", "normal");
-    doc.text(row.name, xX + 3, currentY + 4.5);
+    const cleanProcedureName = row.name.length > 32 ? row.name.slice(0, 30) + '...' : row.name;
+    doc.text(cleanProcedureName, xX + 3, currentY + 4.5);
     xX += colWidths[1];
 
     // Estimated Time
@@ -438,7 +429,8 @@ export function generatePDFReport(
 
     // Modules
     doc.setFont("helvetica", "normal");
-    doc.text(row.mods, xX + 3, currentPhaseY + 4.5);
+    const cleanPhaseMods = row.mods.length > 20 ? row.mods.slice(0, 18) + '...' : row.mods;
+    doc.text(cleanPhaseMods, xX + 3, currentPhaseY + 4.5);
     xX += phaseColWidths[1];
 
     // Completed
@@ -490,33 +482,8 @@ export function generatePDFReport(
       tStartX += ticketColWidths[tIdx];
     });
 
-    // Populate actual active plus completed, or generate beautiful sample list if total < 5
+    // Populate actual active plus completed
     let listTickets = [...tickets];
-    if (listTickets.length < 5) {
-      // Add mock samples to fill up page gracefully on empty database
-      const mockNames = [
-        "Alejandro Cárdenas", "Sofía Valenzuela", "Mateo Escobedo", 
-        "Gabriela Palacios", "Roberto Villalobos", "Valeria Montenegro",
-        "Juan Sebastián Gómez", "Patricia Arango"
-      ];
-      mockNames.forEach((name, i) => {
-        const srvKeys: ServiceType[] = [ServiceType.CEDULACION, ServiceType.REGISTRO, ServiceType.ELECTORAL, ServiceType.EXTRANJERIA];
-        const srvType = srvKeys[i % srvKeys.length];
-        const letter = SERVICES_CONFIG[srvType].prefix;
-        listTickets.push({
-          id: `sample-${i}`,
-          numberCode: `${letter}-${102 + i}`,
-          number: 102 + i,
-          name: name,
-          serviceType: srvType,
-          status: TicketStatus.COMPLETED,
-          currentPhase: TicketPhase.TRIADA,
-          phaseHistory: [{ phase: TicketPhase.CAJA, timestamp: Date.now() }],
-          createdAt: Date.now() - (i * 240000),
-          priority: i % 3 === 0
-        });
-      });
-    }
 
     // Render up to 12 tickets to avoid page overflow
     let currentTicketY = p2Y + 9.5;
@@ -549,7 +516,8 @@ export function generatePDFReport(
 
       // Ciudadano
       doc.setFont("helvetica", "normal");
-      doc.text(ticket.name, xX + 3, currentTicketY + 4.2);
+      const cleanTicketName = ticket.name.length > 26 ? ticket.name.slice(0, 24) + '...' : ticket.name;
+      doc.text(cleanTicketName, xX + 3, currentTicketY + 4.2);
       xX += ticketColWidths[1];
 
       // Servicio
@@ -755,7 +723,8 @@ export function generatePDFReport(
 
     // Nombre Agente
     doc.setFont("helvetica", "normal");
-    doc.text(c.agentName, xX + 3, currentAgentY + 4.5);
+    const cleanAgentName = c.agentName.length > 30 ? c.agentName.slice(0, 28) + '...' : c.agentName;
+    doc.text(cleanAgentName, xX + 3, currentAgentY + 4.5);
     xX += agentColWidths[1];
 
     // Estado Actual
@@ -774,13 +743,7 @@ export function generatePDFReport(
     xX += agentColWidths[2];
 
     // Atendidos
-    // Add real + mock factor for historic weekly/monthly logic so numbers make sense
     let displayAttended = c.totalAttendedCount;
-    if (period === "semana") {
-      displayAttended = Math.round(displayAttended + 35 + index * 5);
-    } else if (period === "mes" || isCustomRange) {
-      displayAttended = Math.round(displayAttended + 145 + index * 20);
-    }
     doc.setFont("helvetica", "bold");
     doc.text(String(displayAttended), xX + agentColWidths[3] - 3, currentAgentY + 4.5, { align: "right" });
     xX += agentColWidths[3];
