@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES, CAJA_PROCEDURES, getProcedureName } from "./WelcomeKiosk";
 import { Ticket, Cubicle, TicketStatus, CubicleStatus, SERVICES_CONFIG, ServiceType, TicketPhase, PHASES_CONFIG, SystemUser, UserRole, OFFICES_CONFIG } from "../types";
 import { canCubicleServeProcedure, isPreferentialCubicle, isPreferentialTicket } from "../hooks/useTicketSystem";
+import { getServerTimestamp } from "../utils/serverTime";
 import { 
   UserCheck, 
   HelpCircle, 
@@ -46,9 +47,9 @@ import {
 } from "lucide-react";
 
 const DEFAULT_FALLBACK_USER: SystemUser = {
-  id: "default",
-  username: "mcruz",
-  fullName: "Mateo Cruz (Cajero Sede Ancón)",
+  id: "sin-agente",
+  username: "sin_agente",
+  fullName: "Sin Agente",
   role: UserRole.AGENT_CAJA,
   officeId: "OFF-1"
 };
@@ -143,6 +144,8 @@ export default function AgentConsole({
   });
   
   const [hasSelectedCubicle, setHasSelectedCubicle] = useState<boolean>(() => {
+    const savedSession = localStorage.getItem("agent_console_session");
+    if (!savedSession) return false;
     return localStorage.getItem("agent_has_selected_cubicle") === "true";
   });
 
@@ -272,6 +275,7 @@ export default function AgentConsole({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
   const [ticketSearchQuery, setTicketSearchQuery] = useState("");
+  const deferredTicketSearchQuery = React.useDeferredValue(ticketSearchQuery);
   const [searchStatusFilter, setSearchStatusFilter] = useState<"all" | "missed" | "waiting" | "completed">("all");
   const [isCallingNext, setIsCallingNext] = useState(false);
 
@@ -318,6 +322,36 @@ export default function AgentConsole({
       localStorage.removeItem("agent_console_session");
     }
   }, [sessionUser, setCurrentActiveUserId]);
+
+  // Sincronizar cierre de sesión y FORCE_LOGOUT entre pestañas y por Watchdog en tiempo real
+  React.useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "agent_console_session" && !e.newValue) {
+        setSessionUser(null);
+      }
+    };
+
+    // Escuchar el canal de broadcast para forzar logout si el Watchdog lo gatilló
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel("te_ticket_system_channel");
+      bc.onmessage = (event) => {
+        if (event.data && event.data.type === "FORCE_LOGOUT") {
+          setSessionUser(null);
+        }
+      };
+    } catch (err) {}
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      if (bc) {
+        try {
+          bc.close();
+        } catch (e) {}
+      }
+    };
+  }, []);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -572,7 +606,7 @@ export default function AgentConsole({
 
   // Filtered tickets based on search query (Search by Ticket Code, Name, or Procedure)
   const searchedTickets = React.useMemo(() => {
-    const q = ticketSearchQuery.trim().toLowerCase();
+    const q = deferredTicketSearchQuery.trim().toLowerCase();
     if (!q) return [];
 
     return tickets.filter(t => {
@@ -589,7 +623,7 @@ export default function AgentConsole({
 
       return matchNumber || matchName || matchId || matchProcedure || matchService;
     }).slice(0, 10);
-  }, [tickets, ticketSearchQuery, searchStatusFilter]);
+  }, [tickets, deferredTicketSearchQuery, searchStatusFilter]);
 
   const missedCount = React.useMemo(() => {
     return tickets.filter(t => t.status === TicketStatus.MISSED).length;
@@ -626,9 +660,8 @@ export default function AgentConsole({
       !isAttendingActive
     ) {
       // Despacho ultra-ágil para áreas de alta afluencia:
-      // Micro-demora mínima (40ms - 100ms) para romper colisiones sin demorar el flujo de la fila
-      const cubicleNum = parseInt(currentCubicle.id.replace(/\D/g, "")) || 1;
-      const delay = 40 + ((cubicleNum % 4) * 20); // 40ms, 60ms, 80ms, 100ms
+      // Utilizar una demora con aleatoriedad (jitter) para evitar colisiones y asegurar un balanceo completamente equitativo entre múltiples cubículos activos
+      const delay = 50 + Math.floor(Math.random() * 200);
 
       const targetTicketId = sortedCandidates[0].id;
 
@@ -665,6 +698,50 @@ export default function AgentConsole({
     }
     onUpdateCubicleConfig(currentCubicle.id, currentCubicle.supportedPhases || [], newServices);
   };
+
+  // Limpiar cubículo a OFFLINE en el backend al cerrar la pestaña o navegar fuera
+  React.useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (currentCubicle && hasSelectedCubicle && sessionUser) {
+        try {
+          const payload = JSON.stringify({
+            id: currentCubicle.id,
+            nombre: currentCubicle.name,
+            sucursalId: currentOfficeId,
+            tipoServicio: "cedulacion",
+            agenteActual: null,
+            ticketActualId: null,
+            estado: "OFFLINE"
+          });
+          const blob = new Blob([payload], { type: "application/json" });
+          navigator.sendBeacon("/api/modulos/status", blob);
+        } catch (e) {}
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [currentCubicle, hasSelectedCubicle, sessionUser, currentOfficeId]);
+
+  // Enviar heartbeat del módulo activo cada 10 segundos
+  React.useEffect(() => {
+    if (!hasSelectedCubicle || !activeCubicleId || !sessionUser) return;
+
+    const sendHeartbeat = () => {
+      fetch("/api/modulos/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: activeCubicleId
+        })
+      }).catch(e => console.warn("Error sending heartbeat:", e));
+    };
+
+    // Send immediately
+    sendHeartbeat();
+
+    const interval = setInterval(sendHeartbeat, 10000); // 10s
+    return () => clearInterval(interval);
+  }, [hasSelectedCubicle, activeCubicleId, sessionUser]);
 
   if (!sessionUser) {
     if (gatewaySelection !== "registro_civil" && preLoginRole === null) {
@@ -990,6 +1067,7 @@ export default function AgentConsole({
                     key={c.id}
                     onClick={() => {
                       setActiveCubicleId(c.id);
+                      onChangeStatus(c.id, CubicleStatus.ONLINE_AVAILABLE, loggedInUser.fullName);
                       setHasSelectedCubicle(true);
                     }}
                     className="p-4 bg-white hover:bg-blue-50/30 border border-slate-200 hover:border-blue-400 rounded-xl text-left transition-all duration-200 shadow-xs hover:shadow-md cursor-pointer group"
@@ -1022,6 +1100,7 @@ export default function AgentConsole({
                     key={c.id}
                     onClick={() => {
                       setActiveCubicleId(c.id);
+                      onChangeStatus(c.id, CubicleStatus.ONLINE_AVAILABLE, loggedInUser.fullName);
                       setHasSelectedCubicle(true);
                     }}
                     className="p-4 bg-white hover:bg-cyan-50/30 border border-slate-200 hover:border-cyan-400 rounded-xl text-left transition-all duration-200 shadow-xs hover:shadow-md cursor-pointer group"
@@ -1064,6 +1143,7 @@ export default function AgentConsole({
                       key={c.id}
                       onClick={() => {
                         setActiveCubicleId(c.id);
+                        onChangeStatus(c.id, CubicleStatus.ONLINE_AVAILABLE, loggedInUser.fullName);
                         setHasSelectedCubicle(true);
                       }}
                       className="p-4 bg-white hover:bg-purple-50/30 border border-slate-200 hover:border-purple-400 rounded-xl text-left transition-all duration-200 shadow-xs hover:shadow-md cursor-pointer group"
@@ -1097,6 +1177,7 @@ export default function AgentConsole({
                     key={c.id}
                     onClick={() => {
                       setActiveCubicleId(c.id);
+                      onChangeStatus(c.id, CubicleStatus.ONLINE_AVAILABLE, loggedInUser.fullName);
                       setHasSelectedCubicle(true);
                     }}
                     className="p-4 bg-white hover:bg-slate-50/50 border border-slate-200 hover:border-slate-400 rounded-xl text-left transition-all duration-200 shadow-xs hover:shadow-md cursor-pointer group"
@@ -1156,11 +1237,14 @@ export default function AgentConsole({
             <button
               onClick={() => {
                 if (currentCubicle) {
-                  onChangeStatus(currentCubicle.id, CubicleStatus.OFFLINE);
+                  onChangeStatus(currentCubicle.id, CubicleStatus.OFFLINE, "");
                 }
                 setSessionUser(null);
                 setCurrentActiveUserId("");
                 setHasSelectedCubicle(false);
+                localStorage.removeItem("agent_has_selected_cubicle");
+                localStorage.removeItem("agent_active_cubicle_id");
+                localStorage.removeItem("agent_console_session");
               }}
               className="py-1.5 px-3 bg-rose-50 text-rose-750 hover:bg-rose-100 border border-rose-200 font-black text-[10px] uppercase tracking-wider rounded-lg cursor-pointer transition-colors flex items-center justify-center gap-1.5"
               title="Cerrar la sesión de agente actual"
@@ -1498,9 +1582,9 @@ export default function AgentConsole({
               </div>
               
               <div className="space-y-2">
-                {tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).some(t => Math.round((Date.now() - t.createdAt) / 1000) > 120) ? (
-                  tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).filter(t => Math.round((Date.now() - t.createdAt) / 1000) > 120).map(t => {
-                    const delay = Math.round((Date.now() - t.createdAt) / 1000);
+                {tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).some(t => Math.round((getServerTimestamp() - t.createdAt) / 1000) > 120) ? (
+                  tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).filter(t => Math.round((getServerTimestamp() - t.createdAt) / 1000) > 120).map(t => {
+                    const delay = Math.round((getServerTimestamp() - t.createdAt) / 1000);
                     return (
                       <div key={t.id} className="bg-rose-50 border border-rose-200 p-3 rounded-xl text-xs text-rose-950 flex items-center justify-between">
                         <span>⚠️ <strong>Alerta de Retraso:</strong> El tiquet <strong>{t.numberCode}</strong> de {REGISTRO_PROCEDURES.find(p => p.id === t.procedure)?.name || t.procedure} lleva <strong>{delay}s</strong> en cola.</span>
@@ -1526,7 +1610,7 @@ export default function AgentConsole({
                   </div>
                 ) : null}
 
-                {!(tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).some(t => Math.round((Date.now() - t.createdAt) / 1000) > 120)) && cubicles.filter(c => c.status !== CubicleStatus.OFFLINE).length > 0 && !(cubicles.filter(c => c.status === CubicleStatus.BREAK).length > cubicles.filter(c => c.status !== CubicleStatus.OFFLINE).length / 2) && tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO && t.procedure === "OHV").length < 4 && (
+                {!(tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO).some(t => Math.round((getServerTimestamp() - t.createdAt) / 1000) > 120)) && cubicles.filter(c => c.status !== CubicleStatus.OFFLINE).length > 0 && !(cubicles.filter(c => c.status === CubicleStatus.BREAK).length > cubicles.filter(c => c.status !== CubicleStatus.OFFLINE).length / 2) && tickets.filter(t => t.status === TicketStatus.WAITING && t.serviceType === ServiceType.REGISTRO && t.procedure === "OHV").length < 4 && (
                   <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-xs text-emerald-950 flex items-center justify-between">
                     <span>✓ <strong>Operación Estable:</strong> Todos los flujos de atención se encuentran dentro de los parámetros de servicio normales.</span>
                     <span className="text-[10px] font-black text-emerald-800 uppercase font-mono tracking-widest">SLA CUMPLIDO</span>
@@ -1676,7 +1760,12 @@ export default function AgentConsole({
             <button
               type="button"
               onClick={() => {
+                if (currentCubicle) {
+                  onChangeStatus(currentCubicle.id, CubicleStatus.OFFLINE, "");
+                }
                 setHasSelectedCubicle(false);
+                localStorage.removeItem("agent_has_selected_cubicle");
+                localStorage.removeItem("agent_active_cubicle_id");
               }}
               className="py-2.5 px-4 bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-250 hover:border-slate-350 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm shrink-0"
             >
@@ -1715,42 +1804,46 @@ export default function AgentConsole({
                 </button>
               )}
 
+            {/* AGENT OPERATIONAL STATUS: 2 FORMAS ESTRICTAS (DISPONIBLE Y NO DISPONIBLE) */}
+            <div className="flex items-center p-1 bg-slate-100 border border-slate-250 rounded-2xl gap-1">
               <button
                 id="btn-status-available"
+                type="button"
                 onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.ONLINE_AVAILABLE, loggedInUser.fullName)}
-                className={`px-3.5 py-2.5 rounded-xl border text-[11px] uppercase font-black tracking-widest flex items-center gap-1.5 cursor-pointer transition-all ${
+                className={`px-4 py-2.5 rounded-xl text-xs uppercase font-black tracking-wider flex items-center gap-2 cursor-pointer transition-all ${
                   currentCubicle.status === CubicleStatus.ONLINE_AVAILABLE || currentCubicle.status === CubicleStatus.ATTENDING
-                    ? "bg-emerald-600 text-white border-emerald-700 shadow-sm"
-                    : "bg-white border-slate-250 text-slate-600 hover:bg-slate-100"
+                    ? "bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-white/70"
                 }`}
+                title="Estado DISPONIBLE: La caja está activa y recibe turnos de la fila (manual o automático)"
               >
-                <span className="w-2 h-2 rounded-full bg-white antialiased" />
+                <span className={`w-2.5 h-2.5 rounded-full ${
+                  currentCubicle.status === CubicleStatus.ONLINE_AVAILABLE || currentCubicle.status === CubicleStatus.ATTENDING
+                    ? "bg-white animate-pulse"
+                    : "bg-emerald-500"
+                }`} />
                 <span>DISPONIBLE</span>
               </button>
 
               <button
-                id="btn-status-break"
+                id="btn-status-unavailable"
+                type="button"
                 onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.BREAK, loggedInUser.fullName)}
-                className={`px-3.5 py-2.5 rounded-xl border text-[11px] uppercase font-black tracking-widest flex items-center gap-1.5 cursor-pointer transition-all ${
-                  currentCubicle.status === CubicleStatus.BREAK
-                    ? "bg-amber-500 text-white border-amber-600 shadow-sm"
-                    : "bg-white border-slate-255 text-slate-600 hover:bg-slate-100"
+                className={`px-4 py-2.5 rounded-xl text-xs uppercase font-black tracking-wider flex items-center gap-2 cursor-pointer transition-all ${
+                  currentCubicle.status === CubicleStatus.BREAK || currentCubicle.status === CubicleStatus.OFFLINE
+                    ? "bg-rose-600 text-white shadow-md ring-2 ring-rose-300"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-white/70"
                 }`}
+                title="Estado NO DISPONIBLE: La caja está pausada y NO recibe turnos bajo ninguna circunstancia"
               >
-                <span>RECESO</span>
+                <span className={`w-2.5 h-2.5 rounded-full ${
+                  currentCubicle.status === CubicleStatus.BREAK || currentCubicle.status === CubicleStatus.OFFLINE
+                    ? "bg-white"
+                    : "bg-rose-500"
+                }`} />
+                <span>NO DISPONIBLE</span>
               </button>
-
-              <button
-                id="btn-status-offline"
-                onClick={() => onChangeStatus(currentCubicle.id, CubicleStatus.OFFLINE)}
-                className={`px-3.5 py-2.5 rounded-xl border text-[11px] uppercase font-black tracking-widest flex items-center gap-1.5 cursor-pointer transition-all ${
-                  currentCubicle.status === CubicleStatus.OFFLINE
-                    ? "bg-rose-600 text-white border-rose-700 shadow-sm"
-                    : "bg-white border-slate-250 text-slate-600 hover:bg-slate-105"
-                }`}
-              >
-                <span>LOGOUT</span>
-              </button>
+            </div>
             </div>
           </div>
         </div>
@@ -1812,8 +1905,8 @@ export default function AgentConsole({
           {sortedCandidates.length > 0 ? (
             <div className="space-y-2 max-h-[190px] overflow-y-auto pr-1">
               {sortedCandidates.slice(0, 4).map((item) => {
-                const secondsWaiting = Math.round((Date.now() - item.createdAt) / 1000);
-                const isOverdue = secondsWaiting > 60;
+                const secondsWaiting = Math.round((getServerTimestamp() - item.createdAt) / 1000);
+                const isOverdue = secondsWaiting > 600;
                 return (
                   <div 
                     key={item.id} 
@@ -2309,12 +2402,27 @@ export default function AgentConsole({
               </div>
             </div>
           ) : (
-            <div className="border border-slate-300 border-dashed rounded-2xl p-8 text-center space-y-4 bg-slate-50 transition-all">
-              <p className="text-sm text-slate-500 uppercase tracking-widest font-black leading-none">Módulo Disponible para Próxima Llamada</p>
+            <div className={`border border-dashed rounded-2xl p-8 text-center space-y-4 transition-all ${
+              currentCubicle.status === CubicleStatus.ONLINE_AVAILABLE
+                ? "bg-slate-50 border-slate-300"
+                : "bg-rose-50/50 border-rose-200"
+            }`}>
+              <div className="flex items-center justify-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${
+                  currentCubicle.status === CubicleStatus.ONLINE_AVAILABLE ? "bg-emerald-500 animate-pulse" : "bg-rose-500"
+                }`} />
+                <p className={`text-sm uppercase tracking-widest font-black leading-none ${
+                  currentCubicle.status === CubicleStatus.ONLINE_AVAILABLE ? "text-emerald-700" : "text-rose-700"
+                }`}>
+                  {currentCubicle.status === CubicleStatus.ONLINE_AVAILABLE
+                    ? "Módulo DISPONIBLE para Próxima Llamada"
+                    : "Módulo NO DISPONIBLE — Debe cambiar a 'DISPONIBLE' para recibir turnos"}
+                </p>
+              </div>
               
               <button
                 id="btn-call-next-ticket"
-                disabled={isCallingNext || currentCubicle.status === CubicleStatus.BREAK || currentCubicle.status === CubicleStatus.OFFLINE || sortedCandidates.length === 0}
+                disabled={isCallingNext || currentCubicle.status !== CubicleStatus.ONLINE_AVAILABLE || sortedCandidates.length === 0}
                 onClick={async () => {
                   if (isCallingNext) return;
                   const targetId = sortedCandidates.length > 0 ? sortedCandidates[0].id : undefined;
@@ -2326,7 +2434,7 @@ export default function AgentConsole({
                   }
                 }}
                 className={`px-6 py-4.5 w-full font-black text-sm uppercase tracking-widest rounded-xl border transition-all flex items-center justify-center gap-2 shadow-md ${
-                  currentCubicle.status === CubicleStatus.BREAK || currentCubicle.status === CubicleStatus.OFFLINE
+                  currentCubicle.status !== CubicleStatus.ONLINE_AVAILABLE
                     ? "bg-slate-200 text-slate-400 border-slate-200 cursor-not-allowed shadow-none"
                     : sortedCandidates.length === 0
                       ? "bg-indigo-300 text-white border-indigo-400 cursor-not-allowed shadow-none"
@@ -2335,10 +2443,8 @@ export default function AgentConsole({
               >
                 {isCallingNext ? (
                   <span className="animate-pulse">Llamando siguiente turno...</span>
-                ) : currentCubicle.status === CubicleStatus.BREAK ? (
-                  "Módulo en Receso"
-                ) : currentCubicle.status === CubicleStatus.OFFLINE ? (
-                  "Módulo Desconectado"
+                ) : currentCubicle.status !== CubicleStatus.ONLINE_AVAILABLE ? (
+                  "Módulo NO DISPONIBLE (Pulse 'DISPONIBLE' arriba para recibir turnos)"
                 ) : sortedCandidates.length === 0 ? (
                   "Ningún tiquet compatible esperando en fila"
                 ) : (

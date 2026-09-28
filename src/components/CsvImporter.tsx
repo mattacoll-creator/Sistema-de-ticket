@@ -15,6 +15,7 @@ import {
   Shield,
   Sparkles
 } from 'lucide-react';
+import { extractNameFromEmail, isGenericPlaceholderName } from '../utils/citizenNameResolver';
 
 interface CsvImporterProps {
   citasList: any[];
@@ -544,8 +545,15 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
 
           const getColValue = (aliases: string[]) => {
             const cleanedAliases = aliases.map(cleanKey);
-            const matchedHeader = headers.find((h: string) => cleanedAliases.includes(cleanKey(h)));
-            return matchedHeader ? item[matchedHeader] : '';
+            // First try exact cleaned match
+            const exactMatch = headers.find((h: string) => cleanedAliases.includes(cleanKey(h)));
+            if (exactMatch && item[exactMatch]) return item[exactMatch];
+            // Next try substring inclusion
+            const subMatch = headers.find((h: string) => {
+              const ch = cleanKey(h);
+              return cleanedAliases.some(a => ch.includes(a) || a.includes(ch));
+            });
+            return subMatch ? item[subMatch] : '';
           };
 
           // Standardize fields using flexible alias matching
@@ -553,12 +561,35 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
             'pasaporte', 'passport', 'identificacion', 'identificación', 'cedula', 'cédula', 'documento',
             'pasaporte/cedula', 'cedula/pasaporte', 'nº pasaporte', 'nro pasaporte', 'numero pasaporte', 'nro_pasaporte', 'num_pasaporte'
           ]) || `PA-${10001 + index}`;
-          const nombreCompleto = getColValue([
-            'nombre', 'nombrecompleto', 'nombre_completo', 'ciudadano', 'nombres', 'nombre y apellido', 'nombre y apellidos', 'nombre completo'
-          ]);
+
+          // Detect names from single or multiple columns
+          const colNombres = getColValue(['nombres', 'primer nombre', 'primernombre', 'nombre(s)']);
+          const colApellidos = getColValue(['apellidos', 'primer apellido', 'primerapellido', 'segundo apellido', 'apellido(s)']);
+          
+          let rawNombreCompleto = '';
+          if (colNombres && colApellidos && cleanKey(colNombres) !== cleanKey(colApellidos)) {
+            rawNombreCompleto = `${colNombres} ${colApellidos}`.trim();
+          } else {
+            rawNombreCompleto = getColValue([
+              'nombre', 'nombrecompleto', 'nombre_completo', 'nombre completo', 'ciudadano', 'nombres', 
+              'nombre y apellido', 'nombre y apellidos', 'nombre del ciudadano', 'solicitante', 'nombre solicitante',
+              'nombre del solicitante', 'titular', 'nombre titular', 'nombre del titular', 'extranjero', 
+              'nombre extranjero', 'nombre del extranjero', 'beneficiario', 'persona', 'usuario', 'generales'
+            ]);
+          }
+
           const correo = getColValue([
             'correo', 'email', 'ciudadano_correo', 'correo electronico', 'correo electrónico', 'e-mail', 'mail'
           ]) || 'extranjeria@te.gob.pa';
+
+          // If name is empty or a generic placeholder, extract from email
+          let nombreCompleto = rawNombreCompleto;
+          if (isGenericPlaceholderName(nombreCompleto)) {
+            const emailName = extractNameFromEmail(correo);
+            if (emailName) {
+              nombreCompleto = emailName;
+            }
+          }
           const telefono = getColValue([
             'telefono', 'phone', 'celular', 'teléfono', 'telefono movil', 'telefono de contacto', 'contacto', 'movil', 'móvil'
           ]) || 'N/A';
@@ -600,11 +631,16 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
           const finalId = `EXT-CSV-${cleanDate || '2026'}-${index + 101}`;
 
           const hasRequired = (identificacion || nombreCompleto) && fecha && hora;
+          const displayCitizenName = (!isGenericPlaceholderName(nombreCompleto) && nombreCompleto) ? nombreCompleto : (extractNameFromEmail(correo) || `Ciudadano Extranjero (${identificacion})`);
+
+          const nameParts = (displayCitizenName || '').split(' ').filter(Boolean);
+          const primerNombre = nameParts[0] || '';
+          const primerApellido = nameParts.slice(1).join(' ') || '';
 
           return {
             id: finalId,
             codigoTransaccion: finalTxCode,
-            nombre: nombreCompleto || `Ciudadano Extranjero (${identificacion})`,
+            nombre: displayCitizenName,
             servicioCategoria: 'extranjeria',
             categoriaNombre: 'Trámites de Extranjería',
             subServicioId: 'ext_primera_vez',
@@ -625,9 +661,9 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
             fechaCreacion: new Date().toISOString(),
             requisitos: EXTRANJERIA_REQUISITOS,
             datosPersonales: {
-              primerNombre: nombreCompleto.split(' ')[0] || '',
-              primerApellido: nombreCompleto.split(' ')[1] || '',
-              nombreCompleto: nombreCompleto || `Ciudadano (${identificacion})`,
+              primerNombre,
+              primerApellido,
+              nombreCompleto: displayCitizenName,
               pasaporte: identificacion || `PA-${csvCode}`,
               identificacion: identificacion || `PA-${csvCode}`,
               nacionalidad,

@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { REGISTRO_PROCEDURES, CEDULACION_PROCEDURES } from "./WelcomeKiosk";
+import TicketTransactionLogs from "./TicketTransactionLogs";
 
 interface SuperAdminConsoleProps {
   officeTickets: Record<string, Ticket[]>;
@@ -64,6 +65,7 @@ export default function SuperAdminConsole({
   const [dbStatusMsg, setDbStatusMsg] = useState<string>("");
   const [dbStatusColor, setDbStatusColor] = useState<string>("text-slate-500");
   const [dbChecking, setDbChecking] = useState<boolean>(false);
+  const [reloadSending, setReloadSending] = useState<boolean>(false);
   const [importError, setImportError] = useState<string>("");
   const [dbVersion, setDbVersion] = useState<string>("1.0.4 rIDB");
   
@@ -297,6 +299,39 @@ export default function SuperAdminConsole({
         setDbChecking(false);
       }
     }, 1000);
+  };
+
+  const handleForceClientsReload = async () => {
+    if (!window.confirm("¿Está seguro de que desea forzar la recarga de todas las pantallas de TV y consolas activas en la sede?\n\nEsto actualizará inmediatamente todos los navegadores a la última versión disponible.")) return;
+    
+    setReloadSending(true);
+    setDbStatusMsg("Enviando orden de actualización remota a todas las pantallas...");
+    
+    try {
+      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+      const response = await fetch("/api/admin/force-clients-reload", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ reason: "Refresco remoto forzado por Super Administrador" })
+      });
+      
+      const resData = await response.json();
+      if (response.ok && resData.success) {
+        setDbStatusMsg(`🚀 Orden de recarga transmitida con éxito a ${resData.sseClientsCount || 0} dispositivos conectados.`);
+        setDbStatusColor("text-emerald-655 font-bold");
+      } else {
+        setDbStatusMsg(`❌ Error al enviar orden: ${resData.error || "Falla en el servidor"}`);
+        setDbStatusColor("text-rose-650 font-bold");
+      }
+    } catch (err: any) {
+      setDbStatusMsg(`❌ Error de conexión: ${err.message || err}`);
+      setDbStatusColor("text-rose-650 font-bold");
+    } finally {
+      setReloadSending(false);
+    }
   };
 
   const handleSchemaIntegrityCheck = () => {
@@ -2037,9 +2072,36 @@ export default function SuperAdminConsole({
                   <span>Chequear Schema</span>
                 </button>
               </div>
+
+              {/* Force reload all clients / TVs */}
+              <div className="border-t border-slate-200/60 pt-4 mt-2 space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                  <span className="text-[9.5px] uppercase font-black text-slate-700 tracking-wider font-sans">Control de TVs y Pantallas de Espera</span>
+                </div>
+                <p className="text-[9px] text-slate-450 font-medium leading-normal font-sans">
+                  Fuerce la recarga instantánea de todas las pantallas de TV y consolas de agentes activas en la sede para aplicar actualizaciones del sistema.
+                </p>
+                <button
+                  type="button"
+                  id="btn-force-reload-all"
+                  onClick={handleForceClientsReload}
+                  disabled={reloadSending || dbChecking}
+                  className="w-full py-2.5 px-3 bg-red-600 hover:bg-red-700 disabled:bg-slate-300 text-white rounded-lg text-center font-bold text-[9px] uppercase tracking-wider transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1.5 font-sans"
+                  title="Fuerza un refresco de caché y recarga de página inmediata en todos los navegadores conectados por SSE."
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-white ${reloadSending ? "animate-spin" : ""}`} />
+                  <span>{reloadSending ? "Transmitiendo..." : "📺 Forzar Recarga en TVs y Pantallas"}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 6. REGISTRO HISTÓRICO Y TRAZABILIDAD AUDITADA DE TICKETS */}
+      <div id="ticket-audit-trail-logs-section" className="mt-6">
+        <TicketTransactionLogs officeTickets={officeTickets} />
       </div>
     </div>
   );

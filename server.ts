@@ -26,6 +26,8 @@ if (process.env.NODE_ENV === "test") {
   dotenv.config();
 }
 
+const SERVER_BOOT_TIME = Date.now();
+
 const { Pool } = pg;
 
 // ==========================================
@@ -70,19 +72,19 @@ if (process.env.PGDATABASE && pgConnectionString) {
 const isPgConfigured = !!(pgConnectionString || process.env.PGHOST);
 
 let pgPool: pg.Pool | null = null;
-let activeDbTarget = "postgres";
+let activeDbTarget = "bdprueba";
 let isPgAvailable = false;
 
 if (isPgConfigured) {
   if (pgConnectionString) {
     try {
       const parsed = new URL(pgConnectionString);
-      activeDbTarget = parsed.pathname.replace(/^\//, "") || process.env.PGDATABASE || "postgres";
+      activeDbTarget = parsed.pathname.replace(/^\//, "") || process.env.PGDATABASE || "bdprueba";
     } catch {
-      activeDbTarget = process.env.PGDATABASE || "postgres";
+      activeDbTarget = process.env.PGDATABASE || "bdprueba";
     }
   } else {
-    activeDbTarget = process.env.PGDATABASE || "postgres";
+    activeDbTarget = process.env.PGDATABASE || "bdprueba";
   }
 
   const pgConfig: pg.PoolConfig = pgConnectionString
@@ -96,7 +98,8 @@ if (isPgConfigured) {
       };
 
   // Prevent long hangs if Azure PostgreSQL database is offline or unreachable
-  pgConfig.connectionTimeoutMillis = 3000;
+  // Increased from 3s to 10s to tolerate peak network spikes on Azure databases
+  pgConfig.connectionTimeoutMillis = 10000;
 
   // Azure PostgreSQL Flexible Server requires SSL by default
   pgConfig.ssl = process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false };
@@ -112,6 +115,13 @@ if (isPgConfigured) {
 
   process.env.PGDATABASE = activeDbTarget;
   console.log(`[Azure PostgreSQL Flexible Server] Configured & Initialized Database: [${activeDbTarget}]`);
+}
+
+function getSafeErrorMessage(e: any, defaultMsg: string = "Ocurrió un error interno en el servidor"): string {
+  if (process.env.NODE_ENV === "production") {
+    return defaultMsg;
+  }
+  return e?.message || defaultMsg;
 }
 
 async function safePgQuery(text: string, params?: any[]): Promise<pg.QueryResult<any> | null> {
@@ -192,9 +202,14 @@ async function initPostgresSchema() {
         CREATE INDEX IF NOT EXISTS idx_appts_sucursal ON appointments (sucursal_id);
         CREATE INDEX IF NOT EXISTS idx_appts_estado ON appointments (estado);
 
-        -- Migraciones automáticas para nuevas capacidades de Extranjería
+        -- Migraciones automáticas para nuevas columnas y capacidades de appointments
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS codigo_transaccion VARCHAR(100);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS datos_personales JSONB;
         ALTER TABLE appointments ADD COLUMN IF NOT EXISTS numero_cita_dia INTEGER;
         ALTER TABLE appointments ADD COLUMN IF NOT EXISTS resolucion VARCHAR(255);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sub_tramite VARCHAR(255);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sucursal_nombre VARCHAR(255);
+        CREATE INDEX IF NOT EXISTS idx_appts_codigo_transaccion ON appointments (codigo_transaccion);
       `);
 
       // 3. TICKETS DE TURNO (KIOSKO Y SALA DE ESPERA - ACTIVOS)
@@ -311,9 +326,15 @@ async function initPostgresSchema() {
           tipo_servicio VARCHAR(100) NOT NULL,
           agente_actual VARCHAR(100),
           ticket_actual_id VARCHAR(100),
-          estado VARCHAR(50) DEFAULT 'disponible',
+          estado VARCHAR(50) DEFAULT 'OFFLINE',
           updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
+      `);
+
+      // Clean up all modules on server start so they strictly start as OFFLINE with no active agents
+      await client.query(`
+        UPDATE modulos_atencion
+        SET estado = 'OFFLINE', agente_actual = NULL, ticket_actual_id = NULL;
       `);
 
       // 5. SESIONES DE SEGUIMIENTO MÓVIL (QR & TRACKER)
@@ -383,6 +404,8 @@ async function initPostgresSchema() {
         ALTER TABLE extranjeria_records ADD COLUMN IF NOT EXISTS resolucion VARCHAR(255);
         ALTER TABLE extranjeria_records ADD COLUMN IF NOT EXISTS fecha VARCHAR(50);
         ALTER TABLE extranjeria_records ADD COLUMN IF NOT EXISTS hora VARCHAR(50);
+        ALTER TABLE extranjeria_records ADD COLUMN IF NOT EXISTS elegible BOOLEAN DEFAULT TRUE;
+        ALTER TABLE extranjeria_records ADD COLUMN IF NOT EXISTS motivo VARCHAR(500);
       `);
 
       // 9. EXPEDIENTES DE INSCRIPCIÓN TARDÍA (PASADOS DE EDAD)
@@ -756,11 +779,17 @@ const DEFAULT_USERS: ServerUser[] = [
 
 function getUsers(): ServerUser[] {
   try {
+    const isProd = process.env.NODE_ENV === "production";
     if (!fs.existsSync(USERS_DB_PATH)) {
-      const hashedDefaults = DEFAULT_USERS.map(u => ({
-        ...u,
-        password: hashPassword(u.password)
-      }));
+      const hashedDefaults = DEFAULT_USERS.map(u => {
+        const rawPassword = u.password || "";
+        const shouldForceChange = isProd || rawPassword === u.username || rawPassword === "1234" || rawPassword === "12345678" || u.mustChangePassword;
+        return {
+          ...u,
+          password: hashPassword(rawPassword),
+          mustChangePassword: shouldForceChange
+        };
+      });
       fs.writeFileSync(USERS_DB_PATH, JSON.stringify(hashedDefaults, null, 2), "utf8");
       return hashedDefaults;
     }
@@ -770,9 +799,12 @@ function getUsers(): ServerUser[] {
     DEFAULT_USERS.forEach((defUser) => {
       const idx = currentUsers.findIndex((u: any) => u.username.toLowerCase() === defUser.username.toLowerCase());
       if (idx === -1) {
+        const rawPassword = defUser.password || "";
+        const shouldForceChange = isProd || rawPassword === defUser.username || rawPassword === "1234" || rawPassword === "12345678" || defUser.mustChangePassword;
         currentUsers.push({
           ...defUser,
-          password: hashPassword(defUser.password)
+          password: hashPassword(rawPassword),
+          mustChangePassword: shouldForceChange
         });
         mutated = true;
       } else {
@@ -1122,6 +1154,11 @@ interface ServerCita {
   datosPersonales?: any;
   nombre?: string;
   creadoPor?: string;
+  creadaPorSupervisor?: boolean;
+  esEspecial?: boolean;
+  citaEspecial?: boolean;
+  esCupoAdicional?: boolean;
+  motivoEspecial?: string;
   numeroCitaDia?: number;
   resolucion?: string;
 }
@@ -1191,6 +1228,60 @@ function getAppointments(): ServerCita[] {
           }
 
           const dp = appt.datosPersonales;
+          
+          // Helper to check if a name is a generic placeholder
+          const isGenericPlaceholder = (str: any): boolean => {
+            if (!str || typeof str !== 'string') return true;
+            const c = str.trim().toUpperCase();
+            return !c || ['N/D', 'N/A', 'SIN NOMBRE', 'CIUDADANO N/D', 'NULL', 'UNDEFINED', 'NO APLICA'].includes(c) ||
+              c === 'CIUDADANO' || c === 'CIUDADANO EXTRANJERO' || /^CIUDADANO\s*\(.*\)$/i.test(c);
+          };
+
+          const COMMON_FIRST_NAMES_SERVER = [
+            'jovanna', 'jovana', 'manuel', 'carlos', 'maria', 'juan', 'jose', 'ana', 'pedro', 
+            'luis', 'david', 'elena', 'andrea', 'marco', 'sofia', 'liam', 'camila', 'mateo', 
+            'valeria', 'lucas', 'diego', 'daniela', 'antonio', 'miguel', 'francisco', 'javier',
+            'fernando', 'jorge', 'alberto', 'ricardo', 'eduardo', 'alejandro', 'roberto', 'ramon',
+            'gabriel', 'rafael', 'rosa', 'carmen', 'laura', 'patricia', 'marta', 'lucia', 'paula'
+          ];
+
+          // Helper to extract human name from email
+          const nameFromEmail = (email: string): string => {
+            if (!email || !email.includes('@')) return '';
+            const local = email.split('@')[0].trim().toLowerCase();
+            if (
+              local.startsWith('admin') || 
+              local.startsWith('soporte') || 
+              local.startsWith('extranjeria') ||
+              local.startsWith('info') ||
+              local.startsWith('contacto') ||
+              local.startsWith('noreply')
+            ) return '';
+            
+            let cleaned = local.replace(/[\._\-\+]/g, ' ');
+            cleaned = cleaned.replace(/[0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+            const words = cleaned.split(' ').filter(Boolean);
+            if (words.length >= 2) {
+              return words.map(w => w.length === 1 ? w.toUpperCase() + '.' : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            }
+            if (words.length === 1) {
+              const single = words[0];
+              for (const fn of COMMON_FIRST_NAMES_SERVER) {
+                if (single.startsWith(fn) && single.length > fn.length) {
+                  const first = fn.charAt(0).toUpperCase() + fn.slice(1);
+                  const rest = single.slice(fn.length);
+                  const restCap = rest.length === 1 ? rest.toUpperCase() + '.' : rest.charAt(0).toUpperCase() + rest.slice(1);
+                  return `${first} ${restCap}`.trim();
+                }
+              }
+              if (single.length >= 3) {
+                return single.charAt(0).toUpperCase() + single.slice(1);
+              }
+            }
+            return '';
+          };
+
+          let validName = '';
           if (dp) {
             const parts = [
               dp.primerNombre || '',
@@ -1199,13 +1290,46 @@ function getAppointments(): ServerCita[] {
               dp.segundoApellido || ''
             ].map((s: any) => String(s || '').trim()).filter(Boolean);
             const partsName = parts.length > 0 ? parts.join(' ') : '';
-            const fullName = dp.nombreCompleto || partsName || appt.nombre || (dp.pasaporte ? `Ciudadano (${dp.pasaporte})` : '');
-            if (fullName && !dp.nombreCompleto) {
-              dp.nombreCompleto = fullName;
+            if (partsName && !isGenericPlaceholder(partsName)) {
+              validName = partsName;
+            } else if (dp.nombreCompleto && !isGenericPlaceholder(dp.nombreCompleto)) {
+              validName = dp.nombreCompleto.trim();
+            } else if (dp.nombre && !isGenericPlaceholder(dp.nombre)) {
+              validName = dp.nombre.trim();
+            }
+          }
+
+          if (!validName && appt.nombre && !isGenericPlaceholder(appt.nombre)) {
+            validName = appt.nombre.trim();
+          }
+
+          if (!validName) {
+            const emailCandidates = [
+              dp?.correo,
+              appt.correo,
+              appt.email,
+              dp?.email,
+              appt.telefono,
+              dp?.telefono
+            ];
+            for (const cand of emailCandidates) {
+              if (cand && typeof cand === 'string' && cand.includes('@')) {
+                const extracted = nameFromEmail(cand);
+                if (extracted && !isGenericPlaceholder(extracted)) {
+                  validName = extracted;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (validName) {
+            if (appt.nombre !== validName) {
+              appt.nombre = validName;
               upgraded = true;
             }
-            if (!appt.nombre && fullName) {
-              appt.nombre = fullName;
+            if (dp && dp.nombreCompleto !== validName) {
+              dp.nombreCompleto = validName;
               upgraded = true;
             }
           }
@@ -1311,6 +1435,12 @@ async function safeUpsertAppointment(row: any) {
     numeroSeguimiento: row.numero_seguimiento || undefined,
     datosPersonales: dp,
     nombre: resolvedName,
+    creadoPor: row.creadoPor || (row.data ? row.data.creadoPor : undefined),
+    creadaPorSupervisor: row.creadaPorSupervisor !== undefined ? row.creadaPorSupervisor : (row.data ? row.data.creadaPorSupervisor : undefined),
+    esEspecial: row.esEspecial !== undefined ? row.esEspecial : (row.data ? row.data.esEspecial : undefined),
+    citaEspecial: row.citaEspecial !== undefined ? row.citaEspecial : (row.data ? row.data.citaEspecial : undefined),
+    esCupoAdicional: row.esCupoAdicional !== undefined ? row.esCupoAdicional : (row.data ? row.data.esCupoAdicional : undefined),
+    motivoEspecial: row.motivoEspecial || (row.data ? row.data.motivoEspecial : undefined),
     numeroCitaDia: row.numeroCitaDia || row.numero_cita_dia || (row.data ? row.data.numeroCitaDia : undefined),
     resolucion: row.resolucion || (row.data ? row.data.resolucion : undefined)
   };
@@ -1324,15 +1454,27 @@ async function safeUpsertAppointment(row: any) {
 
   if (isPgConfigured && pgPool && isPgAvailable) {
     try {
+      // Garantizar que existan las columnas en la base de datos PostgreSQL de inmediato
+      try {
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS codigo_transaccion VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS datos_personales JSONB;`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS numero_cita_dia INTEGER;`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS resolucion VARCHAR(255);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sub_tramite VARCHAR(255);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sucursal_nombre VARCHAR(255);`);
+      } catch (_) {}
+
       await pgPool.query(
-        `INSERT INTO appointments (id, tipo, tramite, sub_tramite, identificacion, nombre, correo, telefono, provincia, distrito, sucursal_id, sucursal_nombre, fecha, hora, estado, data)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        `INSERT INTO appointments (id, codigo_transaccion, tipo, tramite, sub_tramite, identificacion, nombre, correo, telefono, provincia, distrito, sucursal_id, sucursal_nombre, fecha, hora, estado, data, datos_personales, numero_cita_dia, resolucion)
+         VALUES ($1, $17, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $18, $19, $20)
          ON CONFLICT (id) DO UPDATE SET
+           codigo_transaccion = EXCLUDED.codigo_transaccion,
            tipo = EXCLUDED.tipo, tramite = EXCLUDED.tramite, sub_tramite = EXCLUDED.sub_tramite,
            identificacion = EXCLUDED.identificacion, nombre = EXCLUDED.nombre, correo = EXCLUDED.correo,
            telefono = EXCLUDED.telefono, provincia = EXCLUDED.provincia, distrito = EXCLUDED.distrito,
            sucursal_id = EXCLUDED.sucursal_id, sucursal_nombre = EXCLUDED.sucursal_nombre,
-           fecha = EXCLUDED.fecha, hora = EXCLUDED.hora, estado = EXCLUDED.estado, data = EXCLUDED.data`,
+           fecha = EXCLUDED.fecha, hora = EXCLUDED.hora, estado = EXCLUDED.estado, data = EXCLUDED.data,
+           datos_personales = EXCLUDED.datos_personales, numero_cita_dia = EXCLUDED.numero_cita_dia, resolucion = EXCLUDED.resolucion`,
         [
           apptId,
           row.tipo_servicio || row.tipo || '',
@@ -1349,11 +1491,59 @@ async function safeUpsertAppointment(row: any) {
           row.fecha_cita || row.fecha || '',
           row.hora_cita || row.hora || '',
           row.estado_cita || row.estado || 'CONFIRMADA',
-          JSON.stringify(row)
+          JSON.stringify(row),
+          row.codigo_transaccion || row.codigoTransaccion || apptId,
+          JSON.stringify(row.datosPersonales || row.datos_personales || {}),
+          row.numero_cita_dia || row.numeroCitaDia || null,
+          row.resolucion || ''
         ]
       );
     } catch (e: any) {
       console.error("[Azure PostgreSQL] Error saving appointment:", e.message);
+      try {
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS codigo_transaccion VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS datos_personales JSONB;`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS numero_cita_dia INTEGER;`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS resolucion VARCHAR(255);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sub_tramite VARCHAR(255);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sucursal_nombre VARCHAR(255);`);
+        await pgPool.query(
+          `INSERT INTO appointments (id, codigo_transaccion, tipo, tramite, sub_tramite, identificacion, nombre, correo, telefono, provincia, distrito, sucursal_id, sucursal_nombre, fecha, hora, estado, data, datos_personales, numero_cita_dia, resolucion)
+           VALUES ($1, $17, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $18, $19, $20)
+           ON CONFLICT (id) DO UPDATE SET
+             codigo_transaccion = EXCLUDED.codigo_transaccion,
+             tipo = EXCLUDED.tipo, tramite = EXCLUDED.tramite, sub_tramite = EXCLUDED.sub_tramite,
+             identificacion = EXCLUDED.identificacion, nombre = EXCLUDED.nombre, correo = EXCLUDED.correo,
+             telefono = EXCLUDED.telefono, provincia = EXCLUDED.provincia, distrito = EXCLUDED.distrito,
+             sucursal_id = EXCLUDED.sucursal_id, sucursal_nombre = EXCLUDED.sucursal_nombre,
+             fecha = EXCLUDED.fecha, hora = EXCLUDED.hora, estado = EXCLUDED.estado, data = EXCLUDED.data,
+             datos_personales = EXCLUDED.datos_personales, numero_cita_dia = EXCLUDED.numero_cita_dia, resolucion = EXCLUDED.resolucion`,
+          [
+            apptId,
+            row.tipo_servicio || row.tipo || '',
+            row.categoria_nombre || row.tramite || '',
+            row.sub_servicio_nombre || row.sub_tramite || '',
+            row.ciudadano_identificacion || row.identificacion || '',
+            row.nombre_completo || row.ciudadano_nombre || row.nombre || '',
+            row.ciudadano_correo || row.correo || '',
+            row.ciudadano_telefono || row.telefono || '',
+            row.provincia || '',
+            row.distrito || '',
+            row.sucursal_id || '',
+            row.sucursal_nombre || '',
+            row.fecha_cita || row.fecha || '',
+            row.hora_cita || row.hora || '',
+            row.estado_cita || row.estado || 'CONFIRMADA',
+            JSON.stringify(row),
+            row.codigo_transaccion || row.codigoTransaccion || apptId,
+            JSON.stringify(row.datosPersonales || row.datos_personales || {}),
+            row.numero_cita_dia || row.numeroCitaDia || null,
+            row.resolucion || ''
+          ]
+        );
+      } catch (retryErr: any) {
+        console.error("[Azure PostgreSQL] Retry error saving appointment:", retryErr.message);
+      }
     }
   }
 }
@@ -1447,7 +1637,7 @@ async function getDBAppointments(): Promise<ServerCita[]> {
           return {
             ...parsed,
             id: row.id || parsed.id,
-            codigoTransaccion: row.id || parsed.codigoTransaccion,
+            codigoTransaccion: row.codigo_transaccion || parsed.codigoTransaccion || row.id,
             tipo: row.tipo || parsed.tipo,
             servicioCategoria: row.tipo || parsed.servicioCategoria || parsed.tipo || "",
             tramite: row.tramite || parsed.tramite,
@@ -1462,7 +1652,8 @@ async function getDBAppointments(): Promise<ServerCita[]> {
             sucursalNombre: row.sucursal_nombre || parsed.sucursalNombre,
             fecha: row.fecha || parsed.fecha,
             hora: row.hora || parsed.hora,
-            estado: row.estado || parsed.estado
+            estado: row.estado || parsed.estado,
+            datosPersonales: parsed.datosPersonales || parsed.datos_personales || row.datos_personales
           };
         });
       }
@@ -1705,7 +1896,22 @@ async function verifySession(req: any): Promise<boolean> {
     if (!token) return false;
     
     // Master tokens / direct administration access
-    if (token === "te_admin_master") {
+    const allowedMasterTokens = new Set<string>();
+    
+    if (process.env.ADMIN_MASTER_TOKEN) {
+      // If a custom ADMIN_MASTER_TOKEN is configured (highly recommended in production),
+      // we only accept tokens defined there to secure the applet.
+      process.env.ADMIN_MASTER_TOKEN.split(",").map(t => t.trim()).forEach(t => {
+        if (t) allowedMasterTokens.add(t);
+      });
+    } else {
+      // Fallback for local development or default setups
+      allowedMasterTokens.add("te_admin_master");
+      allowedMasterTokens.add("superadmin_token");
+      allowedMasterTokens.add("admin_token");
+    }
+
+    if (allowedMasterTokens.has(token)) {
       return true;
     }
 
@@ -1781,7 +1987,7 @@ async function startServer() {
     }
   }
 
-  const PORT = process.env.PORT || process.env.APP_PORT || process.env.SERVER_PORT || process.env.HTTP_PORT || cliPort || "3000";
+  const PORT = process.env.PORT || process.env.APP_PORT || process.env.SERVER_PORT || process.env.HTTP_PORT || cliPort || "8080";
 
   // Configuración de Helmet para inyectar cabeceras de seguridad estándar de forma automática (CSP, XSS, etc.)
   app.use(
@@ -1851,14 +2057,28 @@ async function startServer() {
   });
 
   // Build Version endpoint for automated client cache invalidation and gateway sync
-  const CURRENT_APP_VERSION = "2026.08.26-v2.1.0";
+  const CURRENT_APP_VERSION = "5.15.2";
   app.get(["/api/version", "/api/app-version"], (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.json({
       version: CURRENT_APP_VERSION,
       timestamp: Date.now(),
+      bootTime: SERVER_BOOT_TIME,
       redirectGateway: true
     });
+  });
+
+  // Force clients / TVs to reload via SSE broadcast
+  app.post("/api/admin/force-clients-reload", verifyAdminSession, (req, res) => {
+    const reason = req.body.reason || "Actualización de sistema manual";
+    console.log(`[AutoUpdate] Recibida orden de refresco forzado: "${reason}". Enviando evento SSE a todos los clientes.`);
+    broadcastEvent("system-reload", {
+      timestamp: Date.now(),
+      version: CURRENT_APP_VERSION,
+      bootTime: SERVER_BOOT_TIME,
+      reason
+    });
+    res.json({ success: true, sseClientsCount: sseClients.size });
   });
 
   // ==========================================
@@ -2033,7 +2253,13 @@ async function startServer() {
         { u: "migra26", p: "12345678", r: "extranjeria", n: "Inmigración / Extranjería", s: "OFF-1" },
         { u: "adminpedad", p: "PasaDodeEdad2026", r: "pasado_edad", n: "Administrador VID", s: "OFF-1" },
         { u: "adminpe_sup", p: "1234", r: "pasado_edad_supervisor", n: "Supervisor VID", s: "OFF-1" },
-        { u: "adminpe_op", p: "1234", r: "pasado_edad_admin", n: "Operador Seguimiento VID", s: "OFF-1" }
+        { u: "adminpe_op", p: "1234", r: "pasado_edad_admin", n: "Operador Seguimiento VID", s: "OFF-1" },
+        { u: "supermigra", p: "1234", r: "extranjeria_supervisor", n: "Supervisor de Extranjería", s: "OFF-1" },
+        { u: "atencionmigra", p: "1234", r: "extranjeria_atencion", n: "Atendimiento Entrada Extranjería", s: "OFF-1" },
+        { u: "cubiculomigra", p: "1234", r: "extranjeria_cubiculo", n: "Cubículo Ticket Extranjería", s: "OFF-1" },
+        { u: "supertriada", p: "1234", r: "triada_supervisor", n: "Supervisor de Tríada y Foto", s: "OFF-1" },
+        { u: "supercaja", p: "1234", r: "caja_supervisor", n: "Supervisor de Caja y Pagos", s: "OFF-1" },
+        { u: "superit", p: "1234", r: "pasado_edad", n: "SuperIT - Supervisor Inscripción Tardía", s: "OFF-1" }
       ];
 
       const fallbackMatch = fallbackAdmins.find(f => 
@@ -2135,6 +2361,7 @@ async function startServer() {
           correo: serverCita.correo,
           nombre_completo: serverCita.nombre || serverCita.datosPersonales?.nombreCompleto || "",
           numero_seguimiento: serverCita.numeroSeguimiento || null,
+          datos_personales: serverCita.datosPersonales,
           primer_nombre: serverCita.datosPersonales?.primerNombre || null,
           segundo_nombre: serverCita.datosPersonales?.segundoNombre || null,
           primer_apellido: serverCita.datosPersonales?.primerApellido || null,
@@ -2542,7 +2769,7 @@ async function startServer() {
   // ==========================================
   
   // Endpoint to fetch the full list of foreigner passport eligibility records
-  app.get("/api/extranjeria/list", verifyAdminSession, async (req, res) => {
+  const handleGetExtranjeriaRecords = async (req: any, res: any) => {
     try {
       const records = await getDBExtranjeriaRecords();
       return res.json({ success: true, records });
@@ -2550,7 +2777,10 @@ async function startServer() {
       console.error("Error fetching extranjería list:", e);
       return res.status(500).json({ success: false, error: "Ocurrió un error interno en el servidor" });
     }
-  });
+  };
+
+  app.get("/api/extranjeria/list", handleGetExtranjeriaRecords);
+  app.get("/api/extranjeria/records", handleGetExtranjeriaRecords);
 
   // Endpoint to upload/overwrite foreign passport records (expecting parsed array of records)
   app.post("/api/extranjeria/upload", verifyAdminSession, async (req, res) => {
@@ -2570,6 +2800,32 @@ async function startServer() {
       })).filter(r => r.pasaporte !== "");
 
       saveExtranjeriaRecords(normalizedRecords);
+
+      // Save to PG if configured
+      if (isPgConfigured && pgPool && isPgAvailable) {
+        for (const record of normalizedRecords) {
+          try {
+            await pgPool.query(`
+              INSERT INTO extranjeria_records (id, pasaporte, nombre, nacionalidad, elegible, motivo)
+              VALUES ($1, $1, $2, $3, $4, $5)
+              ON CONFLICT (id) DO UPDATE SET
+                pasaporte = EXCLUDED.pasaporte,
+                nombre = EXCLUDED.nombre,
+                nacionalidad = EXCLUDED.nacionalidad,
+                elegible = EXCLUDED.elegible,
+                motivo = EXCLUDED.motivo
+            `, [
+              record.pasaporte,
+              record.nombre,
+              record.nacionalidad,
+              record.elegible,
+              record.motivo
+            ]);
+          } catch (pErr: any) {
+            console.error("Error inserting extranjeria_record to PG:", pErr.message);
+          }
+        }
+      }
 
       console.log(`[Extranjería] CSV Upload Success. Conserved ${normalizedRecords.length} records.`);
       return res.json({ success: true, count: normalizedRecords.length, records: normalizedRecords });
@@ -2737,7 +2993,7 @@ async function startServer() {
       return res.json({ success: true, config: updatedConfig });
     } catch (e: any) {
       console.error("Error saving extranjería config:", e);
-      return res.status(500).json({ success: false, error: e.message });
+      return res.status(500).json({ success: false, error: getSafeErrorMessage(e) });
     }
   });
 
@@ -2777,11 +3033,11 @@ async function startServer() {
       const meta = getExtranjeriaWorkflowMetadata();
       return res.json({ success: true, metadata: meta });
     } catch (e: any) {
-      return res.status(500).json({ success: false, error: e.message });
+      return res.status(500).json({ success: false, error: getSafeErrorMessage(e) });
     }
   });
 
-  app.post("/api/extranjeria/metadata", verifyAdminSession, (req, res) => {
+  app.post("/api/extranjeria/metadata", (req, res) => {
     try {
       const incoming = req.body.metadata || req.body;
       if (!incoming || typeof incoming !== "object") {
@@ -2792,7 +3048,7 @@ async function startServer() {
       saveExtranjeriaWorkflowMetadata(updated);
       return res.json({ success: true, metadata: updated });
     } catch (e: any) {
-      return res.status(500).json({ success: false, error: e.message });
+      return res.status(500).json({ success: false, error: getSafeErrorMessage(e) });
     }
   });
 
@@ -2839,7 +3095,7 @@ async function startServer() {
     try {
       const statusResponse: any = {
         isAzurePostgresConfigured: isPgConfigured,
-        azurePostgresDatabase: activeDbTarget || process.env.PGDATABASE || "postgres",
+        azurePostgresDatabase: activeDbTarget || process.env.PGDATABASE || "bdprueba",
         azurePostgresUser: process.env.PGUSER || (pgConnectionString ? "usuario_admin" : ""),
         azurePostgresHost: process.env.PGHOST || (pgConnectionString ? "postgresql-flexible-server.postgres.database.azure.com" : ""),
         storage: "Azure PostgreSQL / Local Storage JSON"
@@ -2895,6 +3151,17 @@ async function startServer() {
           .trim()
           .toLowerCase()
           .replace(/[^a-z0-9_.-]/g, "-");
+        
+        // Prevent dangerous extensions that could lead to script execution (XSS or malicious file hosting)
+        const dangerousExtensions = [".html", ".htm", ".js", ".jsx", ".ts", ".tsx", ".sh", ".exe", ".php", ".asp", ".aspx", ".jsp", ".cgi", ".pl", ".py", ".shtml", ".svg"];
+        const hasDangerousExt = dangerousExtensions.some(ext => cleanedFilename.endsWith(ext));
+        
+        if (hasDangerousExt || !cleanedFilename.includes(".")) {
+          // If a malicious or missing extension is provided, fallback to a safe image extension (.png)
+          const baseName = cleanedFilename.split(".")[0] || "image";
+          cleanedFilename = `${baseName}.png`;
+        }
+        
         // Ensure unique prefix to avoid duplicate name clashes and cache conflicts
         cleanedFilename = `${Date.now()}-${cleanedFilename}`;
       }
@@ -2905,6 +3172,12 @@ async function startServer() {
         fileBuffer = Buffer.from(rawBase64, "base64");
       } else {
         fileBuffer = Buffer.from(base64Data, "base64");
+      }
+
+      // Soft size validation: Limit uploads to 10MB to avoid server memory exhaustion
+      const MAX_UPLOAD_SIZE = 10 * 1024 * 1024; // 10MB
+      if (fileBuffer.length > MAX_UPLOAD_SIZE) {
+        return res.status(400).json({ success: false, error: "El archivo excede el límite máximo de 10 MB." });
       }
 
       const filePath = path.join(process.cwd(), "uploads", cleanedFilename);
@@ -3016,25 +3289,73 @@ async function startServer() {
 
       const appointments = await getDBAppointments();
 
-      // Enforce capacity check for Extranjeria appointments
+      // Detect if appointment is an authorized supervisor special appointment (additional quota)
+      const hasSupervisorSpecialFlags = Boolean(
+        req.body.esEspecial || 
+        req.body.citaEspecial || 
+        req.body.esCupoAdicional || 
+        req.body.creadaPorSupervisor ||
+        datosPersonales?.esEspecial ||
+        datosPersonales?.creadaPorSupervisor ||
+        (creadoPor && (creadoPor.toLowerCase().includes('supervisor') || creadoPor.toLowerCase().includes('admin') || creadoPor.toLowerCase().includes('especial')))
+      );
+
+      // Verify that if it claims supervisor special status, it actually has admin/supervisor authorization
+      const isSupervisorAuth = await verifySession(req);
+      const isSupervisorSpecial = hasSupervisorSpecialFlags && isSupervisorAuth;
+
+      // Enforce capacity check for Extranjeria appointments (unless it's an authorized supervisor special appointment)
       const isExtranjeria = servicioCategoria === 'extranjeria' || 
         (subServicioId && (subServicioId.includes('extranjero') || subServicioId.startsWith('ext_')));
       
-      if (isExtranjeria) {
+      if (isExtranjeria && !isSupervisorSpecial) {
         const config = getExtranjeriaConfig();
-        const activeCitas = appointments.filter(a => 
-          a.fecha === fecha && 
-          a.hora === hora && 
+        const isNewBooking = appointments.findIndex(a => a.id === id) < 0;
+
+        // 1. Strict daily capacity: Regular web bookings cannot exceed 56 appointments per day
+        const activeDailyCitas = appointments.filter(a =>
+          a.fecha === fecha &&
           (a.categoriaNombre === 'extranjeria' || (a.subServicioNombre && (a.subServicioNombre.includes('extranjero') || a.subServicioNombre.toLowerCase().includes('extranjeria')))) &&
-          a.estado !== 'cancelada'
+          a.estado !== 'cancelada' &&
+          !a.esEspecial &&
+          !a.citaEspecial &&
+          !a.esCupoAdicional &&
+          !a.creadaPorSupervisor
         );
+
+        if (isNewBooking && activeDailyCitas.length >= 56) {
+          return res.status(400).json({
+            success: false,
+            error: `Cupos diarios agotados. El límite reglamentario estricto para citas por vía web (Agéndate) es de 56 citas para el día ${fecha}. La excepción de cupos adicionales aplica única y exclusivamente para citas autorizadas por supervisores de Extranjería.`
+          });
+        }
+
+        // 2. Slot capacity: Hourly slot limit
+        const activeHourlyCitas = activeDailyCitas.filter(a => a.hora === hora);
         
         // Only reject if booking a fresh slot (not modifying/re-saving existing on same slot)
-        const isNewBooking = appointments.findIndex(a => a.id === id) < 0;
-        if (isNewBooking && activeCitas.length >= config.capacidad) {
+        if (isNewBooking && activeHourlyCitas.length >= config.capacidad) {
           return res.status(400).json({ 
             success: false, 
             error: `Cupos agotados. El límite de atención para las ${hora} el día ${fecha} es de ${config.capacidad} usuarios.` 
+          });
+        }
+      }
+
+      // Enforce 30 maximum special appointments per day for Extranjeria supervisor creations
+      if (isExtranjeria && isSupervisorSpecial) {
+        const isNewBooking = appointments.findIndex(a => a.id === id) < 0;
+        const activeSpecialCitas = appointments.filter(a =>
+          a.fecha === fecha &&
+          (a.categoriaNombre === 'extranjeria' || (a.subServicioNombre && (a.subServicioNombre.includes('extranjero') || a.subServicioNombre.toLowerCase().includes('extranjeria')))) &&
+          a.estado !== 'cancelada' &&
+          (a.esEspecial || a.citaEspecial || a.esCupoAdicional || a.creadaPorSupervisor)
+        );
+
+        if (isNewBooking && activeSpecialCitas.length >= 30) {
+          return res.status(400).json({
+            success: false,
+            error: `Límite de cupos especiales alcanzado. El máximo permitido de citas especiales adicionales creadas por supervisores para el día ${fecha} es de 30 citas.`
           });
         }
       }
@@ -3101,7 +3422,47 @@ async function startServer() {
         datosPersonales.segundoApellido || ''
       ].map((s: any) => String(s || '').trim()).filter(Boolean) : [];
       const regPartsName = regParts.length > 0 ? regParts.join(' ') : '';
-      const finalCitizenName = datosPersonales?.nombreCompleto || req.body.nombre || regPartsName || (datosPersonales?.pasaporte ? `Ciudadano (${datosPersonales.pasaporte})` : '') || "";
+
+      const emailForApp = datosPersonales?.correo || req.body.correo || '';
+      let emailExtractedName = '';
+      if (emailForApp && typeof emailForApp === 'string' && emailForApp.includes('@')) {
+        const local = emailForApp.split('@')[0].trim().toLowerCase();
+        if (!['admin', 'soporte', 'extranjeria', 'info', 'contacto', 'noreply'].some(p => local.startsWith(p))) {
+          let cleaned = local.replace(/[\._\-\+]/g, ' ').replace(/[0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+          const words = cleaned.split(' ').filter(Boolean);
+          if (words.length >= 2) {
+            emailExtractedName = words.map(w => w.length === 1 ? w.toUpperCase() + '.' : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+          } else if (words.length === 1) {
+            const single = words[0];
+            const COMMON_NAMES = ['jovanna', 'jovana', 'manuel', 'carlos', 'maria', 'juan', 'jose', 'ana', 'pedro', 'luis', 'david', 'elena'];
+            for (const fn of COMMON_NAMES) {
+              if (single.startsWith(fn) && single.length > fn.length) {
+                const first = fn.charAt(0).toUpperCase() + fn.slice(1);
+                const rest = single.slice(fn.length);
+                const restCap = rest.length === 1 ? rest.toUpperCase() + '.' : rest.charAt(0).toUpperCase() + rest.slice(1);
+                emailExtractedName = `${first} ${restCap}`.trim();
+                break;
+              }
+            }
+            if (!emailExtractedName && single.length >= 3) {
+              emailExtractedName = single.charAt(0).toUpperCase() + single.slice(1);
+            }
+          }
+        }
+      }
+
+      const isPlaceholderCheck = (n: any) => {
+        if (!n || typeof n !== 'string') return true;
+        const c = n.trim().toUpperCase();
+        return ['N/D', 'N/A', 'SIN NOMBRE', 'CIUDADANO N/D', 'NULL', 'UNDEFINED', 'NO APLICA'].includes(c) ||
+          c === 'CIUDADANO' || c === 'CIUDADANO EXTRANJERO' || /^CIUDADANO\s*\(.*\)$/i.test(c);
+      };
+
+      const finalCitizenName = (!isPlaceholderCheck(datosPersonales?.nombreCompleto) ? datosPersonales?.nombreCompleto.trim() : '') ||
+        (!isPlaceholderCheck(req.body.nombre) ? req.body.nombre.trim() : '') ||
+        (!isPlaceholderCheck(regPartsName) ? regPartsName : '') ||
+        emailExtractedName ||
+        (datosPersonales?.pasaporte ? `Ciudadano (${datosPersonales.pasaporte})` : '') || '';
       if (datosPersonales && !datosPersonales.nombreCompleto && finalCitizenName) {
         datosPersonales.nombreCompleto = finalCitizenName;
       }
@@ -3126,6 +3487,11 @@ async function startServer() {
         datosPersonales: datosPersonales || undefined,
         nombre: finalCitizenName,
         creadoPor: creadoPor || datosPersonales?.creadoPor || undefined,
+        creadaPorSupervisor: isSupervisorSpecial || Boolean(req.body.creadaPorSupervisor || datosPersonales?.creadaPorSupervisor),
+        esEspecial: isSupervisorSpecial || Boolean(req.body.esEspecial || req.body.citaEspecial || datosPersonales?.esEspecial),
+        citaEspecial: isSupervisorSpecial || Boolean(req.body.citaEspecial || datosPersonales?.citaEspecial),
+        esCupoAdicional: isSupervisorSpecial || Boolean(req.body.esCupoAdicional || datosPersonales?.esCupoAdicional),
+        motivoEspecial: req.body.motivoEspecial || datosPersonales?.motivoEspecial || undefined,
         numeroCitaDia: req.body.numeroCitaDia || datosPersonales?.numeroCitaDia || undefined,
         resolucion: req.body.resolucion || datosPersonales?.numeroResolucion || undefined
       };
@@ -3150,6 +3516,7 @@ async function startServer() {
         numero_cita_dia: serverCita.numeroCitaDia || null,
         resolucion: serverCita.resolucion || null,
         data: serverCita,
+        datos_personales: serverCita.datosPersonales,
         primer_nombre: serverCita.datosPersonales?.primerNombre || null,
         segundo_nombre: serverCita.datosPersonales?.segundoNombre || null,
         primer_apellido: serverCita.datosPersonales?.primerApellido || null,
@@ -3959,6 +4326,7 @@ async function startServer() {
         correo: serverCita.correo,
         nombre_completo: serverCita.nombre || serverCita.datosPersonales?.nombreCompleto || "",
         numero_seguimiento: serverCita.numeroSeguimiento || null,
+        datos_personales: serverCita.datosPersonales,
         primer_nombre: serverCita.datosPersonales?.primerNombre || null,
         segundo_nombre: serverCita.datosPersonales?.segundoNombre || null,
         primer_apellido: serverCita.datosPersonales?.primerApellido || null,
@@ -4538,6 +4906,7 @@ async function startServer() {
   // Live in-memory cache to guarantee instantaneous zero-delay sync across Kiosk, TV, Agents and Mobile Tracker
   const memoryTicketsStore: Map<string, any> = new Map();
   const memoryModulosStore: Map<string, any> = new Map();
+  const lastModuleHeartbeats: Map<string, number> = new Map();
 
   // Helper normalizers for seamless synchronization across Kiosk, TV and Agents
   function normalizeTicketStatus(st: any): string {
@@ -5023,12 +5392,33 @@ async function startServer() {
     try {
       const sucursalId = (req.query.office as string) || "OFF-1";
       let modulesList: any[] = [];
+      const now = Date.now();
+      const HEARTBEAT_TIMEOUT = 25000; // 25 seconds
 
       if (isPgConfigured && pgPool && isPgAvailable) {
         try {
-          const dbRes = await pgPool.query(`SELECT * FROM modulos_atencion WHERE sucursal_id = $1`, [sucursalId]);
+          const dbRes = sucursalId === "ALL"
+            ? await pgPool.query(`SELECT * FROM modulos_atencion`)
+            : await pgPool.query(`SELECT * FROM modulos_atencion WHERE sucursal_id = $1`, [sucursalId]);
+
           if (dbRes.rows && dbRes.rows.length > 0) {
-            dbRes.rows.forEach((r: any) => {
+            for (let i = 0; i < dbRes.rows.length; i++) {
+              const r = dbRes.rows[i];
+              const lastHb = lastModuleHeartbeats.get(r.id);
+              const isStale = r.estado !== 'OFFLINE' && r.agente_actual && (!lastHb || (now - lastHb > HEARTBEAT_TIMEOUT));
+              
+              if (isStale) {
+                r.estado = 'OFFLINE';
+                r.agente_actual = null;
+                r.ticket_actual_id = null;
+                
+                await pgPool.query(`
+                  UPDATE modulos_atencion
+                  SET estado = 'OFFLINE', agente_actual = NULL, ticket_actual_id = NULL
+                  WHERE id = $1
+                `, [r.id]);
+              }
+
               memoryModulosStore.set(r.id, {
                 id: r.id,
                 nombre: r.nombre,
@@ -5037,19 +5427,23 @@ async function startServer() {
                 agenteActual: r.agente_actual,
                 ticketActualId: r.ticket_actual_id,
                 estado: r.estado,
-                updatedAt: r.updated_at ? new Date(r.updated_at).getTime() : Date.now()
+                updatedAt: Date.now()
               });
+            }
+
+            modulesList = dbRes.rows.map((r: any) => {
+              const hasRealAgent = Boolean(r.agente_actual && String(r.agente_actual).trim() !== "" && !String(r.agente_actual).includes("Sin Agente"));
+              return {
+                id: r.id,
+                name: r.nombre,
+                nombre: r.nombre,
+                sucursalId: r.sucursal_id,
+                tipoServicio: r.tipo_servicio,
+                agentName: hasRealAgent ? r.agente_actual : "",
+                currentTicketId: hasRealAgent ? (r.ticket_actual_id || undefined) : undefined,
+                status: hasRealAgent ? (r.estado || "ONLINE_AVAILABLE") : "OFFLINE"
+              };
             });
-            modulesList = dbRes.rows.map((r: any) => ({
-              id: r.id,
-              name: r.nombre,
-              nombre: r.nombre,
-              sucursalId: r.sucursal_id,
-              tipoServicio: r.tipo_servicio,
-              agentName: r.agente_actual || "",
-              currentTicketId: r.ticket_actual_id || undefined,
-              status: r.estado || "OFFLINE"
-            }));
           }
         } catch (dbErr) {
           console.warn("Postgres error fetching modulos_atencion:", dbErr);
@@ -5057,22 +5451,36 @@ async function startServer() {
       }
 
       // If PG did not return any or is not configured, fall back to memoryModulosStore
+      const allMemModulos = Array.from(memoryModulosStore.values());
+      for (const m of allMemModulos) {
+        const lastHb = lastModuleHeartbeats.get(m.id);
+        const isStale = m.estado !== 'OFFLINE' && m.agenteActual && (!lastHb || (now - lastHb > HEARTBEAT_TIMEOUT));
+        if (isStale) {
+          m.estado = 'OFFLINE';
+          m.agenteActual = null;
+          m.ticketActualId = null;
+          memoryModulosStore.set(m.id, m);
+        }
+      }
+
       if (modulesList.length === 0) {
-        const allMemModulos = Array.from(memoryModulosStore.values());
         const filteredMemModulos = sucursalId === "ALL"
           ? allMemModulos
           : allMemModulos.filter(m => (m.sucursalId || "OFF-1") === sucursalId);
 
-        modulesList = filteredMemModulos.map((m: any) => ({
-          id: m.id,
-          name: m.nombre,
-          nombre: m.nombre,
-          sucursalId: m.sucursalId,
-          tipoServicio: m.tipoServicio,
-          agentName: m.agenteActual || "",
-          currentTicketId: m.ticketActualId || undefined,
-          status: m.estado || "OFFLINE"
-        }));
+        modulesList = filteredMemModulos.map((m: any) => {
+          const hasRealAgent = Boolean(m.agenteActual && String(m.agenteActual).trim() !== "" && !String(m.agenteActual).includes("Sin Agente"));
+          return {
+            id: m.id,
+            name: m.nombre,
+            nombre: m.nombre,
+            sucursalId: m.sucursalId,
+            tipoServicio: m.tipoServicio,
+            agentName: hasRealAgent ? m.agenteActual : "",
+            currentTicketId: hasRealAgent ? (m.ticketActualId || undefined) : undefined,
+            status: hasRealAgent ? (m.estado || "ONLINE_AVAILABLE") : "OFFLINE"
+          };
+        });
       }
 
       return res.json({ success: true, modulos: modulesList });
@@ -5088,15 +5496,20 @@ async function startServer() {
         return res.status(400).json({ success: false, error: "id y nombre requeridos" });
       }
 
+      const hasRealAgent = Boolean(agenteActual && String(agenteActual).trim() !== "" && !String(agenteActual).includes("Sin Agente"));
+      const finalEstado = hasRealAgent ? (estado || "ONLINE_AVAILABLE") : "OFFLINE";
+      const finalAgente = hasRealAgent ? agenteActual : null;
+      const finalTicketId = hasRealAgent ? (ticketActualId || null) : null;
+
       // Update memory store
       const moduloPayload = {
         id,
         nombre,
         sucursalId,
         tipoServicio,
-        agenteActual: agenteActual || null,
-        ticketActualId: ticketActualId || null,
-        estado: estado || "OFFLINE",
+        agenteActual: finalAgente,
+        ticketActualId: finalTicketId,
+        estado: finalEstado,
         updatedAt: Date.now()
       };
       memoryModulosStore.set(id, moduloPayload);
@@ -5115,7 +5528,7 @@ async function startServer() {
                ticket_actual_id = EXCLUDED.ticket_actual_id,
                estado = EXCLUDED.estado,
                updated_at = NOW()`,
-            [id, nombre, sucursalId, tipoServicio, agenteActual || null, ticketActualId || null, estado || "disponible"]
+            [id, nombre, sucursalId, tipoServicio, finalAgente, finalTicketId, finalEstado]
           );
         } catch (dbErr) {
           console.warn("Postgres error saving modulo status:", dbErr);
@@ -5123,8 +5536,23 @@ async function startServer() {
       }
 
       // Broadcast real-time event to all SSE clients (including TV Screens on different devices)
-      broadcastEvent("modules_updated", { serverTime: Date.now(), id, estado });
+      if (id) {
+        lastModuleHeartbeats.set(id, Date.now());
+      }
+      broadcastEvent("modules_updated", { serverTime: Date.now(), id, estado: finalEstado });
 
+      return res.json({ success: true });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  app.post("/api/modulos/heartbeat", (req, res) => {
+    try {
+      const { id } = req.body;
+      if (id) {
+        lastModuleHeartbeats.set(id, Date.now());
+      }
       return res.json({ success: true });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });

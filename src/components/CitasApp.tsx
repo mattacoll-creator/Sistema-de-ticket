@@ -31,6 +31,7 @@ import SeleccionServicio from './SeleccionServicio';
 import AgendamientoCita from './AgendamientoCita';
 import CitaComprobante from './CitaComprobante';
 import AdminPanel from './AdminPanel';
+import { resolveCitizenName, isGenericPlaceholderName, extractNameFromEmail } from '../utils/citizenNameResolver';
 
 interface CitasAppProps {
   initialTab?: 'agendar' | 'admin';
@@ -189,13 +190,17 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
             dp.segundoApellido || ''
           ].map((s: any) => String(s || '').trim()).filter(Boolean);
           const partsName = parts.length > 0 ? parts.join(' ') : '';
-          const resolvedName = dp.nombreCompleto || partsName || updated.nombre || (dp.pasaporte ? `Ciudadano (${dp.pasaporte})` : '');
-          if (resolvedName && !dp.nombreCompleto) {
+          
+          let resolvedName = resolveCitizenName({ ...updated, datosPersonales: dp });
+          if (!resolvedName || isGenericPlaceholderName(resolvedName)) {
+            resolvedName = dp.nombreCompleto || partsName || updated.nombre || (dp.pasaporte ? `Ciudadano (${dp.pasaporte})` : 'Ciudadano');
+          }
+          if (resolvedName && (!dp.nombreCompleto || isGenericPlaceholderName(dp.nombreCompleto))) {
             dp.nombreCompleto = resolvedName;
           }
           return {
             ...updated,
-            nombre: updated.nombre || resolvedName || 'Ciudadano',
+            nombre: (!updated.nombre || isGenericPlaceholderName(updated.nombre)) ? resolvedName : updated.nombre,
             datosPersonales: dp
           };
         });
@@ -217,9 +222,21 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
             if (app && app.fecha) {
               app.fecha = standardizeDateString(app.fecha);
             }
+            if (app) {
+              const healedName = resolveCitizenName(app);
+              if (healedName && !isGenericPlaceholderName(healedName)) {
+                if (!app.nombre || isGenericPlaceholderName(app.nombre)) {
+                  app.nombre = healedName;
+                }
+                if (app.datosPersonales && (!app.datosPersonales.nombreCompleto || isGenericPlaceholderName(app.datosPersonales.nombreCompleto))) {
+                  app.datosPersonales.nombreCompleto = healedName;
+                }
+              }
+            }
             return app;
           });
           setCitasList(standardized);
+          localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(standardized));
         }
       } catch (err) {
         console.error('Error parsing local appointments:', err);
@@ -342,9 +359,23 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       return isExt && isCsv && c.fecha >= '2026-09-01' && c.fecha <= '2026-12-30';
     });
 
-    if (isExtranjeria && (hasCsvBlock && fecha >= '2026-09-01' && fecha <= '2026-12-30')) {
+    if (isExtranjeria && (hasCsvBlock && fecha < '2027-01-04')) {
       alert("No es posible programar esta cita: Los cupos de atención presencial para trámites de Extranjería para el periodo actual han sido asignados en su totalidad. El agendamiento en línea se encuentra disponible únicamente a partir del 4 de enero de 2027.");
       return;
+    }
+
+    if (isExtranjeria) {
+      // Strictly enforce regulatory maximum of 56 appointments per day for web (Agéndate) bookings
+      const dayCountExtranjeria = citasList.filter(c => 
+        c.fecha === fecha && 
+        (c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_')) && 
+        c.estado !== 'cancelada'
+      ).length;
+
+      if (dayCountExtranjeria >= 56) {
+        alert(`No es posible programar esta cita: Se ha alcanzado el límite reglamentario estricto de 56 citas para el día ${fecha} en la plataforma Agéndate. La excepción de cupos adicionales está reservada única y exclusivamente para citas autorizadas por supervisores de Extranjería.`);
+        return;
+      }
     }
 
     const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -403,16 +434,36 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       numeroCitaDia = dayCount + 1;
     }
 
-    const citizenFullName = datosPersonales.nombreCompleto || [
+    const structuredPartsName = [
       datosPersonales.primerNombre,
       datosPersonales.segundoNombre,
       datosPersonales.primerApellido,
       datosPersonales.segundoApellido
-    ].map(s => String(s || '').trim()).filter(Boolean).join(' ') || (datosPersonales.pasaporte ? `Ciudadano (${datosPersonales.pasaporte})` : 'Ciudadano');
+    ].map(s => String(s || '').trim()).filter(Boolean).join(' ');
+
+    const emailName = extractNameFromEmail(datosPersonales.correo);
+
+    const citizenFullName = (selectedCategoria === 'extranjeria')
+      ? (
+          (structuredPartsName && !isGenericPlaceholderName(structuredPartsName))
+            ? structuredPartsName.trim()
+            : (datosPersonales.nombreCompleto && !isGenericPlaceholderName(datosPersonales.nombreCompleto))
+              ? datosPersonales.nombreCompleto.trim()
+              : resolveCitizenName({ datosPersonales }) || 'Ciudadano Extranjero'
+        )
+      : (
+          (datosPersonales.nombreCompleto && !isGenericPlaceholderName(datosPersonales.nombreCompleto))
+            ? datosPersonales.nombreCompleto.trim()
+            : (structuredPartsName && !isGenericPlaceholderName(structuredPartsName))
+              ? structuredPartsName
+              : (emailName && !isGenericPlaceholderName(emailName))
+                ? emailName
+                : resolveCitizenName({ datosPersonales }) || (datosPersonales.pasaporte ? `Ciudadano (${datosPersonales.pasaporte})` : 'Ciudadano')
+        );
 
     const sanitizedDatosPersonales: DatosPersonales = {
       ...datosPersonales,
-      nombreCompleto: datosPersonales.nombreCompleto || citizenFullName
+      nombreCompleto: citizenFullName
     };
 
     const nuevaCita: Cita = {
@@ -430,10 +481,31 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       ticketTurnoCode,
       llegadaConfirmadaAuto: true,
       numeroCitaDia,
+      creadoPor: 'Portal Web (Ciudadano)',
+      identificacion: sanitizedDatosPersonales.pasaporte || sanitizedDatosPersonales.identificacion,
+      correo: sanitizedDatosPersonales.correo,
+      telefono: sanitizedDatosPersonales.telefono
     };
 
     const updated = [nuevaCita, ...citasList];
     saveCitas(updated);
+
+    // Direct registration with backend
+    try {
+      fetch('/api/register-appointment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...nuevaCita,
+          nombre: citizenFullName,
+          datosPersonales: sanitizedDatosPersonales,
+          creadoPor: 'Portal Web (Ciudadano)'
+        })
+      }).catch(err => console.warn('Direct register-appointment endpoint call failed:', err));
+    } catch (e) {
+      console.warn(e);
+    }
+
     setActiveCita(nuevaCita);
     setCurrentStep(4);
   };

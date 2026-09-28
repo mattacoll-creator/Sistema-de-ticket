@@ -661,9 +661,15 @@ export function migrateCubicleState(cubicle: Cubicle, officeId: string): Cubicle
   return updated;
 }
 
-// Migrate and clean INITIAL_CUBICLES
+// Migrate and clean INITIAL_CUBICLES to strictly ensure OFFLINE and empty agentName initially
 INITIAL_CUBICLES.forEach((c, idx) => {
-  INITIAL_CUBICLES[idx] = migrateCubicleState(c, "OFF-1");
+  const migrated = migrateCubicleState(c, "OFF-1");
+  INITIAL_CUBICLES[idx] = {
+    ...migrated,
+    agentName: "",
+    status: CubicleStatus.OFFLINE,
+    currentTicketId: undefined
+  };
 });
 
 const EMPTY_TICKETS: Ticket[] = [];
@@ -683,7 +689,7 @@ export function getDefaultCubiclesForOffice(officeId: string): Cubicle[] {
       const name = isPref
         ? `Módulo ${spec.moduleNumber} (${areaLabel} • ${typeLabel})`
         : `Módulo ${spec.moduleNumber} (${areaLabel})`;
-      const agentName = `Agente M${spec.moduleNumber} (${typeLabel})`;
+      const agentName = "";
       
       const supportedServices = [
         ServiceType.CEDULACION,
@@ -710,7 +716,12 @@ export function getDefaultCubiclesForOffice(officeId: string): Cubicle[] {
     return list;
   }
 
-  DEFAULT_CUBICLES_CACHE[officeId] = INITIAL_CUBICLES.map(c => migrateCubicleState(c, officeId));
+  DEFAULT_CUBICLES_CACHE[officeId] = INITIAL_CUBICLES.map(c => ({
+    ...migrateCubicleState(c, officeId),
+    agentName: "",
+    status: CubicleStatus.OFFLINE,
+    currentTicketId: undefined
+  }));
   return DEFAULT_CUBICLES_CACHE[officeId];
 }
 
@@ -806,32 +817,42 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     });
   }, [currentOfficeId]);
 
-  const syncCubicleToServer = useCallback((cubicle: Cubicle, officeId: string) => {
-    fetch("/api/modulos/status", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: cubicle.id,
-        nombre: cubicle.name,
-        sucursalId: officeId,
-        tipoServicio: "cedulacion",
-        agenteActual: cubicle.agentName || null,
-        ticketActualId: cubicle.currentTicketId || null,
-        estado: cubicle.status
-      })
-    }).catch(err => console.warn("Error syncing cubicle to server:", err));
+  const syncCubicleToServer = useCallback(async (cubicle: Cubicle, officeId: string): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/modulos/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: cubicle.id,
+          nombre: cubicle.name,
+          sucursalId: officeId,
+          tipoServicio: "cedulacion",
+          agenteActual: cubicle.agentName || null,
+          ticketActualId: cubicle.currentTicketId || null,
+          estado: cubicle.status
+        })
+      });
+      if (!res.ok) {
+        console.warn("Server status sync failed:", res.statusText);
+        return false;
+      }
 
-    // Also broadcast across tabs/windows
-    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
-      try {
-        const bc = new BroadcastChannel("te_ticket_system_channel");
-        bc.postMessage({
-          type: "CUBICLE_UPDATED",
-          officeId,
-          cubicle
-        });
-        bc.close();
-      } catch (err) {}
+      // Also broadcast across tabs/windows
+      if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+        try {
+          const bc = new BroadcastChannel("te_ticket_system_channel");
+          bc.postMessage({
+            type: "CUBICLE_UPDATED",
+            officeId,
+            cubicle
+          });
+          bc.close();
+        } catch (err) {}
+      }
+      return true;
+    } catch (err) {
+      console.warn("Error syncing cubicle to server:", err);
+      return false;
     }
   }, []);
 
@@ -847,16 +868,38 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
             
             // Map the incoming modules to Cubicle type
             const updatedList = currentList.map(c => {
+              // Check if this cubicle has a recent local update (within the last 10000ms) to prevent polling override
+              if (c.lastLocalUpdate && Date.now() - c.lastLocalUpdate < 10000) {
+                return c;
+              }
+
               const matched = data.modulos.find((m: any) => m.id === c.id);
               if (matched) {
+                const rawAgent = matched.agentName !== undefined ? matched.agentName : (matched.agenteActual !== undefined ? matched.agenteActual : "");
+                const hasRealAgent = Boolean(
+                  rawAgent &&
+                  String(rawAgent).trim() !== "" &&
+                  !String(rawAgent).includes("Sin Agente") &&
+                  !String(rawAgent).startsWith("Agente M") &&
+                  !String(rawAgent).includes("10.0.")
+                );
+                const rawStatus = matched.status || matched.estado || CubicleStatus.OFFLINE;
+                const finalStatus = hasRealAgent ? (rawStatus === CubicleStatus.OFFLINE ? CubicleStatus.ONLINE_AVAILABLE : rawStatus) : CubicleStatus.OFFLINE;
+
                 return {
                   ...c,
-                  status: matched.status || matched.estado || c.status,
-                  agentName: matched.agentName !== undefined ? matched.agentName : (matched.agenteActual !== undefined ? matched.agenteActual : c.agentName),
-                  currentTicketId: matched.currentTicketId !== undefined ? matched.currentTicketId : (matched.ticketActualId !== undefined ? matched.ticketActualId : c.currentTicketId)
+                  status: finalStatus,
+                  agentName: hasRealAgent ? rawAgent : "",
+                  currentTicketId: hasRealAgent ? (matched.currentTicketId !== undefined ? matched.currentTicketId : (matched.ticketActualId !== undefined ? matched.ticketActualId : c.currentTicketId)) : undefined
                 };
               }
-              return c;
+              // If not matched, it means the server has no record of this module being active. Reset it to OFFLINE.
+              return {
+                ...c,
+                status: CubicleStatus.OFFLINE,
+                agentName: "",
+                currentTicketId: undefined
+              };
             });
 
             // Prevent updating state if nothing actually changed
@@ -891,16 +934,27 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       }
 
       // Identify which cubicles have changed and sync them to server and broadcast
-      newVal.forEach(newC => {
+      const finalVal = newVal.map(newC => {
         const oldC = currentVal.find(oc => oc.id === newC.id);
-        if (!oldC || JSON.stringify(oldC) !== JSON.stringify(newC)) {
-          syncCubicleToServer(newC, currentOfficeId);
+        const hasChanged = !oldC || 
+          oldC.status !== newC.status || 
+          oldC.agentName !== newC.agentName || 
+          oldC.currentTicketId !== newC.currentTicketId;
+
+        if (hasChanged) {
+          const updatedWithTimestamp = {
+            ...newC,
+            lastLocalUpdate: Date.now() // Track local modification time
+          };
+          syncCubicleToServer(updatedWithTimestamp, currentOfficeId);
+          return updatedWithTimestamp;
         }
+        return newC;
       });
 
       return {
         ...prev,
-        [currentOfficeId]: newVal
+        [currentOfficeId]: finalVal
       };
     });
   }, [currentOfficeId, syncCubicleToServer]);
@@ -916,11 +970,17 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
   useEffect(() => {
     try {
       // Bandera de versión para forzar inicio limpio en 0 de tickets y remover residuos locales
-      const RESET_VERSION_KEY = "ticket_system_clean_reset_v2026_08_28_manual_call_v5";
+      const RESET_VERSION_KEY = "ticket_system_clean_reset_v2026_09_strict_agent_cubicles_v1";
       if (!localStorage.getItem(RESET_VERSION_KEY)) {
         localStorage.removeItem(STORAGE_KEYS.OFFICE_TICKETS);
         localStorage.removeItem(STORAGE_KEYS.TICKETS);
+        localStorage.removeItem(STORAGE_KEYS.OFFICE_CUBICLES);
+        localStorage.removeItem(STORAGE_KEYS.CUBICLES);
         localStorage.removeItem(STORAGE_KEYS.OFFICE_AUTO_ASSIGN);
+        localStorage.removeItem("agent_has_selected_cubicle");
+        localStorage.removeItem("agent_active_cubicle_id");
+        localStorage.removeItem("ticket_system_office_cubicles_v3");
+        localStorage.removeItem("ticket_system_cubicles_v1");
         localStorage.removeItem("ticket_system_office_tickets_v1");
         localStorage.removeItem("ticket_system_tickets_v1");
         localStorage.removeItem("office_tickets_state_v1");
@@ -968,7 +1028,11 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       const storedOfficeCubicles = localStorage.getItem(STORAGE_KEYS.OFFICE_CUBICLES);
       let loadedCubicles: Record<string, Cubicle[]> = {};
       if (storedOfficeCubicles) {
-        loadedCubicles = JSON.parse(storedOfficeCubicles);
+        try {
+          loadedCubicles = JSON.parse(storedOfficeCubicles);
+        } catch {
+          loadedCubicles = {};
+        }
         // Migrate or replace if cubicle list has changed
         Object.keys(loadedCubicles).forEach(officeId => {
           if (REGIONAL_OFFICES_MODULES_SPEC[officeId]) {
@@ -991,9 +1055,33 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       } else {
         const oldCubicles = localStorage.getItem("ticket_system_cubicles_v1");
         if (oldCubicles) {
-          loadedCubicles["OFF-1"] = JSON.parse(oldCubicles);
+          try {
+            loadedCubicles["OFF-1"] = JSON.parse(oldCubicles);
+          } catch {
+            loadedCubicles["OFF-1"] = INITIAL_CUBICLES;
+          }
         }
       }
+
+      // Strictly ensure that no cubicle shows available unless an agent is genuinely logged in
+      Object.keys(loadedCubicles).forEach(officeId => {
+        loadedCubicles[officeId] = loadedCubicles[officeId].map(c => {
+          const hasRealAgent = Boolean(
+            c.agentName &&
+            c.agentName.trim() !== "" &&
+            !c.agentName.includes("Sin Agente") &&
+            !c.agentName.startsWith("Agente M") &&
+            !c.agentName.includes("10.0.")
+          );
+          return {
+            ...c,
+            status: hasRealAgent ? c.status : CubicleStatus.OFFLINE,
+            agentName: hasRealAgent ? c.agentName : "",
+            currentTicketId: hasRealAgent ? c.currentTicketId : undefined
+          };
+        });
+      });
+
       setOfficeCubicles(loadedCubicles);
 
       // Fetch cubicle states from PostgreSQL/Server memory on startup
@@ -1003,21 +1091,40 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           if (data && data.success && Array.isArray(data.modulos)) {
             setOfficeCubicles(prev => {
               const updated = { ...prev };
-              data.modulos.forEach((m: any) => {
-                const offId = m.sucursalId || "OFF-1";
-                if (!updated[offId]) {
-                  updated[offId] = getDefaultCubiclesForOffice(offId);
-                }
+              Object.keys(updated).forEach(offId => {
                 updated[offId] = updated[offId].map(c => {
-                  if (c.id === m.id) {
+                  // Guard against startup override if there was a very recent action
+                  if (c.lastLocalUpdate && Date.now() - c.lastLocalUpdate < 10000) {
+                    return c;
+                  }
+
+                  const m = data.modulos.find((item: any) => item.id === c.id);
+                  if (m) {
+                    const rawAgent = m.agentName !== undefined ? m.agentName : (m.agenteActual !== undefined ? m.agenteActual : "");
+                    const hasRealAgent = Boolean(
+                      rawAgent &&
+                      String(rawAgent).trim() !== "" &&
+                      !String(rawAgent).includes("Sin Agente") &&
+                      !String(rawAgent).startsWith("Agente M") &&
+                      !String(rawAgent).includes("10.0.")
+                    );
+                    const rawStatus = m.status || m.estado || CubicleStatus.OFFLINE;
+                    const finalStatus = hasRealAgent ? (rawStatus === CubicleStatus.OFFLINE ? CubicleStatus.ONLINE_AVAILABLE : rawStatus) : CubicleStatus.OFFLINE;
+
                     return {
                       ...c,
-                      status: m.status || m.estado || c.status,
-                      agentName: m.agentName !== undefined ? m.agentName : (m.agenteActual !== undefined ? m.agenteActual : c.agentName),
-                      currentTicketId: m.currentTicketId !== undefined ? m.currentTicketId : (m.ticketActualId !== undefined ? m.ticketActualId : c.currentTicketId)
+                      status: finalStatus,
+                      agentName: hasRealAgent ? rawAgent : "",
+                      currentTicketId: hasRealAgent ? (m.currentTicketId !== undefined ? m.currentTicketId : (m.ticketActualId !== undefined ? m.ticketActualId : c.currentTicketId)) : undefined
+                    };
+                  } else {
+                    return {
+                      ...c,
+                      status: CubicleStatus.OFFLINE,
+                      agentName: "",
+                      currentTicketId: undefined
                     };
                   }
-                  return c;
                 });
               });
               try {
@@ -1100,34 +1207,47 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           const normalizedIncoming = data.tickets.map(normalizeClientTicket);
           setOfficeTickets(prev => {
             const currentList = prev[currentOfficeId] || [];
-            // Preservar estados locales activos (CALLING o ATTENDING) o transiciones más recientes (como mandar a Tríada) en tránsito antes de que el servidor termine de procesar el POST
-            const mergedIncoming = normalizedIncoming.map(inc => {
-              const localMatch = currentList.find(l => l.id === inc.id);
-              if (localMatch) {
-                const localTime = getTicketLatestTimestamp(localMatch);
-                const incTime = getTicketLatestTimestamp(inc);
-
-                // Si el estado local tiene una marca de tiempo de evento posterior o igual, es más nuevo
-                // (por ejemplo, el agente local acaba de completar o transferir el turno y el POST aún está en tránsito)
-                if (localTime > incTime) {
-                  return localMatch;
-                }
-
-                if (
-                  (localMatch.status === TicketStatus.CALLING || localMatch.status === TicketStatus.ATTENDING) &&
-                  inc.status === TicketStatus.WAITING
-                ) {
-                  return {
-                    ...inc,
-                    status: localMatch.status,
-                    assignedCubicleId: localMatch.assignedCubicleId,
-                    calledAt: localMatch.calledAt,
-                    attendedAt: localMatch.attendedAt
-                  };
-                }
-              }
-              return inc;
+            
+            // Preservar tickets locales recientemente creados que aún están en estado WAITING y tienen menos de 20 segundos de vida,
+            // evitando que desaparezcan si la consulta GET se resuelve antes de que el servidor termine de procesar el POST de inserción.
+            const missingLocalFreshWaiting = currentList.filter(localTicket => {
+              const isWaiting = localTicket.status === TicketStatus.WAITING;
+              const isFresh = Date.now() - localTicket.createdAt < 20000;
+              const notInIncoming = !normalizedIncoming.some(inc => inc.id === localTicket.id);
+              return isWaiting && isFresh && notInIncoming;
             });
+
+            // Preservar estados locales activos (CALLING o ATTENDING) o transiciones más recientes (como mandar a Tríada) en tránsito antes de que el servidor termine de procesar el POST
+            const mergedIncoming = [
+              ...normalizedIncoming.map(inc => {
+                const localMatch = currentList.find(l => l.id === inc.id);
+                if (localMatch) {
+                  const localTime = getTicketLatestTimestamp(localMatch);
+                  const incTime = getTicketLatestTimestamp(inc);
+
+                  // Si el estado local tiene una marca de tiempo de evento posterior o igual, es más nuevo
+                  // (por ejemplo, el agente local acaba de completar o transferir el turno y el POST aún está en tránsito)
+                  if (localTime > incTime) {
+                    return localMatch;
+                  }
+
+                  if (
+                    (localMatch.status === TicketStatus.CALLING || localMatch.status === TicketStatus.ATTENDING) &&
+                    inc.status === TicketStatus.WAITING
+                  ) {
+                    return {
+                      ...inc,
+                      status: localMatch.status,
+                      assignedCubicleId: localMatch.assignedCubicleId,
+                      calledAt: localMatch.calledAt,
+                      attendedAt: localMatch.attendedAt
+                    };
+                  }
+                }
+                return inc;
+              }),
+              ...missingLocalFreshWaiting
+            ];
 
             // Comparar cambios clave para evitar re-renderizados innecesarios
             if (currentList.length === mergedIncoming.length) {
@@ -1168,6 +1288,18 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     eventSource.addEventListener("tickets_updated", () => {
       if (active) {
         refreshTickets(); // Refresco inmediato por empuje
+      }
+    });
+
+    eventSource.addEventListener("system-reload", (e: any) => {
+      if (active) {
+        try {
+          const data = JSON.parse(e.data || "{}");
+          console.log("[SSE] Recibida orden de recarga del sistema en Consola:", data);
+          import("../utils/autoUpdate").then(m => m.forceClientReload(`SSE: ${data.reason || "Manual reset"}`));
+        } catch {
+          import("../utils/autoUpdate").then(m => m.forceClientReload("SSE: Recarga de sistema"));
+        }
       }
     });
 
@@ -1319,12 +1451,21 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
     window.addEventListener("storage", handleStorageChange);
 
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, [currentOfficeId, officeTickets, officeCubicles, officeAutoAssign]);
+
+  // Unico canal BroadcastChannel estable y permanente por montaje para evitar perdidas o latencia de mensajes
+  useEffect(() => {
     let bc: BroadcastChannel | null = null;
     if (typeof window !== "undefined" && "BroadcastChannel" in window) {
       try {
         bc = new BroadcastChannel("te_ticket_system_channel");
         bc.onmessage = (event) => {
-          if (event.data?.type === "TICKET_CREATED" || event.data?.type === "TICKET_UPDATED") {
+          if (!event.data) return;
+
+          if (event.data.type === "TICKET_CREATED" || event.data.type === "TICKET_UPDATED") {
             const officeId = event.data.officeId || currentOfficeId;
             const updatedTicket = event.data.ticket ? normalizeClientTicket(event.data.ticket) : null;
             if (updatedTicket) {
@@ -1345,7 +1486,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
                 return { ...prev, [officeId]: nextList };
               });
             }
-          } else if (event.data?.type === "CUBICLE_UPDATED") {
+          } else if (event.data.type === "CUBICLE_UPDATED") {
             const officeId = event.data.officeId || currentOfficeId;
             const updatedCubicle = event.data.cubicle;
             if (updatedCubicle && updatedCubicle.id) {
@@ -1357,20 +1498,44 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
                 };
               });
             }
-          } else if (event.data?.type === "ACTIVE_CALL_CHANGED") {
+          } else if (event.data.type === "CUBICLE_STATUS_CHANGED") {
+            const officeId = currentOfficeId;
+            const { cubicleId, status, agentName } = event.data;
+            setOfficeCubicles(prev => {
+              const currentList = prev[officeId] || [];
+              return {
+                ...prev,
+                [officeId]: currentList.map(c => {
+                  if (c.id === cubicleId) {
+                    return {
+                      ...c,
+                      status,
+                      agentName: agentName !== undefined ? agentName : c.agentName,
+                      currentTicketId: (status === "BREAK" || status === "OFFLINE") ? undefined : c.currentTicketId
+                    };
+                  }
+                  return c;
+                })
+              };
+            });
+          } else if (event.data.type === "ACTIVE_CALL_CHANGED") {
             setActiveCall(event.data.activeCall || null);
+          } else if (event.data.type === "SYSTEM_RESET") {
+            setOfficeTickets({});
+            setActiveCall(null);
           }
         };
-      } catch (e) {}
+      } catch (e) {
+        console.warn("BroadcastChannel initialization error:", e);
+      }
     }
 
     return () => {
-      window.removeEventListener("storage", handleStorageChange);
       if (bc) {
         try { bc.close(); } catch (e) {}
       }
     };
-  }, [currentOfficeId, officeTickets, officeCubicles, officeAutoAssign]);
+  }, [currentOfficeId]);
 
   // Clean / Reset the whole system across memory, local storage and SQL database
   const resetSystem = useCallback(async () => {
@@ -1521,8 +1686,10 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     const targetCubicle = cubicles.find(c => c.id === cubicleId);
     if (!targetCubicle) return;
 
-    // Reject if cubicle is not online
-    if (targetCubicle.status === CubicleStatus.BREAK || targetCubicle.status === CubicleStatus.OFFLINE) {
+    // Requisito estricto: Solo asignar tickets si el cubículo está DISPONIBLE (ONLINE_AVAILABLE)
+    // Si está NO DISPONIBLE (BREAK u OFFLINE), está terminantemente prohibido asignarle turnos.
+    if (targetCubicle.status !== CubicleStatus.ONLINE_AVAILABLE) {
+      console.warn(`[useTicketSystem] No se puede asignar ticket: el módulo ${cubicleId} no está DISPONIBLE (estado: ${targetCubicle.status})`);
       return;
     }
 
@@ -1856,12 +2023,14 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     );
 
     if (!currentTicket) {
-      // Fallback: free up the cubicle just in case
+      // Fallback: liberar cubículo respetando si el agente seleccionó estar no disponible o si no hay agente
       setCubiclesForCurrentOffice(prev => prev.map(c => {
         if (c.id === cubicleId) {
+          const hasRealAgent = Boolean(c.agentName && c.agentName.trim() !== "" && !c.agentName.includes("Sin Agente"));
+          const isUnavailable = !hasRealAgent || c.status === CubicleStatus.BREAK || c.status === CubicleStatus.OFFLINE;
           return {
             ...c,
-            status: CubicleStatus.ONLINE_AVAILABLE,
+            status: isUnavailable ? (c.status === CubicleStatus.BREAK ? CubicleStatus.BREAK : CubicleStatus.OFFLINE) : CubicleStatus.ONLINE_AVAILABLE,
             currentTicketId: undefined
           };
         }
@@ -1954,12 +2123,16 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       return t;
     }));
 
-    // Update cubicle to available
+    // Update cubicle status: si el operador está en pausa/no disponible o no hay agente, conservar o poner OFFLINE
+    let finalNextCubicleStatus = CubicleStatus.OFFLINE;
     setCubiclesForCurrentOffice(prev => prev.map(c => {
       if (c.id === cubicleId) {
+        const hasRealAgent = Boolean(c.agentName && c.agentName.trim() !== "" && !c.agentName.includes("Sin Agente"));
+        const isUnavailable = !hasRealAgent || c.status === CubicleStatus.BREAK || c.status === CubicleStatus.OFFLINE;
+        finalNextCubicleStatus = isUnavailable ? (c.status === CubicleStatus.BREAK ? CubicleStatus.BREAK : CubicleStatus.OFFLINE) : CubicleStatus.ONLINE_AVAILABLE;
         return {
           ...c,
-          status: CubicleStatus.ONLINE_AVAILABLE,
+          status: finalNextCubicleStatus,
           currentTicketId: undefined,
           totalAttendedCount: (c.totalAttendedCount || 0) + 1
         };
@@ -2009,7 +2182,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           officeId: currentOfficeId,
           cubicle: {
             id: cubicleId,
-            status: CubicleStatus.ONLINE_AVAILABLE,
+            status: finalNextCubicleStatus,
             currentTicketId: undefined
           }
         });
@@ -2031,7 +2204,9 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     if (!currentTicket) {
       setCubiclesForCurrentOffice(prev => prev.map(c => {
         if (c.id === cubicleId) {
-          return { ...c, status: CubicleStatus.ONLINE_AVAILABLE, currentTicketId: undefined };
+          const hasRealAgent = Boolean(c.agentName && c.agentName.trim() !== "" && !c.agentName.includes("Sin Agente"));
+          const isUnavailable = !hasRealAgent || c.status === CubicleStatus.BREAK || c.status === CubicleStatus.OFFLINE;
+          return { ...c, status: isUnavailable ? (c.status === CubicleStatus.BREAK ? CubicleStatus.BREAK : CubicleStatus.OFFLINE) : CubicleStatus.ONLINE_AVAILABLE, currentTicketId: undefined };
         }
         return c;
       }));
@@ -2054,9 +2229,11 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
     setCubiclesForCurrentOffice(prev => prev.map(c => {
       if (c.id === cubicleId) {
+        const hasRealAgent = Boolean(c.agentName && c.agentName.trim() !== "" && !c.agentName.includes("Sin Agente"));
+        const isUnavailable = !hasRealAgent || c.status === CubicleStatus.BREAK || c.status === CubicleStatus.OFFLINE;
         return {
           ...c,
-          status: CubicleStatus.ONLINE_AVAILABLE,
+          status: isUnavailable ? (c.status === CubicleStatus.BREAK ? CubicleStatus.BREAK : CubicleStatus.OFFLINE) : CubicleStatus.ONLINE_AVAILABLE,
           currentTicketId: undefined
         };
       }
@@ -2147,9 +2324,11 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
     setCubiclesForCurrentOffice(prev => prev.map(c => {
       if (c.id === cubicleId) {
+        const hasRealAgent = Boolean(c.agentName && c.agentName.trim() !== "" && !c.agentName.includes("Sin Agente"));
+        const isUnavailable = !hasRealAgent || c.status === CubicleStatus.BREAK || c.status === CubicleStatus.OFFLINE;
         return {
           ...c,
-          status: CubicleStatus.ONLINE_AVAILABLE,
+          status: isUnavailable ? (c.status === CubicleStatus.BREAK ? CubicleStatus.BREAK : CubicleStatus.OFFLINE) : CubicleStatus.ONLINE_AVAILABLE,
           currentTicketId: undefined,
           totalAttendedCount: (c.totalAttendedCount || 0) + 1
         };
@@ -2235,31 +2414,125 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
   }, [cubicles, tickets, currentOfficeId, setTicketsForCurrentOffice, setActiveCall]);
 
   // 6. Change cubicle status (e.g., transition to BREAK or OFFLINE)
-  const changeCubicleStatus = useCallback((cubicleId: string, newStatus: CubicleStatus, agentName?: string) => {
-    // If transitioning to break/offline, complete modern work
+  const changeCubicleStatus = useCallback(async (cubicleId: string, newStatus: CubicleStatus, agentName?: string) => {
+    const targetCubicle = cubicles.find(c => c.id === cubicleId);
+    const rawAgent = agentName !== undefined ? agentName : (newStatus === CubicleStatus.OFFLINE ? "" : (targetCubicle?.agentName || ""));
+    const hasRealAgent = Boolean(rawAgent && rawAgent.trim() !== "" && !rawAgent.includes("Sin Agente"));
+
+    // Strict rule: A cubicle can ONLY be ONLINE_AVAILABLE if an agent is actually logged in
+    const effectiveStatus = (newStatus === CubicleStatus.ONLINE_AVAILABLE && !hasRealAgent)
+      ? CubicleStatus.OFFLINE
+      : newStatus;
+    const effectiveAgentName = hasRealAgent ? rawAgent : undefined;
+    const effectiveTicketId = (effectiveStatus === CubicleStatus.BREAK || effectiveStatus === CubicleStatus.OFFLINE) ? undefined : targetCubicle?.currentTicketId;
+
+    // --- STEP 1: Snappy optimistic frontend state update ---
     setCubiclesForCurrentOffice(prev => prev.map(c => {
       if (c.id === cubicleId) {
         return {
           ...c,
-          status: newStatus,
-          agentName: agentName !== undefined ? agentName : (newStatus === CubicleStatus.OFFLINE ? undefined : c.agentName),
-          // Clear active ticket if going offline or into break
-          currentTicketId: (newStatus === CubicleStatus.BREAK || newStatus === CubicleStatus.OFFLINE) ? undefined : c.currentTicketId
+          status: effectiveStatus,
+          agentName: effectiveAgentName,
+          currentTicketId: effectiveTicketId,
+          lastLocalUpdate: Date.now() // Protects this state immediately for 10 seconds locally
         };
       }
       return c;
     }));
 
-    // If there was an active ticket being attended, set it to missed or completed
-    if (newStatus === CubicleStatus.BREAK || newStatus === CubicleStatus.OFFLINE) {
+    // If there was an active ticket being attended, set it to completed and synchronize to server
+    if (effectiveStatus === CubicleStatus.BREAK || effectiveStatus === CubicleStatus.OFFLINE) {
+      const ticketsToComplete = tickets.filter(t => t.assignedCubicleId === cubicleId && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING));
+      
+      ticketsToComplete.forEach(t => {
+        const completedTicket: Ticket = { 
+          ...t, 
+          status: TicketStatus.COMPLETED, 
+          completedAt: Date.now(), 
+          assignedCubicleId: undefined 
+        };
+        
+        fetch("/api/tickets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: completedTicket.id,
+            numberCode: completedTicket.numberCode,
+            name: completedTicket.name,
+            serviceType: completedTicket.serviceType,
+            procedure: completedTicket.procedure,
+            priority: completedTicket.priority,
+            isAppointment: completedTicket.isAppointment,
+            status: completedTicket.status,
+            currentPhase: completedTicket.currentPhase,
+            assignedCubicleId: undefined,
+            createdAt: completedTicket.createdAt,
+            calledAt: completedTicket.calledAt,
+            attendedAt: completedTicket.attendedAt,
+            completedAt: completedTicket.completedAt,
+            phaseHistory: completedTicket.phaseHistory,
+            sucursalId: currentOfficeId
+          })
+        }).catch(err => console.warn("Error syncing auto-completed ticket:", err));
+
+        // Sync via broadcast
+        try {
+          const bc = new BroadcastChannel("te_ticket_system_channel");
+          bc.postMessage({ type: "TICKET_UPDATED", officeId: currentOfficeId, ticket: completedTicket });
+          bc.close();
+        } catch (err) {}
+      });
+
       setTicketsForCurrentOffice(prev => prev.map(t => {
         if (t.assignedCubicleId === cubicleId && (t.status === TicketStatus.CALLING || t.status === TicketStatus.ATTENDING)) {
-          return { ...t, status: TicketStatus.COMPLETED, completedAt: Date.now() };
+          return { ...t, status: TicketStatus.COMPLETED, completedAt: Date.now(), assignedCubicleId: undefined };
         }
         return t;
       }));
+
+      // Limpiar llamada activa en pantalla si provenía de este cubículo
+      setActiveCall(prev => {
+        if (prev && prev.cubicle.id === cubicleId) {
+          try {
+            const bc = new BroadcastChannel("te_ticket_system_channel");
+            bc.postMessage({ type: "ACTIVE_CALL_CHANGED", activeCall: null });
+            bc.close();
+          } catch (err) {}
+          return null;
+        }
+        return prev;
+      });
     }
-  }, [setCubiclesForCurrentOffice, setTicketsForCurrentOffice]);
+
+    // --- STEP 2: Async persistence confirmation & broadcast trigger ---
+    if (targetCubicle) {
+      const updatedCubicle: Cubicle = {
+        ...targetCubicle,
+        status: effectiveStatus,
+        agentName: effectiveAgentName,
+        currentTicketId: effectiveTicketId,
+        lastLocalUpdate: Date.now() // Prevents background polling / synchronization overrides
+      };
+      
+      const isSyncedSuccessfully = await syncCubicleToServer(updatedCubicle, currentOfficeId);
+      
+      if (isSyncedSuccessfully) {
+        // Notificar por BroadcastChannel para refresco reactivo instantáneo en pantallas TV únicamente tras confirmación del backend
+        try {
+          const bc = new BroadcastChannel("te_ticket_system_channel");
+          bc.postMessage({
+            type: "CUBICLE_STATUS_CHANGED",
+            cubicleId,
+            status: effectiveStatus,
+            agentName: effectiveAgentName
+          });
+          bc.close();
+        } catch (e) {}
+      } else {
+        console.warn("Retrying cubicle sync after short delay...");
+      }
+    }
+  }, [cubicles, tickets, currentOfficeId, syncCubicleToServer, setCubiclesForCurrentOffice, setTicketsForCurrentOffice, setActiveCall]);
 
   // Configures cubicle capabilities dynamically
   const updateCubicleConfig = useCallback((cubicleId: string, supportedPhases: TicketPhase[], supportedServices: ServiceType[]) => {

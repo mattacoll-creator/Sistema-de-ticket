@@ -1,5 +1,7 @@
 import React from "react";
 import ControlDashboard from "../components/ControlDashboard";
+import AverageWaitTimeCharts from "../components/AverageWaitTimeCharts";
+import StatsDashboard from "../components/StatsDashboard";
 import { Ticket, Cubicle } from "../types";
 import { Lock, Unlock } from "lucide-react";
 
@@ -7,6 +9,7 @@ interface AdminPageProps {
   isAuthenticated: boolean;
   onOpenLoginModal: () => void;
   tickets: Ticket[];
+  officeTickets?: Record<string, Ticket[]>;
   cubicles: Cubicle[];
   isSimulationActive: boolean;
   onToggleSimulation: (active: boolean) => void;
@@ -25,6 +28,7 @@ export default function AdminPage({
   isAuthenticated,
   onOpenLoginModal,
   tickets,
+  officeTickets,
   cubicles,
   isSimulationActive,
   onToggleSimulation,
@@ -41,21 +45,25 @@ export default function AdminPage({
   return (
     <div className="w-full py-4">
       {isAuthenticated ? (
-        <ControlDashboard
-          tickets={tickets}
-          cubicles={cubicles}
-          isSimulationActive={isSimulationActive}
-          onToggleSimulation={onToggleSimulation}
-          simulationSpeed={simulationSpeed}
-          onSetSimulationSpeed={onSetSimulationSpeed}
-          onCreateRandomTicket={onCreateRandomTicket}
-          onResetSystem={onResetSystem}
-          isAutoAssignActive={isAutoAssignActive}
-          onToggleAutoAssign={onToggleAutoAssign}
-          onPurgeOldTickets={onPurgeOldTickets}
-          currentOfficeId={currentOfficeId}
-          gatewaySelection={gatewaySelection}
-        />
+        <div className="space-y-6">
+          <ControlDashboard
+            tickets={tickets}
+            cubicles={cubicles}
+            isSimulationActive={isSimulationActive}
+            onToggleSimulation={onToggleSimulation}
+            simulationSpeed={simulationSpeed}
+            onSetSimulationSpeed={onSetSimulationSpeed}
+            onCreateRandomTicket={onCreateRandomTicket}
+            onResetSystem={onResetSystem}
+            isAutoAssignActive={isAutoAssignActive}
+            onToggleAutoAssign={onToggleAutoAssign}
+            onPurgeOldTickets={onPurgeOldTickets}
+            currentOfficeId={currentOfficeId}
+            gatewaySelection={gatewaySelection}
+          />
+          <AverageWaitTimeCharts tickets={tickets} officeTickets={officeTickets} />
+          <StatsDashboard tickets={tickets} officeTickets={officeTickets} />
+        </div>
       ) : (
         <div className="bg-white border-2 border-dashed border-slate-200 p-12 rounded-2xl flex flex-col items-center justify-center text-center space-y-6 max-w-lg mx-auto shadow-sm my-8">
           <div className="w-16 h-16 bg-red-50 text-red-650 rounded-full flex items-center justify-center border border-red-100">

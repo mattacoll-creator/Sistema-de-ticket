@@ -17,6 +17,7 @@ import { useTicketSystem } from "./hooks/useTicketSystem";
 import { ServiceType, SERVICES_CONFIG, OFFICES_CONFIG, UserRole, SystemUser, TicketStatus, TicketPhase, Ticket } from "./types";
 import { announceAndCall } from "./utils/audio";
 import { APP_BUILD_VERSION, STORAGE_VERSION_KEY } from "./version";
+import { forceClientReload } from "./utils/autoUpdate";
 
 // Import custom pages from src/pages
 import {
@@ -274,6 +275,221 @@ export default function App() {
     }
   }, [searchParams, currentOfficeId, setCurrentOfficeId]);
 
+  // 2. Sistema de Monitoreo de Despliegue de Versión en Segundo Plano (Auto-Update)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    let initialBootTime: number | null = null;
+    let isChecking = false;
+
+    // Obtener información inicial del servidor
+    const fetchInitialVersionInfo = async () => {
+      try {
+        const response = await fetch("/api/app-version?t=" + Date.now());
+        if (response.ok) {
+          const data = await response.json();
+          initialBootTime = data.bootTime || null;
+          console.log(`[AutoUpdate] Monitoreo activado. Versión Cliente: "${APP_BUILD_VERSION}". Versión Servidor: "${data.version}". Boot Time: ${data.bootTime}`);
+          
+          // Si el servidor ya tiene una versión diferente en el primer fetch, actualizar de inmediato
+          if (data.version && data.version !== APP_BUILD_VERSION) {
+            console.log(`[AutoUpdate] Desbalance de versión inicial. Forzando recarga.`);
+            forceClientReload(`Diferencia de versión al cargar: ${APP_BUILD_VERSION} vs ${data.version}`);
+          }
+        }
+      } catch (e) {
+        console.warn("[AutoUpdate] No se pudo conectar al endpoint de versión inicial:", e);
+      }
+    };
+
+    fetchInitialVersionInfo();
+
+    // Polling regular cada 90 segundos para Smart TVs y pantallas fijas
+    const intervalId = setInterval(async () => {
+      if (isChecking) return;
+      isChecking = true;
+
+      try {
+        const response = await fetch("/api/app-version?t=" + Date.now(), {
+          headers: { "Cache-Control": "no-cache, no-store" }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          // 1. Verificar si la versión del código ha cambiado
+          if (data.version && data.version !== APP_BUILD_VERSION) {
+            console.log(`[AutoUpdate] Nueva versión detectada: ${data.version} (Cliente tiene: ${APP_BUILD_VERSION}). Iniciando refresco.`);
+            clearInterval(intervalId);
+            await forceClientReload(`Nueva versión de sistema: ${data.version}`);
+            return;
+          }
+
+          // 2. Verificar si el servidor se reinició (nuevo despliegue de contenedor/Cloud Run)
+          if (initialBootTime && data.bootTime && data.bootTime !== initialBootTime) {
+            console.log(`[AutoUpdate] Se detectó un nuevo despliegue del servidor (BootTime cambió de ${initialBootTime} a ${data.bootTime}).`);
+            clearInterval(intervalId);
+            await forceClientReload("Despliegue de contenedor actualizado");
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("[AutoUpdate] Error sondeando versión del servidor:", e);
+      } finally {
+        isChecking = false;
+      }
+    }, 90000); // 90 segundos
+
+    return () => clearInterval(intervalId);
+  }, []);
+
+  // 3. Watchdog de Sesión y Purga de Agentes Fantasmas (Límite: 300 segundos / 5 minutos)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Registrar eventos para detectar actividad del usuario (teclado, mouse, clics, etc)
+    const recordActivity = () => {
+      localStorage.setItem("last_agent_activity_timestamp", Date.now().toString());
+    };
+
+    window.addEventListener("mousemove", recordActivity);
+    window.addEventListener("keydown", recordActivity);
+    window.addEventListener("click", recordActivity);
+    window.addEventListener("scroll", recordActivity);
+    window.addEventListener("touchstart", recordActivity);
+
+    // Inicializar el timestamp si no existe
+    if (!localStorage.getItem("last_agent_activity_timestamp")) {
+      recordActivity();
+    }
+
+    const intervalId = setInterval(async () => {
+      const now = Date.now();
+      
+      // A. Verificar inactividad en la sesión del agente local
+      const storedSession = localStorage.getItem("agent_console_session");
+      if (storedSession) {
+        try {
+          const sessionUserObj = JSON.parse(storedSession);
+          
+          // No aplicar timeout de inactividad de agente a los administradores centrales o supervisores en su propia vista
+          const isAgent = sessionUserObj.role && (
+            sessionUserObj.role.includes("agent") || 
+            sessionUserObj.role.includes("caja") || 
+            sessionUserObj.role.includes("triada") ||
+            sessionUserObj.role.includes("registro")
+          );
+
+          if (isAgent) {
+            const lastActivityStr = localStorage.getItem("last_agent_activity_timestamp");
+            const lastActivity = lastActivityStr ? Number(lastActivityStr) : now;
+            
+            // Si la inactividad excede los 300 segundos (5 minutos)
+            if (now - lastActivity > 300000) {
+              console.warn(`[Watchdog] Sesión de agente inactiva por más de 300s. Forzando descarte y re-autenticación.`);
+              
+              const storedCubicleId = localStorage.getItem("active_cubicle_id") || localStorage.getItem("selected_cubicle_id");
+              
+              // Forzar descarte explícito enviando petición de OFFLINE al backend inmediatamente
+              if (storedCubicleId) {
+                try {
+                  await fetch("/api/modulos/status", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      id: storedCubicleId,
+                      nombre: `Módulo ${storedCubicleId}`,
+                      sucursalId: sessionUserObj.officeId || "OFF-1",
+                      tipoServicio: "cedulacion",
+                      agenteActual: null,
+                      ticketActualId: null,
+                      estado: "OFFLINE"
+                    })
+                  });
+                } catch (err) {
+                  console.warn("[Watchdog] Error al enviar descarte de módulo inactivo:", err);
+                }
+              }
+
+              // Limpiar credenciales y sesión para forzar la re-autenticación
+              localStorage.removeItem("agent_console_session");
+              localStorage.removeItem("agent_token");
+              sessionStorage.clear();
+              
+              // Notificar por canal de broadcast para sincronizar de inmediato
+              try {
+                const bc = new BroadcastChannel("te_ticket_system_channel");
+                bc.postMessage({ type: "FORCE_LOGOUT", username: sessionUserObj.username });
+                if (storedCubicleId) {
+                  bc.postMessage({
+                    type: "CUBICLE_STATUS_CHANGED",
+                    cubicleId: storedCubicleId,
+                    status: "OFFLINE",
+                    agentName: ""
+                  });
+                }
+                bc.close();
+              } catch (bcErr) {}
+
+              // Recargar la ventana para forzar la pantalla de re-autenticación
+              window.location.reload();
+              return;
+            }
+          }
+        } catch (parseErr) {
+          console.warn("[Watchdog] Error parseando sesión de agente:", parseErr);
+        }
+      }
+
+      // B. Limpieza proactiva de agentes fantasmas en el estado local 'officeCubicles'
+      setOfficeCubicles(prev => {
+        let changed = false;
+        const next = { ...prev };
+        
+        for (const officeId of Object.keys(next)) {
+          const cubiclesList = next[officeId] || [];
+          const cleanedList = cubiclesList.map(c => {
+            // Un agente es fantasma si el módulo no está OFFLINE pero su agentName está vacío o no es válido
+            const hasRealAgent = Boolean(
+              c.agentName &&
+              c.agentName.trim() !== "" &&
+              !c.agentName.includes("Sin Agente") &&
+              !c.agentName.startsWith("Agente M") &&
+              !c.agentName.includes("10.0.")
+            );
+
+            if (c.status !== "OFFLINE" && !hasRealAgent) {
+              changed = true;
+              return {
+                ...c,
+                status: "OFFLINE" as any,
+                agentName: "",
+                currentTicketId: undefined
+              };
+            }
+            return c;
+          });
+
+          if (changed) {
+            next[officeId] = cleanedList;
+          }
+        }
+
+        return changed ? next : prev;
+      });
+
+    }, 10000); // Revisar cada 10 segundos
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener("mousemove", recordActivity);
+      window.removeEventListener("keydown", recordActivity);
+      window.removeEventListener("click", recordActivity);
+      window.removeEventListener("scroll", recordActivity);
+      window.removeEventListener("touchstart", recordActivity);
+    };
+  }, [setOfficeCubicles]);
+
   // Backward compatibility: handle legacy query params when loading root "/"
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -429,18 +645,62 @@ export default function App() {
 
   // Navigation menu hidden mode for dedicated device screen focus (Kiosk / TV screen lock / Dedicated Agent Mode)
   const [isHeaderHidden, setIsHeaderHidden] = useState<boolean>(() => {
-    return typeof window !== "undefined" && (window.location.pathname.startsWith("/agente") || window.location.pathname.startsWith("/tv/extranjeria"));
+    return typeof window !== "undefined" && (
+      window.location.pathname.startsWith("/agente") || 
+      window.location.pathname.startsWith("/tv")
+    );
   });
   const [isPinModalOpen, setIsPinModalOpen] = useState<boolean>(false);
   const [pinInput, setPinInput] = useState<string>("");
   const [pinError, setPinError] = useState<boolean>(false);
 
-  // Automatically activate dedicated mode when entering /agente or /tv/extranjeria route
+  // Track if fullscreen was active before update reload
+  const [wasFullscreenActive, setWasFullscreenActive] = useState<boolean>(() => {
+    return typeof window !== "undefined" && localStorage.getItem("te_was_fullscreen") === "true";
+  });
+
+  // Automatically activate dedicated mode when entering /agente or any /tv route
   useEffect(() => {
-    if (location.pathname.startsWith("/agente") || location.pathname.startsWith("/tv/extranjeria")) {
+    if (location.pathname.startsWith("/agente") || location.pathname.startsWith("/tv")) {
       setIsHeaderHidden(true);
     }
   }, [location.pathname]);
+
+  // Restore HTML5 Fullscreen on any client interaction if it was fullscreen before update reload
+  useEffect(() => {
+    if (wasFullscreenActive) {
+      const handleGlobalClick = async () => {
+        try {
+          if (!document.fullscreenElement) {
+            const requestMethod = document.documentElement.requestFullscreen || 
+              (document.documentElement as any).webkitRequestFullscreen || 
+              (document.documentElement as any).mozRequestFullScreen || 
+              (document.documentElement as any).msRequestFullscreen;
+            if (requestMethod) {
+              await requestMethod.call(document.documentElement);
+            }
+          }
+          localStorage.removeItem("te_was_fullscreen");
+          setWasFullscreenActive(false);
+          document.removeEventListener("click", handleGlobalClick);
+          document.removeEventListener("keydown", handleGlobalClick);
+        } catch (err) {
+          console.warn("Fullscreen auto-restore failed:", err);
+          // Clean up to avoid blocking the UI if it gets rejected repeatedly
+          localStorage.removeItem("te_was_fullscreen");
+          setWasFullscreenActive(false);
+        }
+      };
+
+      document.addEventListener("click", handleGlobalClick);
+      document.addEventListener("keydown", handleGlobalClick);
+
+      return () => {
+        document.removeEventListener("click", handleGlobalClick);
+        document.removeEventListener("keydown", handleGlobalClick);
+      };
+    }
+  }, [wasFullscreenActive]);
 
   const handleVerifyPin = () => {
     if (pinInput === "12345678") {
@@ -539,7 +799,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f1f5f9] font-sans text-slate-900 pb-12 flex flex-col justify-between relative">
+    <div className={`min-h-screen bg-[#f1f5f9] font-sans text-slate-900 flex flex-col justify-between relative ${isTvRoute ? "pb-0" : "pb-12"}`}>
       {/* Floating button to restore navigation when hidden */}
       {isHeaderHidden && (
         <button
@@ -554,6 +814,45 @@ export default function App() {
           <Eye className="w-4 h-4 text-amber-400" />
           <span>Mostrar Menú</span>
         </button>
+      )}
+
+      {/* Fullscreen Auto-Restore Overlay after updates */}
+      {wasFullscreenActive && (
+        <div className="fixed inset-0 bg-[#003087]/98 backdrop-blur-md z-[999999] flex flex-col items-center justify-center text-white p-6 font-sans select-none">
+          <div className="bg-[#0f244a]/85 border-2 border-amber-500/40 p-10 md:p-14 rounded-[32px] max-w-2xl text-center shadow-2xl relative overflow-hidden flex flex-col items-center gap-6 animate-fade-in">
+            {/* National flag background accent lines */}
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-[#da121a] via-[#003087] to-amber-500"></div>
+            
+            <div className="w-20 h-20 bg-amber-500/10 rounded-full border border-amber-500/30 flex items-center justify-center animate-pulse">
+              <Tv className="w-10 h-10 text-amber-400" />
+            </div>
+
+            <div className="space-y-3">
+              <span className="text-amber-400 text-xs font-black tracking-widest uppercase block">
+                Tribunal Electoral de Panamá
+              </span>
+              <h1 className="text-2xl md:text-3xl font-black text-white tracking-tight uppercase leading-snug">
+                Sistema Actualizado con Éxito
+              </h1>
+              <p className="text-slate-300 text-sm max-w-md mx-auto leading-relaxed">
+                Hemos instalado la última versión del sistema para las pantallas de TV. Por seguridad del navegador, se requiere un clic o toque para restaurar la <strong>Pantalla Completa</strong>.
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                // The global event listener will catch this click and enter full screen
+              }}
+              className="mt-4 px-8 py-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-black uppercase tracking-widest rounded-2xl transition-all shadow-lg shadow-amber-500/20 active:scale-95 cursor-pointer border-none"
+            >
+              Restaurar Pantalla Completa
+            </button>
+
+            <span className="text-[10px] text-amber-400/80 uppercase tracking-widest mt-2 animate-bounce font-extrabold">
+              O toque cualquier parte de la pantalla / presione una tecla
+            </span>
+          </div>
+        </div>
       )}
 
       {/* PIN Verification Modal */}
@@ -1428,8 +1727,8 @@ export default function App() {
         <main className={
           viewType === "tablet" 
             ? "w-full flex-grow transition-all duration-300" 
-            : isCitasRoute
-              ? "w-full max-w-none px-0 sm:px-2 flex-grow transition-all duration-300 pt-0"
+            : (isCitasRoute || isTvRoute)
+              ? "w-full max-w-none px-0 flex-grow transition-all duration-300 pt-0"
               : `max-w-[1650px] 2xl:max-w-[95%] mx-auto w-full px-4 md:px-8 flex-grow transition-all duration-300 ${isHeaderHidden ? "pt-8" : ""}`
         }>
           <Routes>
@@ -1709,6 +2008,7 @@ export default function App() {
                     setIsAdminLoginModalOpen(true);
                   }}
                   tickets={tickets}
+                  officeTickets={officeTickets}
                   cubicles={cubicles}
                   isSimulationActive={isSimulationActive}
                   onToggleSimulation={setIsSimulationActive}

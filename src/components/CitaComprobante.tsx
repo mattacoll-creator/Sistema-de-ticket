@@ -451,22 +451,37 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
             </div>
           ) : null}
 
-          {/* Extranjeria Sequence Number badge (1-56/day limit) */}
-          {cita.servicioCategoria === 'extranjeria' && !isCanceled && (
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="p-1 px-2 bg-amber-500 text-slate-950 font-black rounded text-[9px] uppercase tracking-wider font-mono">
-                  Extranjería
-                </span>
-                <span className="text-slate-800 font-bold text-[11px]">
-                  Secuencia Oficial del Día (Capacidad: 56 Citas/Día):
+          {/* Extranjeria Sequence Number badge (1-56/day limit or Special Quota) */}
+          {cita.servicioCategoria === 'extranjeria' && !isCanceled && (() => {
+            const isSpecial = Boolean(cita.esEspecial || cita.citaEspecial || cita.esCupoAdicional || cita.creadaPorSupervisor);
+            return (
+              <div className={`rounded-lg p-3 flex flex-wrap items-center justify-between gap-2 text-xs border ${
+                isSpecial ? 'bg-purple-50 border-purple-300' : 'bg-amber-500/10 border-amber-500/30'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span className={`p-1 px-2 font-black rounded text-[9px] uppercase tracking-wider font-mono ${
+                    isSpecial ? 'bg-purple-700 text-white' : 'bg-amber-500 text-slate-950'
+                  }`}>
+                    {isSpecial ? '★ Extranjería Especial' : 'Extranjería'}
+                  </span>
+                  <span className="text-slate-800 font-bold text-[11px]">
+                    {isSpecial 
+                      ? 'Cupo Especial Autorizado por Supervisión (Adicional a los 56 por día):' 
+                      : 'Secuencia Oficial del Día (Capacidad: 56 Citas/Día):'}
+                  </span>
+                </div>
+                <span className={`font-mono font-black text-xs px-3 py-1 rounded shadow-xs border ${
+                  isSpecial 
+                    ? 'text-purple-900 bg-purple-100 border-purple-300' 
+                    : 'text-amber-900 bg-amber-100 border-amber-300'
+                }`}>
+                  {isSpecial 
+                    ? (cita.numeroCitaDia ? `CUPO ADICIONAL N° ${cita.numeroCitaDia}` : 'CUPO ESPECIAL AUTORIZADO')
+                    : (cita.numeroCitaDia ? `CITA N° ${cita.numeroCitaDia} DE 56` : 'CITA REGISTRADA')}
                 </span>
               </div>
-              <span className="font-mono font-black text-xs text-amber-900 bg-amber-100 border border-amber-300 px-3 py-1 rounded shadow-xs">
-                {cita.numeroCitaDia ? `CITA N° ${cita.numeroCitaDia} DE 56` : 'CITA REGISTRADA'}
-              </span>
-            </div>
-          )}
+            );
+          })()}
           
           {/* Main info column */}
           <div className="space-y-4">

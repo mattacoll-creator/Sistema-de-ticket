@@ -338,13 +338,13 @@ export default function AgendamientoCita({
   const [fecha, setFecha] = useState<string>(selectedFecha || '');
   const [hora, setHora] = useState<string>(selectedHora || '');
 
-  // Is selected date blocked by CSV import?
+  // Is selected date blocked by CSV import or restriction?
   const isSelectedDateBlocked = useMemo(() => {
     if (!fecha || !isExtranjeria) return false;
+    if (fecha < '2027-01-04') return true;
     if (datesWithExtranjeriaCsv.has(fecha)) return true;
-    if (hasExtranjeriaCsvLoaded && fecha >= '2026-09-01' && fecha <= '2026-12-30') return true;
     return false;
-  }, [fecha, isExtranjeria, datesWithExtranjeriaCsv, hasExtranjeriaCsvLoaded]);
+  }, [fecha, isExtranjeria, datesWithExtranjeriaCsv]);
 
   const countPasadosEdadForSelectedDay = useMemo(() => {
     if (!fecha) return 0;
@@ -415,13 +415,13 @@ export default function AgendamientoCita({
     return new Date().getFullYear();
   });
 
-  // Auto-jump to 2027 if Extranjería is selected and 2026 is fully blocked by CSV
+  // Auto-jump to 2027 if Extranjería is selected and 2026 is fully blocked
   React.useEffect(() => {
-    if (isExtranjeria && hasExtranjeriaCsvLoaded && currentYear < 2027) {
+    if (isExtranjeria && currentYear < 2027) {
       setCurrentMonth(0); // January
       setCurrentYear(2027);
     }
-  }, [isExtranjeria, hasExtranjeriaCsvLoaded, currentYear]);
+  }, [isExtranjeria, currentYear]);
 
   const MONTH_NAMES_ES = [
     'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -538,8 +538,8 @@ export default function AgendamientoCita({
           isFull = true;
         }
 
-        // Enforce user instruction: If CSV appointments were uploaded up to Dec 30 (Sep to Dec 30), block appointments
-        if (hasExtranjeriaCsvLoaded && dateString >= '2026-09-01' && dateString <= '2026-12-30') {
+        // Enforce user instruction: for Extranjería, block appointments before Jan 4, 2027
+        if (dateString < '2027-01-04') {
           isBlockedByCsv = true;
           isFull = true;
         } else if (datesWithExtranjeriaCsv.has(dateString)) {
@@ -577,6 +577,9 @@ export default function AgendamientoCita({
   }, [currentMonth, currentYear, selectedSucursal, isExtranjeria, isPastAgeTrámiteSelected, mergedBookings, tardiaConfig, extranjeriaConfig, hasExtranjeriaCsvLoaded, datesWithExtranjeriaCsv, customHolidays]);
 
   const handlePrevMonth = () => {
+    if (isExtranjeria && hasExtranjeriaCsvLoaded) {
+      if (currentYear === 2027 && currentMonth === 0) return;
+    }
     const sysDate = new Date();
     if (currentYear < sysDate.getFullYear() || (currentYear === sysDate.getFullYear() && currentMonth <= sysDate.getMonth())) return;
     if (currentMonth === 0) {
@@ -654,6 +657,10 @@ export default function AgendamientoCita({
     const isHoliday = OFFICIAL_PANAMA_HOLIDAYS.includes(fecha) || customHolidays.includes(fecha);
     if (isHoliday) {
       alert("No es posible programar una cita en un día feriado o no laborable.");
+      return;
+    }
+    if (isExtranjeria && countExtranjeriaForSelectedDay >= 56) {
+      alert(`No es posible agendar por vía Agéndate web: Esta fecha ya alcanzó el tope máximo reglamentario de 56 citas. La asignación de cupos adicionales está restringida exclusivamente al módulo de supervisión oficial de Extranjería.`);
       return;
     }
     if (sucursalId && fecha && hora) {
@@ -812,7 +819,11 @@ export default function AgendamientoCita({
                     <button
                       type="button"
                       onClick={handlePrevMonth}
-                      disabled={currentYear < new Date().getFullYear() || (currentYear === new Date().getFullYear() && currentMonth <= new Date().getMonth())}
+                      disabled={
+                        isExtranjeria
+                          ? (currentYear === 2027 && currentMonth === 0)
+                          : (currentYear < new Date().getFullYear() || (currentYear === new Date().getFullYear() && currentMonth <= new Date().getMonth()))
+                      }
                       className="p-1 px-2.5 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition text-xs font-black flex items-center gap-1"
                     >
                       <ChevronLeft className="w-3.5 h-3.5" />

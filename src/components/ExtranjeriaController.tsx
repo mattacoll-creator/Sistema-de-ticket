@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useDeferredValue } from 'react';
 import { 
   Search, 
   CheckCircle, 
@@ -32,19 +32,24 @@ import {
   Volume2,
   VolumeX,
   Tv,
+  Globe,
   Maximize,
   Minimize,
   Info,
   Plus,
+  UserPlus,
   Trash2,
   Upload,
   Zap,
   CheckCheck,
-  Settings
+  Settings,
+  Star,
+  ShieldCheck
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { AdminRole } from '../types';
 import { SUCURSALES_TE } from '../data';
+import { resolveCitizenName, isGenericPlaceholderName, extractNameFromEmail } from '../utils/citizenNameResolver';
 
 const SELECT_TIMES_OPTIONS = [
   '12:00 AM', '12:30 AM', '01:00 AM', '01:30 AM', '02:00 AM', '02:30 AM', '03:00 AM', '03:30 AM',
@@ -77,6 +82,7 @@ interface Booth {
   active: boolean; // Enables cubicle attention
   staff: string;
   empty: boolean; // True for the 4 reserve booths initially empty
+  receso?: boolean; // Is the operator currently on recess/break?
 }
 
 interface AppointmentMetadata {
@@ -86,9 +92,60 @@ interface AppointmentMetadata {
   assignedCubiculo: number | null; // Booth ID from 1 to 8
   estadoTicket: 'ninguno' | 'en_proceso' | 'en_atencion' | 'pagado_en_caja' | 'realizada';
   timestampCompletado?: string;
+  fechaCompletado?: string; // YYYY-MM-DD
   timestampInicioAtencion?: string;
   staffResponsable?: string;
+  reatencion?: boolean;
+  timestampReatencion?: string;
 }
+
+// Helper to determine if an appointment was attended/completed strictly TODAY (never yesterday or previous days)
+export const isCompletedToday = (app: any, meta?: AppointmentMetadata | null, currentTodayStr?: string): boolean => {
+  if (!meta || meta.estadoTicket !== 'realizada') return false;
+
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const todayYmd = currentTodayStr || `${y}-${m}-${d}`;
+  
+  // 1. Direct match on fechaCompletado if present
+  if (meta.fechaCompletado) {
+    return meta.fechaCompletado === todayYmd;
+  }
+
+  // 2. Formats for today
+  const dayNum = now.getDate();
+  const monthNum = now.getMonth() + 1;
+  const todayDmyPadded = `${d}/${m}/${y}`;
+  const todayDmyUnpadded = `${dayNum}/${monthNum}/${y}`;
+
+  if (meta.timestampCompletado && typeof meta.timestampCompletado === 'string') {
+    const ts = meta.timestampCompletado.trim();
+    // If timestamp explicitly contains today's date
+    if (ts.includes(todayYmd) || ts.includes(todayDmyPadded) || ts.includes(todayDmyUnpadded)) {
+      return true;
+    }
+    
+    // Check if timestamp contains ANY date format that does NOT match today (e.g. yesterday)
+    const ymdMatch = ts.match(/\b\d{4}-\d{2}-\d{2}\b/);
+    if (ymdMatch && ymdMatch[0] !== todayYmd) {
+      return false;
+    }
+    const dmyMatch = ts.match(/\b\d{1,2}\/\d{1,2}\/\d{4}\b/);
+    if (dmyMatch && dmyMatch[0] !== todayDmyPadded && dmyMatch[0] !== todayDmyUnpadded) {
+      return false;
+    }
+  }
+
+  // 3. If timestampCompletado didn't specify a date, check if the appointment was scheduled for today
+  if (app && app.fecha) {
+    const stdDate = standardizeDateString(app.fecha);
+    return stdDate === todayYmd;
+  }
+
+  return false;
+};
 
 const getMinutesFromHourString = (timeStr: string) => {
   if (!timeStr) return 0;
@@ -181,6 +238,8 @@ const isExtranjeriaAppointment = (app: any) => {
   const idStr = String(app.id || '').toUpperCase();
   const txStr = String(app.codigoTransaccion || '').toUpperCase();
   const createdBy = String(app.creadoPor || '').toLowerCase();
+  const sucId = (app.sucursalId || '').toLowerCase();
+  const sucName = (app.sucursalNombre || '').toLowerCase();
 
   return (
     cat === 'extranjeria' ||
@@ -191,17 +250,67 @@ const isExtranjeriaAppointment = (app: any) => {
     txStr.startsWith('EXT') ||
     createdBy.includes('extranj') ||
     createdBy.includes('csv') ||
-    createdBy.includes('importaci')
+    createdBy.includes('importaci') ||
+    sucId.includes('anc_main') ||
+    sucName.includes('extranj') ||
+    sucName.includes('ancon') ||
+    sucName.includes('ancón')
   );
 };
 
+// Isolated real-time clock for Pantalla de Turnos to avoid triggering re-renders of the entire application
+const TurnScreenClock = React.memo(function TurnScreenClock() {
+  const [time, setTime] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formattedDay = time.toLocaleDateString('es-PA', { weekday: 'long' });
+  const formattedDate = time.toLocaleDateString('es-PA', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+  const formattedTime = time.toLocaleTimeString('es-PA', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+
+  return (
+    <div className="bg-slate-900 border-2 border-slate-800 rounded-2xl px-5 py-3 text-center lg:text-right shrink-0 min-w-[220px] shadow-lg font-sans">
+      <div className="text-2xl sm:text-3xl font-black text-amber-400 font-mono tracking-widest uppercase leading-none mb-1">
+        {formattedTime}
+      </div>
+      <div className="text-xs sm:text-sm font-black text-slate-200 uppercase">
+        <span className="text-amber-500 font-black">{formattedDay}</span>, {formattedDate}
+      </div>
+    </div>
+  );
+});
+
 export default function ExtranjeriaController({ currentRole, forceSubRole, initialSupervisorTab }: ExtranjeriaControllerProps) {
   const [appointments, setAppointments] = useState<any[]>([]);
+  const [hasAutoJumped, setHasAutoJumped] = useState(false);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [supervisorSearchQuery, setSupervisorSearchQuery] = useState('');
   const [supervisorAtencionSearchQuery, setSupervisorAtencionSearchQuery] = useState('');
   const [atencionSearchQuery, setAtencionSearchQuery] = useState('');
+
+  // Local input values to type at 60fps without lag before hitting Enter or clicking Search
+  const [localSupervisorSearchQuery, setLocalSupervisorSearchQuery] = useState('');
+  const [localSupervisorAtencionSearchQuery, setLocalSupervisorAtencionSearchQuery] = useState('');
+  const [localAtencionSearchQuery, setLocalAtencionSearchQuery] = useState('');
+
+  // Deferred values guarantee 60fps instant keystrokes in search inputs without blocking rendering
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const deferredSupervisorSearchQuery = useDeferredValue(supervisorSearchQuery);
+  const deferredSupervisorAtencionSearchQuery = useDeferredValue(supervisorAtencionSearchQuery);
+  const deferredAtencionSearchQuery = useDeferredValue(atencionSearchQuery);
+
   const [atencionDateFilter, setAtencionDateFilter] = useState('');
   const [atencionShowAllDates, setAtencionShowAllDates] = useState(false);
   const [statusFilter, setStatusFilter] = useState('todos');
@@ -210,67 +319,40 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   const [showConfirmSave, setShowConfirmSave] = useState(false);
   const [systemUsers, setSystemUsers] = useState<any[]>([]);
 
-  // Return the complete formatted citizen name
-  const getExtranjeriaCitizenName = (app: any): string => {
+  // States for the brand new Direct Manual Assignment feature for Supervisors
+  const [manualCitizenName, setManualCitizenName] = useState('');
+  const [manualCitizenDoc, setManualCitizenDoc] = useState('');
+  const [manualTramiteType, setManualTramiteType] = useState('ext_primera_vez');
+  const [manualSelectedBooth, setManualSelectedBooth] = useState('');
+
+  // Extranjeria Foreign Records database cache for resolving citizen names
+  const [extranjeriaRecords, setExtranjeriaRecords] = useState<any[]>([]);
+
+  // Return the complete formatted citizen name, prioritizing human names, extranjería records, and email fallback
+  const getExtranjeriaCitizenName = useCallback((app: any): string => {
     if (!app) return 'Ciudadano';
-    const dp = app.datosPersonales;
-    
-    // 1. Structured names: primerNombre, segundoNombre, primerApellido, segundoApellido
-    if (dp) {
-      const parts = [
-        dp.primerNombre || '',
-        dp.segundoNombre || '',
-        dp.primerApellido || '',
-        dp.segundoApellido || ''
-      ].map((s: any) => String(s || '').trim()).filter(Boolean);
-      
-      if (parts.length > 0) {
-        return parts.join(' ');
-      }
+    return resolveCitizenName(app, extranjeriaRecords);
+  }, [extranjeriaRecords]);
 
-      if (dp.nombreCompleto && typeof dp.nombreCompleto === 'string' && dp.nombreCompleto.trim() && !['N/D', 'CIUDADANO N/D', 'SIN NOMBRE'].includes(dp.nombreCompleto.trim().toUpperCase())) {
-        return dp.nombreCompleto.trim();
-      }
-
-      if (dp.nombre && typeof dp.nombre === 'string' && dp.nombre.trim() && !['N/D', 'CIUDADANO N/D', 'SIN NOMBRE'].includes(dp.nombre.trim().toUpperCase())) {
-        return dp.nombre.trim();
-      }
-
-      if (dp.name && typeof dp.name === 'string' && dp.name.trim() && dp.name.trim().toUpperCase() !== 'N/D') {
-        return dp.name.trim();
-      }
+  // Cached searchable string per appointment for lightning-fast filter loops
+  const appointmentSearchCache = useMemo(() => new WeakMap<object, string>(), []);
+  const getSearchText = useCallback((app: any): string => {
+    if (!app || typeof app !== 'object') return '';
+    let cached = appointmentSearchCache.get(app);
+    if (cached === undefined) {
+      const name = getExtranjeriaCitizenName(app);
+      const dp = app.datosPersonales || {};
+      const passport = String(dp.pasaporte || app.identificacion || '');
+      const id = String(app.id || '');
+      const tx = String(app.codigoTransaccion || '');
+      const email = String(app.correo || dp.correo || '');
+      const sub = String(app.subServicioNombre || '');
+      const creator = String(app.creadoPor || dp.creadoPor || '');
+      cached = `${name} ${passport} ${id} ${tx} ${email} ${sub} ${creator}`.toLowerCase();
+      appointmentSearchCache.set(app, cached);
     }
-
-    // 2. Direct appointment-level names
-    if (app.nombre && typeof app.nombre === 'string' && app.nombre.trim() && !['N/D', 'CIUDADANO N/D', 'SIN NOMBRE'].includes(app.nombre.trim().toUpperCase())) {
-      return app.nombre.trim();
-    }
-    if (app.nombre_completo && typeof app.nombre_completo === 'string' && app.nombre_completo.trim() && !['N/D', 'CIUDADANO N/D', 'SIN NOMBRE'].includes(app.nombre_completo.trim().toUpperCase())) {
-      return app.nombre_completo.trim();
-    }
-    if (app.ciudadano_nombre && typeof app.ciudadano_nombre === 'string' && app.ciudadano_nombre.trim() && app.ciudadano_nombre.trim().toUpperCase() !== 'N/D') {
-      return app.ciudadano_nombre.trim();
-    }
-
-    // 3. Match from loaded extranjeria records by passport or ID
-    const passport = String(dp?.pasaporte || app.pasaporte || app.identificacion || '').trim().toUpperCase();
-    if (passport && typeof extranjeriaRecords !== 'undefined' && Array.isArray(extranjeriaRecords) && extranjeriaRecords.length > 0) {
-      const matched = extranjeriaRecords.find(r => (r.pasaporte || '').trim().toUpperCase() === passport);
-      if (matched && matched.nombre && matched.nombre.trim()) {
-        return matched.nombre.trim();
-      }
-    }
-
-    // 4. Dignified and clear citizen fallback if name was never entered
-    if (passport && passport !== 'N/D') {
-      return `Ciudadano (${passport})`;
-    }
-    if (dp?.nacionalidad && dp.nacionalidad !== 'No especificada') {
-      return `Ciudadano de ${dp.nacionalidad}`;
-    }
-
-    return 'Ciudadano Extranjero';
-  };
+    return cached;
+  }, [appointmentSearchCache]);
 
   // Helper to dynamically resolve the operator name of any booth (shows logged-in agent's name when occupied)
   const getBoothStaffName = (b: Booth | undefined): string => {
@@ -306,19 +388,17 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   const todayStr = React.useMemo(() => new Date().toISOString().substring(0, 10), []);
   const isStrictTodayOnly = React.useMemo(() => {
     if (atencionShowAllDates) return false;
-    return currentRole === 'extranjeria_atencion' || subRole === 'atencion';
-  }, [currentRole, subRole, atencionShowAllDates]);
+    return true; // Enforce today-only mode strictly for ALL roles by default to prevent heavy loading and RAM consumption
+  }, [atencionShowAllDates]);
 
-  // Enforce today's date filter dynamically for attention staff
+  // Ensure Atención Entrada starts with a valid focused date (today if has appointments, or first available)
   React.useEffect(() => {
-    if (isStrictTodayOnly) {
-      setAtencionDateFilter(todayStr);
-    } else {
-      if (atencionShowAllDates) {
-        setAtencionDateFilter('');
+    if (!atencionDateFilter) {
+      if (appointments.some((app: any) => isExtranjeriaAppointment(app) && app.fecha === todayStr)) {
+        setAtencionDateFilter(todayStr);
       }
     }
-  }, [isStrictTodayOnly, todayStr, atencionShowAllDates]);
+  }, [atencionDateFilter, appointments, todayStr]);
 
   // Safe utility to parse any date string format robustly
   const parseSafeDate = (dateStr: string): Date | null => {
@@ -374,6 +454,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   // Auto-jump calendar date to September 2026 (or first available month with appointments) on load if current month is empty
   React.useEffect(() => {
+    if (hasAutoJumped) return;
     if (appointments && appointments.length > 0) {
       let currentVal = calendarDate;
       // Self-heal if the current calendarDate is invalid
@@ -405,21 +486,27 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
           if (!isNaN(targetDate.getTime())) {
             setCalendarDate(targetDate);
             setSelectedCalendarDateStr(firstItem.app.fecha);
+            setHasAutoJumped(true);
           }
+        }
+      } else {
+        setHasAutoJumped(true);
+      }
+    }
+  }, [appointments, hasAutoJumped]);
+
+  // Auto-select active appointment date if there are no appointments for today, ensuring Atención Entrada always has a focused day
+  React.useEffect(() => {
+    if (appointments && appointments.length > 0) {
+      const hasToday = appointments.some((app: any) => isExtranjeriaAppointment(app) && app.fecha === todayStr);
+      if (!hasToday && !atencionDateFilter) {
+        const firstValid = appointments.find((app: any) => isExtranjeriaAppointment(app) && app.fecha)?.fecha;
+        if (firstValid) {
+          setAtencionDateFilter(firstValid);
         }
       }
     }
-  }, [appointments]);
-
-  // Auto-toggle "atencionShowAllDates" if there are no appointments for today, so past/future imported appointments appear immediately
-  React.useEffect(() => {
-    if (appointments && appointments.length > 0) {
-      const hasToday = appointments.some((app: any) => app.fecha === todayStr);
-      if (!hasToday && !atencionShowAllDates) {
-        setAtencionShowAllDates(true);
-      }
-    }
-  }, [appointments, todayStr, atencionShowAllDates]);
+  }, [appointments, todayStr, atencionDateFilter]);
 
   // Selected Cubicle in the "Cubículo" view
   const [selectedCubiculo, setSelectedCubiculo] = useState<number>(() => {
@@ -500,6 +587,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   
   // Supervisor custom period visibility filter
   const [supervisorPeriodFilter, setSupervisorPeriodFilter] = useState<'dia' | 'semana' | 'mes' | 'año' | 'todos'>('todos');
+  const [reatencionSearchQuery, setReatencionSearchQuery] = useState('');
   const [showDiagnosticPanel, setShowDiagnosticPanel] = useState(false);
 
   // New Date Range State for reports
@@ -515,9 +603,10 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     return `${d.getFullYear()}-${mm}-${dd}`;
   });
   const [reportOperatorFilter, setReportOperatorFilter] = useState<string>('all');
+  const [reportStatusFilter, setReportStatusFilter] = useState<'all' | 'completadas' | 'pendientes' | 'canceladas'>('all');
 
   // Supervisor tabs / sub-views (control of queues vs. calendar & creation/deletion panel vs. configuracion)
-  const [supervisorTab, setSupervisorTab] = useState<'flujo' | 'calendario' | 'carga_expedientes' | 'configuracion' | 'reportes'>(initialSupervisorTab || 'flujo');
+  const [supervisorTab, setSupervisorTab] = useState<'flujo' | 'calendario' | 'carga_expedientes' | 'configuracion' | 'reportes' | 'cola_cubiculos'>(initialSupervisorTab || 'flujo');
 
   useEffect(() => {
     if (initialSupervisorTab) {
@@ -543,7 +632,6 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   }, []);
   
   // Extranjeria Importer States
-  const [extranjeriaRecords, setExtranjeriaRecords] = useState<any[]>([]);
   const [loadingExtranjeria, setLoadingExtranjeria] = useState(false);
   const [extranjeriaSearchQuery, setExtranjeriaSearchQuery] = useState('');
   const [parsedExtranjeriaRows, setParsedExtranjeriaRows] = useState<any[]>([]);
@@ -573,9 +661,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   };
 
   useEffect(() => {
-    if (supervisorTab === 'carga_expedientes') {
-      fetchExtranjeriaRecords();
-    }
+    fetchExtranjeriaRecords();
   }, [supervisorTab]);
 
   const handleExtranjeriaFile = (file: File) => {
@@ -1176,41 +1262,13 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     });
   }, [appointmentsByDate, mesesNombres]);
 
-  // Auto-select first available date with appointments if today is empty to ensure user instantly sees appointments
-  useEffect(() => {
-    if (appointments && appointments.length > 0) {
-      const today = new Date();
-      const mm = String(today.getMonth() + 1).padStart(2, '0');
-      const dd = String(today.getDate()).padStart(2, '0');
-      const todayStr = `${today.getFullYear()}-${mm}-${dd}`;
-      
-      const hasToday = appointments.some(app => app.fecha === todayStr);
-      if (!hasToday) {
-        // Find the first appointment with a valid date and jump to that month & date
-        const firstAppWithDate = appointments.find(app => app.fecha && /^\d{4}-\d{2}-\d{2}$/.test(app.fecha));
-        if (firstAppWithDate && firstAppWithDate.fecha) {
-          const targetDateStr = firstAppWithDate.fecha;
-          setSelectedCalendarDateStr(targetDateStr);
-          
-          const parts = targetDateStr.split('-');
-          if (parts.length === 3) {
-            const y = parseInt(parts[0], 10);
-            const m = parseInt(parts[1], 10);
-            const d = parseInt(parts[2], 10);
-            if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
-              setCalendarDate(new Date(y, m - 1, d));
-            }
-          }
-        }
-      }
-    }
-  }, [appointments]);
-
-  // Form states for creating a new appointment
+  // Form states for creating a new special appointment (authorized supervisor additional quota)
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newCitaNombre, setNewCitaNombre] = useState('');
   const [newCitaPasaporte, setNewCitaPasaporte] = useState('');
   const [newCitaNacionalidad, setNewCitaNacionalidad] = useState('');
+  const [newCitaResolucion, setNewCitaResolucion] = useState('');
+  const [newCitaMotivoEspecial, setNewCitaMotivoEspecial] = useState('Autorización de Supervisión (Cupo Especial)');
   const [newCitaCorreo, setNewCitaCorreo] = useState('');
   const [newCitaTelefono, setNewCitaTelefono] = useState('');
   const [newCitaFecha, setNewCitaFecha] = useState('');
@@ -1277,14 +1335,14 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       }
     }
     const defaults = [
-      { id: 1, name: "Cubículo 19", active: true, staff: "Gestor de Extranjería", empty: false },
-      { id: 2, name: "Cubículo 20", active: true, staff: "Cubículo Ticket Extranjería", empty: false },
-      { id: 3, name: "Cubículo 22", active: true, staff: "Supervisor de Extranjería", empty: false },
-      { id: 4, name: "Cubículo 23", active: true, staff: "Atendimiento Entrada Extranjería", empty: false },
-      { id: 5, name: "Cubículo 5", active: false, staff: "Turno de Reserva", empty: true },
-      { id: 6, name: "Cubículo 6", active: false, staff: "Turno de Reserva", empty: true },
-      { id: 7, name: "Cubículo 7", active: false, staff: "Turno de Reserva", empty: true },
-      { id: 8, name: "Cubículo 8", active: false, staff: "Turno de Reserva", empty: true }
+      { id: 1, name: "Cubículo 19", active: true, staff: "Gestor de Extranjería", empty: false, receso: false },
+      { id: 2, name: "Cubículo 20", active: true, staff: "Cubículo Ticket Extranjería", empty: false, receso: false },
+      { id: 3, name: "Cubículo 22", active: true, staff: "Gestor de Extranjería", empty: false, receso: false },
+      { id: 4, name: "Cubículo 23", active: true, staff: "Cubículo Ticket Extranjería", empty: false, receso: false },
+      { id: 5, name: "Cubículo 5", active: false, staff: "Turno de Reserva", empty: true, receso: false },
+      { id: 6, name: "Cubículo 6", active: false, staff: "Turno de Reserva", empty: true, receso: false },
+      { id: 7, name: "Cubículo 7", active: false, staff: "Turno de Reserva", empty: true, receso: false },
+      { id: 8, name: "Cubículo 8", active: false, staff: "Turno de Reserva", empty: true, receso: false }
     ];
     if (loaded && Array.isArray(loaded)) {
       // Migrate old names if they match previous defaults
@@ -1298,10 +1356,10 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         let staff = b.staff;
         if (b.id === 1 && (b.staff === "Lic. Ana Pérez" || b.staff === "Lic. Ana Perez")) staff = "Gestor de Extranjería";
         if (b.id === 2 && (b.staff === "Lic. Carlos Gómez" || b.staff === "Lic. Carlos Gomez")) staff = "Cubículo Ticket Extranjería";
-        if (b.id === 3 && (b.staff === "Lic. María Rodríguez" || b.staff === "Lic. Maria Rodriguez")) staff = "Supervisor de Extranjería";
-        if (b.id === 4 && (b.staff === "Lic. Juan Martínez" || b.staff === "Lic. Juan Martinez")) staff = "Atendimiento Entrada Extranjería";
+        if (b.id === 3 && (b.staff === "Lic. María Rodríguez" || b.staff === "Lic. Maria Rodriguez" || b.staff === "Supervisor de Extranjería")) staff = "Gestor de Extranjería";
+        if (b.id === 4 && (b.staff === "Lic. Juan Martínez" || b.staff === "Lic. Juan Martinez" || b.staff === "Atendimiento Entrada Extranjería")) staff = "Cubículo Ticket Extranjería";
 
-        return { ...b, name, staff };
+        return { ...b, name, staff, receso: b.receso !== undefined ? b.receso : false };
       });
     }
     return defaults;
@@ -1393,12 +1451,15 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
           // Check if it's "realizada"
           const isRealizada = meta.estadoTicket === 'realizada';
           if (isRealizada) {
+            const stdAppDate = standardizeDateString(app.fecha || '');
+            const stdStart = standardizeDateString(reportStartDate);
+            const stdEnd = standardizeDateString(reportEndDate);
             // Is it today?
-            if (app.fecha === todayStr) {
+            if (stdAppDate === todayStr) {
               stats[op].today += 1;
             }
             // Is it within the selected report range?
-            if (app.fecha >= reportStartDate && app.fecha <= reportEndDate) {
+            if (stdAppDate && stdAppDate >= stdStart && stdAppDate <= stdEnd) {
               stats[op].range += 1;
             }
           }
@@ -1409,6 +1470,23 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     return stats;
   }, [availableCubiculoUsers, appointments, appMetadata, todayStr, reportStartDate, reportEndDate]);
 
+  // Helper to determine if a cubicle is busy with an active attention or call
+  const isCubiculoBusy = useCallback((cubiculoId: number) => {
+    return Object.keys(appMetadata).some(id => {
+      const meta = appMetadata[id];
+      if (id.startsWith('booth_occupant_') || id.startsWith('booth_receso_')) return false;
+      if (meta && Number(meta.assignedCubiculo) === Number(cubiculoId) && 
+             (meta.estadoTicket === 'en_proceso' || meta.estadoTicket === 'en_atencion')) {
+        const app = appointments.find(a => String(a.id) === String(id) || (a.codigoTransaccion && String(a.codigoTransaccion) === String(id)));
+        if (app && app.fecha !== todayStr) {
+          return false;
+        }
+        return true;
+      }
+      return false;
+    });
+  }, [appMetadata, appointments, todayStr]);
+
   // Fetch metadata from backend server
   const fetchServerMetadata = useCallback(async () => {
     try {
@@ -1417,7 +1495,35 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         const json = await res.json();
         if (json && json.success && json.metadata) {
           setAppMetadata(prev => {
-            const merged = { ...prev, ...json.metadata };
+            const newMeta = json.metadata;
+            const newKeys = Object.keys(newMeta);
+            const prevKeys = Object.keys(prev);
+
+            // Fast bail-out check: avoid creating a new object reference if data is unchanged
+            if (newKeys.length === prevKeys.length) {
+              let hasChanged = false;
+              for (let i = 0; i < newKeys.length; i++) {
+                const k = newKeys[i];
+                const p = prev[k];
+                const n = newMeta[k];
+                if (!p ||
+                    p.assignedCubiculo !== n.assignedCubiculo ||
+                    p.estadoTicket !== n.estadoTicket ||
+                    p.passedToSupervisor !== n.passedToSupervisor ||
+                    p.hasDocuments !== n.hasDocuments ||
+                    p.staffResponsable !== n.staffResponsable ||
+                    p.reatencion !== n.reatencion ||
+                    (p.checkedDocs?.length || 0) !== (n.checkedDocs?.length || 0)) {
+                  hasChanged = true;
+                  break;
+                }
+              }
+              if (!hasChanged) {
+                return prev; // Retain reference -> Zero re-renders across the entire component!
+              }
+            }
+
+            const merged = { ...prev, ...newMeta };
             try {
               localStorage.setItem('extranjeria_appointment_metadata', JSON.stringify(merged));
             } catch {}
@@ -1449,9 +1555,13 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     // Post to backend server for persistent database storage
     try {
       const payload = incremental || updated;
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'te_admin_master';
       await fetch('/api/extranjeria/metadata', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ metadata: payload })
       });
     } catch (e) {
@@ -1481,6 +1591,23 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   useEffect(() => {
     localStorage.setItem('extranjeria_appointment_metadata', JSON.stringify(appMetadata));
+  }, [appMetadata]);
+
+  // Sync booths recess status from appMetadata in real time
+  useEffect(() => {
+    setBooths(prev => {
+      let changed = false;
+      const updated = prev.map(b => {
+        const key = `booth_receso_${b.id}`;
+        const serverReceso = Boolean(appMetadata[key]?.reatencion);
+        if (b.receso !== serverReceso) {
+          changed = true;
+          return { ...b, receso: serverReceso };
+        }
+        return b;
+      });
+      return changed ? updated : prev;
+    });
   }, [appMetadata]);
 
   // Synchronize appointment metadata across multiple tabs/windows in real time (StorageEvent & BroadcastChannel)
@@ -1513,17 +1640,22 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     };
   }, []);
 
-  // Live clock state for Pantalla de Turnos
-  const [liveTime, setLiveTime] = useState<Date>(new Date());
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setLiveTime(new Date());
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
   // Audio control state for Pantalla de Turnos
   const [screenSoundEnabled, setScreenSoundEnabled] = useState(true);
+
+  // Persistent BroadcastChannel reference to prevent async dropping of messages
+  const bcRef = React.useRef<BroadcastChannel | null>(null);
+
+  React.useEffect(() => {
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      bcRef.current = new BroadcastChannel('te_extranjeria_calls');
+    }
+    return () => {
+      if (bcRef.current) {
+        try { bcRef.current.close(); } catch {}
+      }
+    };
+  }, []);
 
   // Call event state for broadcasting citizen calls to the Turn Display Screen exclusively
   const [lastCallEvent, setLastCallEvent] = useState<{
@@ -1628,12 +1760,18 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
     // 2. Real-time broadcast channel for open TV / monitor windows
     try {
-      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-        const bc = new BroadcastChannel('te_extranjeria_calls');
-        bc.postMessage({ type: 'CALL_CITIZEN', call: callData });
-        bc.close();
+      if (bcRef.current) {
+        bcRef.current.postMessage({ type: 'CALL_CITIZEN', call: callData });
+      } else if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const tempBc = new BroadcastChannel('te_extranjeria_calls');
+        tempBc.postMessage({ type: 'CALL_CITIZEN', call: callData });
+        setTimeout(() => {
+          try { tempBc.close(); } catch {}
+        }, 3000);
       }
-    } catch {}
+    } catch (e) {
+      console.warn("BroadcastChannel postMessage error:", e);
+    }
 
     // 3. Local component state
     setLastCallEvent(callData);
@@ -1648,12 +1786,18 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
     // 2. Broadcast clear event across open TV / monitor windows
     try {
-      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-        const bc = new BroadcastChannel('te_extranjeria_calls');
-        bc.postMessage({ type: 'CLEAR_CALL', appId });
-        bc.close();
+      if (bcRef.current) {
+        bcRef.current.postMessage({ type: 'CLEAR_CALL', appId });
+      } else if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const tempBc = new BroadcastChannel('te_extranjeria_calls');
+        tempBc.postMessage({ type: 'CLEAR_CALL', appId });
+        setTimeout(() => {
+          try { tempBc.close(); } catch {}
+        }, 3000);
       }
-    } catch {}
+    } catch (e) {
+      console.warn("BroadcastChannel clear postMessage error:", e);
+    }
 
     // 3. Clear local state
     setLastCallEvent(null);
@@ -1689,7 +1833,8 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       const stored = localStorage.getItem('te_extranjeria_active_call');
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (parsed && parsed.timestamp && (Date.now() - parsed.timestamp < 15000)) {
+        // Robust check allowing up to 3 minutes of clock skew (either positive or negative)
+        if (parsed && parsed.timestamp && (Math.abs(Date.now() - parsed.timestamp) < 180000)) {
           handleCallAnnouncement(parsed);
         }
       }
@@ -1746,16 +1891,45 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     setLoading(true);
     try {
       const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
-      const res = await fetch('/api/appointments', {
-        headers: {
-          'Authorization': `Bearer ${token}`
+      let allAppointments: any[] = [];
+      
+      try {
+        const res = await fetch('/api/appointments', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success && Array.isArray(data.appointments)) {
+            allAppointments = [...data.appointments];
+          }
         }
-      });
-      const data = await res.json();
-      if (data && data.success && Array.isArray(data.appointments)) {
-        let allAppointments = [...data.appointments];
+      } catch (netErr) {
+        console.warn('Network issue fetching appointments, attempting local storage sync:', netErr);
+      }
 
-        // Auto-heal any CSV appointments to full Extranjería nomenclature
+      // Check and merge local storage appointments so none are missing
+      try {
+        const saved = localStorage.getItem('citas_tribunal_electoral_v2');
+        if (saved) {
+          const localList = JSON.parse(saved);
+          if (Array.isArray(localList) && localList.length > 0) {
+            const existingIds = new Set(allAppointments.map((a: any) => String(a.id || '')));
+            localList.forEach((localApp: any) => {
+              if (localApp && localApp.id && !existingIds.has(String(localApp.id))) {
+                allAppointments.push(localApp);
+                existingIds.add(String(localApp.id));
+              }
+            });
+          }
+        }
+      } catch (locErr) {
+        console.warn('Error reading local appointments backup in Extranjería:', locErr);
+      }
+
+      if (allAppointments.length > 0) {
+        // Auto-heal any CSV appointments to full Extranjería nomenclature, preserving their original dates
         allAppointments = allAppointments.map((app: any) => {
           if (!app) return app;
           let updated = { ...app };
@@ -1823,20 +1997,57 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         }).map((app: any) => {
           const name = getExtranjeriaCitizenName(app);
           const dp = app.datosPersonales ? { ...app.datosPersonales } : {};
-          if (!dp.nombreCompleto && name && !name.startsWith('Ciudadano')) {
-            dp.nombreCompleto = name;
+          if (!dp.nombreCompleto || isGenericPlaceholderName(dp.nombreCompleto)) {
+            if (name && !isGenericPlaceholderName(name)) {
+              dp.nombreCompleto = name;
+            }
           }
           const standardizedDate = standardizeDateString(app.fecha);
+          const finalNombre = (app.nombre && !isGenericPlaceholderName(app.nombre)) ? app.nombre : name;
           return {
             ...app,
             fecha: standardizedDate || app.fecha,
-            nombre: (app.nombre && app.nombre.trim() && app.nombre !== 'N/D' && app.nombre !== 'Ciudadano N/D') ? app.nombre : name,
+            nombre: finalNombre,
             datosPersonales: dp
           };
         });
+
+        // Set the full appointments list so all dates appear on the calendar
         setAppointments(filtered);
+
+        // Auto-heal localStorage appointments so permanent storage reflects the real citizen names
+        try {
+          const savedLocal = localStorage.getItem('citas_tribunal_electoral_v2');
+          if (savedLocal) {
+            let localList = JSON.parse(savedLocal);
+            if (Array.isArray(localList) && localList.length > 0) {
+              let updatedCount = 0;
+              localList = localList.map((locApp: any) => {
+                if (!locApp) return locApp;
+                const match = filtered.find((f: any) => String(f.id) === String(locApp.id));
+                if (match && match.nombre && (!locApp.nombre || isGenericPlaceholderName(locApp.nombre) || locApp.nombre !== match.nombre)) {
+                  updatedCount++;
+                  return {
+                    ...locApp,
+                    nombre: match.nombre,
+                    datosPersonales: {
+                      ...(locApp.datosPersonales || {}),
+                      nombreCompleto: match.nombre
+                    }
+                  };
+                }
+                return locApp;
+              });
+              if (updatedCount > 0) {
+                localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(localList));
+              }
+            }
+          }
+        } catch (healErr) {
+          console.warn('Error auto-healing localStorage appointments:', healErr);
+        }
       } else {
-        showStatus('Error al recibir listado de citas.', 'error');
+        setAppointments([]);
       }
     } catch (err) {
       console.error(err);
@@ -1853,12 +2064,21 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       return;
     }
 
-    const existingDayCount = (appointmentsByDate[newCitaFecha] || []).length;
-    if (existingDayCount >= 56) {
-      showStatus('No es posible agendar: Se ha alcanzado el límite regulatorio de 56 citas para este día en Extranjería.', 'error');
+    // Las citas que crean los supervisores de Extranjería son CUPOS ESPECIALES ADICIONALES a los 56 ordinarios
+    const dayAppointments = appointmentsByDate[newCitaFecha] || [];
+    const regularAppointments = dayAppointments.filter((a: any) => !a.creadaPorSupervisor && !a.esEspecial && !a.citaEspecial && !a.esCupoAdicional);
+    const specialAppointments = dayAppointments.filter((a: any) => a.creadaPorSupervisor || a.esEspecial || a.citaEspecial || a.esCupoAdicional);
+
+    // Límite máximo de 30 citas especiales adicionales por día
+    if (specialAppointments.length >= 30) {
+      showStatus('Se ha alcanzado el límite máximo de 30 citas especiales adicionales para esta fecha.', 'error');
       return;
     }
-    const nextSeq = existingDayCount + 1;
+
+    // Numeración de la cita: si es antes de los 56 cupos ordinarios, toma el correlativo; si es adicional, se numera sobre 56
+    const nextSeq = regularAppointments.length < 56 
+      ? regularAppointments.length + 1 
+      : 56 + specialAppointments.length + 1;
 
     const anconSucursal = SUCURSALES_TE.find(s => s.id === 'anc_main');
     if (anconSucursal && anconSucursal.acceptsNationalAppointments === false) {
@@ -1872,8 +2092,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       for (let i = 0; i < 5; i++) {
         code += alpha.charAt(Math.floor(Math.random() * alpha.length));
       }
-      const transactionId = `EXT-${code}`;
+      const transactionId = `EXT-ESP-${code}`;
       const creatorName = sessionStorage.getItem('admin_username') || 'Supervisor de Extranjería';
+      const motivoVal = newCitaMotivoEspecial.trim() || 'Autorización de Supervisión (Cupo Especial)';
+      const resolucionVal = newCitaResolucion.trim();
+
       const payload = {
         id: transactionId,
         correo: newCitaCorreo.trim() || 'extranjeria@te.gob.pa',
@@ -1881,7 +2104,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         servicioCategoria: 'extranjeria',
         categoriaNombre: 'Trámites de Extranjería',
         subServicioId: 'ext_primera_vez',
-        subServicioNombre: 'Carné de residente permanente por primera vez',
+        subServicioNombre: 'Carné de residente permanente por primera vez (Cita Especial)',
         fecha: newCitaFecha,
         hora: newCitaHora,
         sucursalId: 'anc_main',
@@ -1890,8 +2113,14 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         estado: 'confirmada',
         telefono: newCitaTelefono.trim() || 'N/A',
         nombre: newCitaNombre.trim(),
-        creadoPor: creatorName,
+        creadoPor: `${creatorName} (Cupo Especial)`,
+        creadaPorSupervisor: true,
+        esEspecial: true,
+        citaEspecial: true,
+        esCupoAdicional: true,
+        motivoEspecial: motivoVal,
         numeroCitaDia: nextSeq,
+        resolucion: resolucionVal || undefined,
         datosPersonales: {
           primerNombre: newCitaNombre.split(' ')[0] || '',
           primerApellido: newCitaNombre.split(' ')[1] || '',
@@ -1900,30 +2129,42 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
           nacionalidad: newCitaNacionalidad.trim() || 'No especificada',
           correo: newCitaCorreo.trim() || 'extranjeria@te.gob.pa',
           telefono: newCitaTelefono.trim() || 'N/A',
-          creadoPor: creatorName
+          numeroResolucion: resolucionVal || undefined,
+          creadoPor: `${creatorName} (Cupo Especial)`,
+          creadaPorSupervisor: true,
+          esEspecial: true,
+          citaEspecial: true,
+          esCupoAdicional: true,
+          motivoEspecial: motivoVal
         },
         requisitos: [
           'Precio (efectivo) B/. 100.00',
-          'Requiere contar con cita programada',
+          'Cita especial autorizada por Supervisión de Extranjería (Cupo Adicional)',
           'Nota del Servicio Nacional de Migración',
           'Fotocopia del carné expedido por el Servicio Nacional de Migración',
           'Fotocopia de la página de las generales del pasaporte'
         ]
       };
 
+      const sessionToken = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
       const res = await fetch('/api/register-appointment', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`
+        },
         body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        showStatus('Cita de Extranjería creada con éxito.', 'success');
+        showStatus(`¡Cita Especial registrada con éxito! Cupo adicional autorizado para el ${newCitaFecha} a las ${newCitaHora}.`, 'success');
         
         // Reset form
         setNewCitaNombre('');
         setNewCitaPasaporte('');
         setNewCitaNacionalidad('');
+        setNewCitaResolucion('');
+        setNewCitaMotivoEspecial('Autorización de Supervisión (Cupo Especial)');
         setNewCitaCorreo('');
         setNewCitaTelefono('');
         setNewCitaFecha('');
@@ -1986,6 +2227,72 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       showStatus('Error de red al intentar eliminar la cita.', 'error');
     }
   };
+
+  useEffect(() => {
+    const autoRestore = async () => {
+      try {
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+        const res = await fetch('/api/appointments', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success && Array.isArray(data.appointments)) {
+            const fetchedList = data.appointments;
+            const rawMetadata = localStorage.getItem('extranjeria_appointment_metadata');
+            let currentMeta: Record<string, AppointmentMetadata> = {};
+            if (rawMetadata) {
+              try {
+                currentMeta = JSON.parse(rawMetadata);
+              } catch {}
+            }
+            
+            const updatedMap = { ...currentMeta };
+            let restoredCount = 0;
+            const incremental: Record<string, AppointmentMetadata> = {};
+
+            fetchedList.forEach((app: any) => {
+              if (!app) return;
+              const stdDate = standardizeDateString(app.fecha);
+              const isToday = stdDate === todayStr;
+              const isNotActuallyFinished = app.status !== 'atendido' && 
+                                            app.status !== 'realizada' && 
+                                            app.status !== 'completada' && 
+                                            app.status !== 'cancelada';
+
+              if (isToday && isNotActuallyFinished) {
+                const meta = updatedMap[app.id];
+                if (!meta || meta.estadoTicket === 'realizada') {
+                  const updatedMeta = {
+                    ...(meta || {
+                      hasDocuments: true,
+                      checkedDocs: [],
+                      passedToSupervisor: false,
+                    }),
+                    estadoTicket: 'ninguno' as const,
+                    assignedCubiculo: null
+                  };
+                  updatedMap[app.id] = updatedMeta;
+                  incremental[app.id] = updatedMeta;
+                  restoredCount++;
+                }
+              }
+            });
+
+            if (restoredCount > 0) {
+              await persistMetadata(updatedMap, incremental);
+              await fetchAppointments();
+              console.log(`[Auto-Heal] Auto-restored ${restoredCount} today's unserved appointments.`);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Auto-restore failed:', e);
+      }
+    };
+
+    autoRestore();
+  }, [todayStr]);
 
   useEffect(() => {
     fetchAppointments();
@@ -2098,6 +2405,36 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     showStatus(`Operador asignado al Casillero ${boothId} actualizado a: ${newStaff}.`, 'success');
   };
 
+  // Toggle recess/break status for any booth
+  const toggleBoothReceso = async (boothId: number) => {
+    let nextState = 'DISPONIBLE';
+    let nextReceso = false;
+    setBooths(prev => prev.map(b => {
+      if (b.id === boothId) {
+        nextReceso = !b.receso;
+        nextState = nextReceso ? 'EN RECESO' : 'DISPONIBLE';
+        return { ...b, receso: nextReceso };
+      }
+      return b;
+    }));
+
+    const key = `booth_receso_${boothId}`;
+    const updatedMeta = {
+      ...appMetadata,
+      [key]: {
+        hasDocuments: false,
+        checkedDocs: [],
+        passedToSupervisor: false,
+        assignedCubiculo: boothId,
+        estadoTicket: 'ninguno' as const,
+        reatencion: nextReceso
+      }
+    };
+    await persistMetadata(updatedMeta, { [key]: updatedMeta[key] });
+
+    showStatus(`Casillero ${boothId} cambiado a estado: ${nextState}.`, 'success');
+  };
+
   // Get active booths count
   const activeBoothsCount = useMemo(() => {
     return booths.filter(b => b.active).length;
@@ -2157,6 +2494,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   // Assign appointment to cubicle (by supervisor)
   const handleAssignToCubiculo = (appId: string, cubiculoId: number) => {
+    const targetBooth = booths.find(b => b.id === cubiculoId);
+    if (targetBooth?.receso) {
+      showStatus(`No se puede asignar: El ${targetBooth.name} se encuentra EN RECESO.`, 'error');
+      return;
+    }
+
     const app = appointments.find(a => a.id === appId || a.codigoTransaccion === appId);
     const existingMeta = appMetadata[appId] || (app?.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
     const meta = existingMeta || {
@@ -2169,6 +2512,9 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
     const updatedItem: AppointmentMetadata = {
       ...meta,
+      hasDocuments: true,
+      checkedDocs: meta.checkedDocs && meta.checkedDocs.length > 0 ? meta.checkedDocs : REQUISITOS_EXTRANJERIA.map(r => r.id),
+      passedToSupervisor: true,
       assignedCubiculo: cubiculoId,
       estadoTicket: 'en_proceso'
     };
@@ -2184,6 +2530,9 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     };
 
     persistMetadata(updatedMap, incremental);
+
+    setSelectedAppForSupervisor(null);
+    setSupervisorCheckedDocs([]);
 
     const codePart = (app?.codigoTransaccion || appId).slice(-4).toUpperCase();
     const cleanCitizenName = getExtranjeriaCitizenName(app);
@@ -2205,6 +2554,68 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     });
 
     showStatus(`Cita asignada al ${boothName}. Llamado emitido a la Pantalla de Turnos.`, 'success');
+  };
+
+  // Assign or return a citizen to a cubicle for re-attention (reatención)
+  const handleReassignForReattention = (appId: string, cubiculoId: number) => {
+    const targetBooth = booths.find(b => b.id === cubiculoId);
+    if (targetBooth?.receso) {
+      showStatus(`No se puede reasignar: El ${targetBooth.name} se encuentra EN RECESO.`, 'error');
+      return;
+    }
+
+    const app = appointments.find(a => a.id === appId || a.codigoTransaccion === appId);
+    if (!app) return;
+    
+    const existingMeta = appMetadata[appId] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+    
+    const updatedItem: AppointmentMetadata = {
+      ...(existingMeta || {
+        hasDocuments: true,
+        checkedDocs: REQUISITOS_EXTRANJERIA.map(r => r.id),
+        passedToSupervisor: true,
+        assignedCubiculo: null,
+        estadoTicket: 'ninguno'
+      }),
+      hasDocuments: true,
+      checkedDocs: existingMeta?.checkedDocs && existingMeta.checkedDocs.length > 0 ? existingMeta.checkedDocs : REQUISITOS_EXTRANJERIA.map(r => r.id),
+      passedToSupervisor: true,
+      assignedCubiculo: cubiculoId,
+      estadoTicket: 'en_proceso', // Will place back in queue/calling state
+      reatencion: true,
+      timestampReatencion: new Date().toLocaleTimeString('es-PA', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    };
+
+    const incremental: Record<string, AppointmentMetadata> = { [appId]: updatedItem };
+    if (app.codigoTransaccion && app.codigoTransaccion !== appId) {
+      incremental[app.codigoTransaccion] = updatedItem;
+    }
+
+    const updatedMap = {
+      ...appMetadata,
+      ...incremental
+    };
+
+    persistMetadata(updatedMap, incremental);
+
+    const codePart = String(app.codigoTransaccion || appId || '').slice(-4).toUpperCase();
+    const cleanCitizenName = getExtranjeriaCitizenName(app);
+    const boothName = booths.find(b => b.id === cubiculoId)?.name || `Cubículo ${cubiculoId}`;
+    
+    const codeSpelled = `E ${codePart.split('').join(' ')}`;
+    const announcementText = `Reatención. Turno E, ${codeSpelled}. ${cleanCitizenName}. Favor dirigirse al ${boothName}.`;
+
+    emitCallToPantalla({
+      appId,
+      codePart,
+      cleanCitizenName,
+      boothId: cubiculoId,
+      boothName,
+      announcementText,
+      type: 'cubiculo'
+    });
+
+    showStatus(`Cita ${codePart} reasignada para REATENCIÓN en el ${boothName}. Llamado emitido.`, 'success');
   };
 
   // Recall a citizen aloud strictly via the Turn Screen
@@ -2233,6 +2644,211 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       type: meta?.estadoTicket === 'pagado_en_caja' ? 'caja' : 'recall'
     });
     showStatus(`Re-llamado enviado a la Pantalla de Turnos: ${cleanCitizenName} (E-${codePart})`, 'info');
+  };
+
+  // Purgar citas colgadas o activas del día anterior o de hoy (para mantenimiento)
+  const handlePurgeStaleAppointments = (includeToday: boolean = false) => {
+    let changedCount = 0;
+    const updatedMap = { ...appMetadata };
+    const incremental: Record<string, AppointmentMetadata> = {};
+
+    Object.keys(appMetadata).forEach(id => {
+      if (id.startsWith('booth_occupant_') || id.startsWith('booth_receso_')) return;
+      const meta = appMetadata[id];
+      if (meta && meta.assignedCubiculo && (meta.estadoTicket === 'llamando' || meta.estadoTicket === 'en_proceso' || meta.estadoTicket === 'en_atencion')) {
+        const app = appointments.find(a => String(a.id) === String(id) || (a.codigoTransaccion && String(a.codigoTransaccion) === String(id)));
+        
+        if (includeToday || !app || app.fecha !== todayStr) {
+          const updated: AppointmentMetadata = {
+            ...meta,
+            estadoTicket: 'realizada'
+          };
+          updatedMap[id] = updated;
+          incremental[id] = updated;
+          changedCount++;
+        }
+      }
+    });
+
+    if (changedCount > 0) {
+      persistMetadata(updatedMap, incremental);
+      showStatus(`Éxito: Se purgaron y completaron ${changedCount} citas activas/colgadas del sistema.`, 'success');
+    } else {
+      showStatus('No se encontraron citas activas o colgadas para purgar.', 'info');
+    }
+  };
+
+  // Vaciar y reiniciar todo para empezar desde cero (sin ninguna cita anterior)
+  const handleWipeAllAppointments = async () => {
+    if (!window.confirm("¿Está ABSOLUTAMENTE seguro de borrar y vaciar toda la base de datos de Extranjería?\n\nEsto eliminará todas las citas de la pantalla, borrará el historial de hoy y dejará la TV y los cubículos completamente vacíos para empezar limpios.")) {
+      return;
+    }
+    setLoading(true);
+    try {
+      // 1. Clear local storage
+      localStorage.removeItem('citas_tribunal_electoral_v2');
+      localStorage.removeItem('te_extranjeria_active_call');
+      localStorage.removeItem('extranjeria_appointment_metadata');
+      
+      // 2. We create an empty metadata set for all existing appointment IDs to be 'realizada'
+      const clearedMeta: Record<string, AppointmentMetadata> = {};
+      Object.keys(appMetadata).forEach(id => {
+        if (id.startsWith('booth_occupant_') || id.startsWith('booth_receso_')) {
+          clearedMeta[id] = appMetadata[id];
+          return;
+        }
+        const meta = appMetadata[id];
+        if (meta) {
+          clearedMeta[id] = {
+            ...meta,
+            estadoTicket: 'realizada',
+            assignedCubiculo: null
+          };
+        }
+      });
+      
+      // If we have appointments, mark them all as 'realizada'
+      appointments.forEach(app => {
+        clearedMeta[app.id] = {
+          hasDocuments: true,
+          checkedDocs: [],
+          passedToSupervisor: false,
+          assignedCubiculo: null,
+          estadoTicket: 'realizada'
+        };
+      });
+
+      await persistMetadata(clearedMeta);
+      
+      // 3. Clear our appointments state
+      setAppointments([]);
+      
+      // 4. Send clear event to the TV
+      if (bcRef.current) {
+        bcRef.current.postMessage({ type: 'CLEAR_CALL', appId: 'all' });
+      }
+      setLastCallEvent(null);
+      
+      showStatus("Éxito: Se ha limpiado la pantalla por completo y restablecido a cero.", "success");
+    } catch (e) {
+      console.error(e);
+      showStatus("Error al limpiar el sistema.", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Crear y asignar turno manual (Walk-in / Sin Cita Previa) inmediatamente a un cubículo y llamar
+  const handleCreateAndCallManualAppointment = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    
+    if (!manualCitizenName.trim()) {
+      showStatus("Por favor ingrese el nombre completo del ciudadano.", "error");
+      return;
+    }
+    
+    if (!manualSelectedBooth) {
+      showStatus("Por favor seleccione un cubículo para asignar el turno.", "error");
+      return;
+    }
+
+    const docStr = manualCitizenDoc.trim() || 'N/A';
+    const cleanName = manualCitizenName.trim();
+    
+    // Generate a unique transaction/ticket code starting with EXT-M (for Manual) followed by a random 4-digit code
+    const randomCode = Math.floor(1000 + Math.random() * 9000);
+    const uniqueId = `EXT-M-${randomCode}`;
+    
+    // Choose selected subService details based on value
+    let subServiceNombre = 'Carné de residente permanente por primera vez';
+    if (manualTramiteType === 'ext_renovacion') subServiceNombre = 'Renovación de carné extranjero';
+    if (manualTramiteType === 'ext_entrega') subServiceNombre = 'Entrega de carné permanente';
+    if (manualTramiteType === 'ext_cedulacion') subServiceNombre = 'Trámite de Cédula de Extranjería';
+
+    const newApp = {
+      id: uniqueId,
+      codigoTransaccion: uniqueId,
+      fecha: todayStr, // Standardized current day date
+      hora: new Date().toLocaleTimeString('es-PA', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      nombre: cleanName,
+      servicioCategoria: 'extranjeria',
+      categoriaNombre: 'Trámites de Extranjería',
+      subServicioId: manualTramiteType,
+      subServicioNombre: subServiceNombre,
+      sucursalId: 'anc_main',
+      sucursalNombre: 'Sede Principal de Ancón (Extranjería)',
+      tipoIdentificacion: 'Pasaporte',
+      identificacion: docStr,
+      creadoPor: 'Asignación Manual Supervisor',
+      datosPersonales: {
+        nombreCompleto: cleanName,
+        identificacion: docStr,
+        tipoIdentificacion: 'Pasaporte'
+      }
+    };
+
+    try {
+      setLoading(true);
+
+      // 1. Add to appointments list in memory
+      const updatedAppointments = [newApp, ...appointments];
+      setAppointments(updatedAppointments);
+
+      // 2. Save new appointment list to local storage
+      localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(updatedAppointments));
+
+      // 3. Create metadata for this manual appointment
+      const newMeta: AppointmentMetadata = {
+        hasDocuments: true,
+        checkedDocs: ["req_precio", "req_cita", "req_nota_migracion", "req_carne_migracion", "req_pasaporte_generales"],
+        passedToSupervisor: true,
+        assignedCubiculo: Number(manualSelectedBooth),
+        estadoTicket: 'en_proceso', // Set to en_proceso for calling queue compatibility
+        timestampLlamado: new Date().toISOString()
+      } as any;
+
+      const updatedMetadata = {
+        ...appMetadata,
+        [uniqueId]: newMeta
+      };
+
+      await persistMetadata(updatedMetadata, { [uniqueId]: newMeta });
+
+      // 4. Emit the calling signal to the TV screen!
+      const boothObj = booths.find(b => b.id === manualSelectedBooth);
+      const boothLabel = boothObj ? boothObj.name : `Cubículo ${manualSelectedBooth}`;
+      
+      const announcementText = `Ciudadano ${cleanName}, código de turno ${uniqueId}, favor dirigirse al ${boothLabel}`;
+      
+      const callData = {
+        appId: uniqueId,
+        citizenName: cleanName,
+        turnCode: uniqueId,
+        boothId: manualSelectedBooth,
+        boothName: boothLabel,
+        timestamp: Date.now(),
+        announcementText
+      };
+
+      if (bcRef.current) {
+        bcRef.current.postMessage({ type: 'CALL_CITIZEN', call: callData });
+      }
+      setLastCallEvent(callData);
+
+      // Save call to localStorage for secondary recovery sync
+      localStorage.setItem('te_extranjeria_active_call', JSON.stringify(callData));
+
+      // 5. Clean form input states
+      setManualCitizenName('');
+      setManualCitizenDoc('');
+      
+      showStatus(`Cita manual ${uniqueId} asignada y llamada al ${boothLabel} correctamente.`, 'success');
+    } catch (e) {
+      console.error(e);
+      showStatus("Error al realizar la asignación manual.", "error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Iniciar atención presencial del ciudadano en el cubículo
@@ -2268,10 +2884,39 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   // Automatically assign appointment to the active booth with the least load (load balancing)
   const handleAutoAssignToCubiculo = (appId: string) => {
-    const activeBooths = booths.filter(b => b.active);
+    let activeBooths = booths.filter(b => b.active && !b.receso);
     if (activeBooths.length === 0) {
-      showStatus("Error: No hay cubículos activos en este momento.", "error");
+      const activeButInRecess = booths.filter(b => b.active && b.receso);
+      if (activeButInRecess.length > 0) {
+        showStatus("No se puede asignar automáticamente: Todos los cubículos activos están en receso.", "error");
+        return null;
+      }
+
+      const restored = booths.map(b => b.id <= 4 ? { ...b, active: true } : b);
+      setBooths(restored);
+      try { localStorage.setItem('extranjeria_booths', JSON.stringify(restored)); } catch {}
+      activeBooths = restored.filter(b => b.active && !b.receso);
+    }
+    if (activeBooths.length === 0) {
+      showStatus("Error: No hay cubículos activos y disponibles (que no estén en receso) en este momento.", "error");
       return null;
+    }
+
+    // PRIORITIZE OCCUPIED BOOTHS: Only assign to booths that have a logged-in agent currently attending
+    const occupiedBooths = activeBooths.filter(b => {
+      const occupant = appMetadata[`booth_occupant_${b.id}`];
+      return occupant && occupant.staffResponsable;
+    });
+    if (occupiedBooths.length > 0) {
+      activeBooths = occupiedBooths;
+    }
+
+    // EXCLUDE BUSY BOOTHS: Do not assign to booths currently attending or calling a citizen
+    const freeBooths = activeBooths.filter(b => !isCubiculoBusy(b.id));
+    if (freeBooths.length > 0) {
+      activeBooths = freeBooths;
+    } else {
+      showStatus("Todos los cubículos están atendiendo en este momento. El turno quedará en cola de espera.", "info");
     }
 
     // Count currently active appointments assigned to each active booth
@@ -2282,7 +2927,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
     Object.keys(appMetadata).forEach(id => {
       const meta = appMetadata[id];
-      if (meta && meta.assignedCubiculo && meta.estadoTicket !== 'realizada') {
+      if (meta && meta.assignedCubiculo && meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada') {
+        const app = appointments.find(a => String(a.id) === String(id) || (a.codigoTransaccion && String(a.codigoTransaccion) === String(id)));
+        if (app && app.fecha !== todayStr) {
+          return;
+        }
         if (counts[meta.assignedCubiculo] !== undefined) {
           counts[meta.assignedCubiculo]++;
         }
@@ -2311,10 +2960,39 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     const allDocIds = REQUISITOS_EXTRANJERIA.map(r => r.id);
     setSupervisorCheckedDocs(allDocIds);
 
-    const activeBooths = booths.filter(b => b.active);
+    let activeBooths = booths.filter(b => b.active && !b.receso);
     if (activeBooths.length === 0) {
-      showStatus("Error: No hay cubículos activos para despachar el turno. Active un cubículo abajo.", "error");
+      const activeButInRecess = booths.filter(b => b.active && b.receso);
+      if (activeButInRecess.length > 0) {
+        showStatus("No se puede asignar automáticamente: Todos los cubículos activos están en receso.", "error");
+        return;
+      }
+
+      const restored = booths.map(b => b.id <= 4 ? { ...b, active: true } : b);
+      setBooths(restored);
+      try { localStorage.setItem('extranjeria_booths', JSON.stringify(restored)); } catch {}
+      activeBooths = restored.filter(b => b.active && !b.receso);
+    }
+    if (activeBooths.length === 0) {
+      showStatus("Error: No hay cubículos activos y disponibles (que no estén en receso) en este momento.", "error");
       return;
+    }
+
+    // PRIORITIZE OCCUPIED BOOTHS: Only assign to booths that have a logged-in agent currently attending
+    const occupiedBooths = activeBooths.filter(b => {
+      const occupant = appMetadata[`booth_occupant_${b.id}`];
+      return occupant && occupant.staffResponsable;
+    });
+    if (occupiedBooths.length > 0) {
+      activeBooths = occupiedBooths;
+    }
+
+    // EXCLUDE BUSY BOOTHS: Do not assign to booths currently attending or calling a citizen
+    const freeBooths = activeBooths.filter(b => !isCubiculoBusy(b.id));
+    if (freeBooths.length > 0) {
+      activeBooths = freeBooths;
+    } else {
+      showStatus("Todos los cubículos están atendiendo en este momento. El turno quedará en cola de espera.", "info");
     }
 
     const app = appointments.find(a => a.id === appId || a.codigoTransaccion === appId);
@@ -2447,6 +3125,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       ...meta,
       estadoTicket: 'realizada',
       timestampCompletado: timestampFormatted,
+      fechaCompletado: todayStr,
       staffResponsable: getBoothStaffName(booths.find(b => b.id === meta.assignedCubiculo)) || 'Atención Extranjería'
     };
 
@@ -2470,194 +3149,229 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   // Filter appointments for the general table filter (matches query and filters)
   const filteredGeneralAppointments = useMemo(() => {
+    const query = deferredSearchQuery.trim().toLowerCase();
     return appointments.filter((app: any) => {
-      // Search
-      const query = searchQuery.trim().toLowerCase();
-      const matchesSearch = !query || (
-        getExtranjeriaCitizenName(app).toLowerCase().includes(query) ||
-        (app.datosPersonales?.nombreCompleto || app.nombre || '').toLowerCase().includes(query) ||
-        (app.datosPersonales?.primerNombre || '').toLowerCase().includes(query) ||
-        (app.datosPersonales?.pasaporte || app.identificacion || '').toLowerCase().includes(query) ||
-        (app.correo || app.datosPersonales?.correo || '').toLowerCase().includes(query) ||
-        (app.codigoTransaccion || '').toLowerCase().includes(query) ||
-        (app.id || '').toLowerCase().includes(query)
-      );
-
-      // Status
+      const matchesSearch = !query || getSearchText(app).includes(query);
       const matchesStatus = statusFilter === 'todos' || app.estado === statusFilter;
-
-      // Date
       const matchesDate = !dateFilter || app.fecha === dateFilter;
-
       return matchesSearch && matchesStatus && matchesDate;
     });
-  }, [appointments, searchQuery, statusFilter, dateFilter]);
-
-  // Appointments grouped by dynamic workflow queues:
-  // 1. Atención View queue: Extranjería appointments that are NOT yet passed to supervisor
-  const queueAtencionIn = useMemo(() => {
-    return appointments.filter(app => {
-      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
-      const isExt = isExtranjeriaAppointment(app);
-      const notPassed = !meta || (!meta.passedToSupervisor && !meta.hasDocuments);
-      const notFinished = !meta || (meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada');
-      
-      // Strict: only today's appointments if isStrictTodayOnly
-      if (isStrictTodayOnly && app.fecha !== todayStr) {
-        return false;
-      }
-
-      return isExt && notPassed && notFinished;
-    });
-  }, [appointments, appMetadata, isStrictTodayOnly, todayStr]);
+  }, [appointments, deferredSearchQuery, statusFilter, dateFilter, getSearchText]);
 
   // Unique appointment dates for quick selection in atención
   const availableAppointmentDates = useMemo(() => {
     const dates = new Set<string>();
     appointments.forEach(app => {
       if (app.fecha && isExtranjeriaAppointment(app)) {
-        dates.add(app.fecha);
+        dates.add(standardizeDateString(app.fecha));
       }
     });
     return Array.from(dates).sort();
   }, [appointments]);
 
-  // Filtered queue for Atención (Sala de Entrada) by live name/passport search and date filter
-  const filteredQueueAtencionIn = useMemo(() => {
-    return queueAtencionIn.filter(app => {
-      // 1. Date filter (exact day match if selected)
-      if (atencionDateFilter && app.fecha !== atencionDateFilter) {
-        return false;
-      }
+  // Active working date for Extranjería Atención (Sala de Entrada)
+  const activeAtencionDate = useMemo(() => {
+    if (subRole === 'supervisor' && selectedCalendarDateStr) {
+      return standardizeDateString(selectedCalendarDateStr);
+    }
+    if (atencionDateFilter) return standardizeDateString(atencionDateFilter);
+    if (appointments.some((app: any) => isExtranjeriaAppointment(app) && standardizeDateString(app.fecha) === todayStr)) {
+      return todayStr;
+    }
+    if (selectedCalendarDateStr && appointments.some((app: any) => isExtranjeriaAppointment(app) && standardizeDateString(app.fecha) === standardizeDateString(selectedCalendarDateStr))) {
+      return standardizeDateString(selectedCalendarDateStr);
+    }
+    if (availableAppointmentDates.length > 0) {
+      return availableAppointmentDates[0];
+    }
+    return todayStr;
+  }, [subRole, selectedCalendarDateStr, atencionDateFilter, appointments, todayStr, availableAppointmentDates]);
 
-      // 2. Search query (matches name, passport, transaction code or ID)
-      if (atencionSearchQuery.trim()) {
-        const q = atencionSearchQuery.trim().toLowerCase();
-        const name = getExtranjeriaCitizenName(app).toLowerCase();
-        const passport = String(app.datosPersonales?.pasaporte || app.identificacion || '').toLowerCase();
-        const id = String(app.id || '').toLowerCase();
-        const tx = String(app.codigoTransaccion || '').toLowerCase();
-
-        return name.includes(q) || passport.includes(q) || id.includes(q) || tx.includes(q);
-      }
-
-      return true;
+  // Dedicated universe for Atención Entrada on the active date:
+  // Strictly the ordinary appointments (no slice to prevent hiding citizens) + any appointment created by the supervisor for that day
+  const atencionDayUniverse = useMemo(() => {
+    const targetDate = activeAtencionDate;
+    const dayAppointments = appointments.filter((app: any) => {
+      if (!app) return false;
+      const appDate = standardizeDateString(app.fecha || '');
+      const tDate = standardizeDateString(targetDate || '');
+      return isExtranjeriaAppointment(app) && appDate === tDate;
     });
-  }, [queueAtencionIn, atencionSearchQuery, atencionDateFilter]);
 
-  // Secondary matches for searches when a citizen was already processed/assigned to supervisor
-  const atencionMatchesInOtherQueues = useMemo(() => {
-    if (!atencionSearchQuery.trim()) return [];
-    const q = atencionSearchQuery.trim().toLowerCase();
-    return appointments.filter(app => {
-      if (queueAtencionIn.some(a => a.id === app.id)) return false;
-      if (atencionDateFilter && app.fecha !== atencionDateFilter) return false;
+    const ordinary: any[] = [];
+    const supervisorCreated: any[] = [];
 
-      const name = getExtranjeriaCitizenName(app).toLowerCase();
-      const passport = String(app.datosPersonales?.pasaporte || app.identificacion || '').toLowerCase();
-      const id = String(app.id || '').toLowerCase();
-      const tx = String(app.codigoTransaccion || '').toLowerCase();
-
-      return name.includes(q) || passport.includes(q) || id.includes(q) || tx.includes(q);
+    dayAppointments.forEach((app: any) => {
+      const isSup = Boolean(
+        app.creadaPorSupervisor === true || 
+        app.esCupoAdicional === true || 
+        app.citaEspecial === true || 
+        app.esEspecial === true || 
+        (app.creadoPor && String(app.creadoPor).toLowerCase().includes('supervisor'))
+      );
+      if (isSup) {
+        supervisorCreated.push(app);
+      } else {
+        ordinary.push(app);
+      }
     });
-  }, [appointments, queueAtencionIn, atencionSearchQuery, atencionDateFilter]);
 
-  // 2. Atención View processed history (already sent to supervisor)
-  const queueAtencionOut = useMemo(() => {
-    return appointments.filter(app => {
+    // Sort ordinary appointments chronologically and by daily sequence
+    ordinary.sort((a, b) => {
+      if (a.numeroCitaDia && b.numeroCitaDia) return a.numeroCitaDia - b.numeroCitaDia;
+      const timeA = getMinutesFromHourString(a.hora || '');
+      const timeB = getMinutesFromHourString(b.hora || '');
+      return timeA - timeB;
+    });
+
+    // Keep all ordinary appointments so no citizen is left un-attended (no slice)
+    const ordinary56 = ordinary;
+
+    // Combine strictly: the ordinary appointments + supervisor-created appointments of that day
+    const totalUniverse = [...ordinary56, ...supervisorCreated];
+
+    return {
+      targetDate,
+      ordinary56,
+      supervisorCreated,
+      totalUniverse
+    };
+  }, [appointments, activeAtencionDate]);
+
+  // Appointments grouped by dynamic workflow queues:
+  // 1. Atención View queue: Extranjería appointments that are NOT yet passed to supervisor
+  // Strictly constrained to the active day's total universe of appointments (ordinary + supervisor-created)
+  const queueAtencionIn = useMemo(() => {
+    return atencionDayUniverse.totalUniverse.filter((app: any) => {
       const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
-      const isExt = isExtranjeriaAppointment(app);
-      const isPassed = Boolean(meta && (meta.passedToSupervisor === true || meta.hasDocuments === true));
-      
-      // Strict: only today's appointments if isStrictTodayOnly
-      if (isStrictTodayOnly && app.fecha !== todayStr) {
-        return false;
-      }
-
-      return isExt && isPassed;
+      const notPassed = !meta || (!meta.passedToSupervisor && !meta.hasDocuments);
+      const notFinished = !meta || (meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada');
+      return notPassed && notFinished;
     });
-  }, [appointments, appMetadata, isStrictTodayOnly, todayStr]);
+  }, [atencionDayUniverse.totalUniverse, appMetadata]);
+
+  // 2. Atención View processed history (already sent to supervisor) for the active day
+  const queueAtencionOut = useMemo(() => {
+    return atencionDayUniverse.totalUniverse.filter((app: any) => {
+      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+      return Boolean(meta && (meta.passedToSupervisor === true || meta.hasDocuments === true));
+    });
+  }, [atencionDayUniverse.totalUniverse, appMetadata]);
+
+  // Filtered queue for Atención (Sala de Entrada) by live name/passport search
+  // Ultra-fast instant search (0ms) restricted strictly to the 56 ordinary + supervisor-created appointments of the day
+  const filteredQueueAtencionIn = useMemo(() => {
+    const q = (atencionSearchQuery || localAtencionSearchQuery).trim().toLowerCase();
+    if (!q) return queueAtencionIn;
+    return queueAtencionIn.filter((app: any) => getSearchText(app).includes(q));
+  }, [queueAtencionIn, atencionSearchQuery, localAtencionSearchQuery, getSearchText]);
+
+  // Secondary matches for searches when a citizen was already processed/assigned to supervisor on this day
+  const atencionMatchesInOtherQueues = useMemo(() => {
+    const q = (atencionSearchQuery || localAtencionSearchQuery).trim().toLowerCase();
+    if (!q) return [];
+    return queueAtencionOut.filter((app: any) => getSearchText(app).includes(q));
+  }, [queueAtencionOut, atencionSearchQuery, localAtencionSearchQuery, getSearchText]);
+
+  // Filtered candidates for re-attention searching
+  const reatencionCandidates = useMemo(() => {
+    if (!reatencionSearchQuery.trim()) return [];
+    const q = reatencionSearchQuery.trim().toLowerCase();
+    return atencionDayUniverse.totalUniverse.filter((app: any) => {
+      if (!app) return false;
+      const name = getExtranjeriaCitizenName(app).toLowerCase();
+      const passport = (app.datosPersonales?.pasaporte || '').toLowerCase();
+      const identification = (app.identificacion || '').toLowerCase();
+      const code = String(app.id || '').slice(-4).toLowerCase();
+      return name.includes(q) || passport.includes(q) || identification.includes(q) || code.includes(q);
+    });
+  }, [atencionDayUniverse.totalUniverse, reatencionSearchQuery]);
 
   // 3. Supervisor Queue: passed from atencion but NOT yet assigned a cubicle
   const queueSupervisorPending = useMemo(() => {
     return appointments.filter(app => {
       const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
       const isExt = isExtranjeriaAppointment(app);
-      const isPassed = Boolean(meta && (meta.passedToSupervisor === true || meta.hasDocuments === true));
+      
+      const isSpecial = Boolean(
+        app.creadaPorSupervisor === true || 
+        app.esCupoAdicional === true || 
+        app.citaEspecial === true || 
+        app.esEspecial === true || 
+        (app.creadoPor && String(app.creadoPor).toLowerCase().includes('supervisor'))
+      );
+
+      const isPassed = isSpecial || Boolean(meta && (meta.passedToSupervisor === true || meta.hasDocuments === true));
       const notAssigned = !meta || meta.assignedCubiculo === null || meta.assignedCubiculo === undefined;
       const notFinished = !meta || (meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada');
+      
+      // Strict: match target date
+      const targetDate = selectedCalendarDateStr || atencionDateFilter || todayStr;
+      const appDate = standardizeDateString(app.fecha || '');
+      const tDate = standardizeDateString(targetDate || '');
+      if (appDate !== tDate) {
+        return false;
+      }
+
       return isExt && isPassed && notAssigned && notFinished;
     });
-  }, [appointments, appMetadata]);
+  }, [appointments, appMetadata, selectedCalendarDateStr, atencionDateFilter, todayStr]);
 
   // Filtered supervisor pending list for quick search
   const filteredQueueSupervisorPending = useMemo(() => {
-    const query = supervisorSearchQuery.trim().toLowerCase();
+    const query = deferredSupervisorSearchQuery.trim().toLowerCase();
     if (!query) return queueSupervisorPending;
-    return queueSupervisorPending.filter(app => {
-      const name = getExtranjeriaCitizenName(app).toLowerCase();
-      const passport = (app.datosPersonales?.pasaporte || app.identificacion || '').toLowerCase();
-      const id = app.id.toLowerCase();
-      const subServicio = (app.subServicioNombre || 'Servicio de Cedulación Extranjera').toLowerCase();
-      const createdBy = (app.creadoPor || app.datosPersonales?.creadoPor || 'Portal del Ciudadano').toLowerCase();
-      return (
-        name.includes(query) ||
-        passport.includes(query) ||
-        id.includes(query) ||
-        subServicio.includes(query) ||
-        createdBy.includes(query)
-      );
-    });
-  }, [queueSupervisorPending, supervisorSearchQuery]);
+    return queueSupervisorPending.filter(app => getSearchText(app).includes(query));
+  }, [queueSupervisorPending, deferredSupervisorSearchQuery, getSearchText]);
 
   // Filtered supervisor entrance hall list for quick search
   const filteredSupervisorAtencionIn = useMemo(() => {
-    const query = supervisorAtencionSearchQuery.trim().toLowerCase();
+    const query = deferredSupervisorAtencionSearchQuery.trim().toLowerCase();
     if (!query) return queueAtencionIn;
-    return queueAtencionIn.filter(app => {
-      const name = getExtranjeriaCitizenName(app).toLowerCase();
-      const passport = (app.datosPersonales?.pasaporte || app.identificacion || '').toLowerCase();
-      const id = String(app.id || '').toLowerCase();
-      const tx = String(app.codigoTransaccion || '').toLowerCase();
-      return name.includes(query) || passport.includes(query) || id.includes(query) || tx.includes(query);
-    });
-  }, [queueAtencionIn, supervisorAtencionSearchQuery]);
+    return queueAtencionIn.filter(app => getSearchText(app).includes(query));
+  }, [queueAtencionIn, deferredSupervisorAtencionSearchQuery, getSearchText]);
 
   // Filtered appointments for the supervisor's period dashboard
   const supervisorFilteredAppointments = useMemo(() => {
+    if (supervisorPeriodFilter === 'todos') return appointments;
     const now = new Date('2026-06-05T12:00:00');
+    const nowYear = now.getFullYear();
+    const nowMonth = now.getMonth();
+    const todayStr = '2026-06-05';
+
+    let sundayNow = 0;
+    if (supervisorPeriodFilter === 'semana') {
+      const d = new Date(now);
+      const day = d.getDay();
+      const pDiff = d.getDate() - day;
+      const sun = new Date(d.setDate(pDiff));
+      sun.setHours(0,0,0,0);
+      sundayNow = sun.getTime();
+    }
+
     return appointments.filter((app: any) => {
       if (!app.fecha) return false;
+      if (supervisorPeriodFilter === 'dia') {
+        return app.fecha === todayStr;
+      }
       const appDate = new Date(app.fecha + 'T12:00:00');
       if (isNaN(appDate.getTime())) return false;
 
-      if (supervisorPeriodFilter === 'dia') {
-        const todayStr = '2026-06-05';
-        return app.fecha === todayStr;
-      }
-
-      if (supervisorPeriodFilter === 'todos') {
-        return true;
-      }
-
       if (supervisorPeriodFilter === 'semana') {
-        const getSunday = (dObj: Date) => {
-          const d = new Date(dObj);
-          const day = d.getDay();
-          const pDiff = d.getDate() - day;
-          const sun = new Date(d.setDate(pDiff));
-          sun.setHours(0,0,0,0);
-          return sun.getTime();
-        };
-        return getSunday(now) === getSunday(appDate);
+        const d = new Date(appDate);
+        const day = d.getDay();
+        const pDiff = d.getDate() - day;
+        const sun = new Date(d.setDate(pDiff));
+        sun.setHours(0,0,0,0);
+        return sundayNow === sun.getTime();
       }
 
       if (supervisorPeriodFilter === 'mes') {
-        return appDate.getFullYear() === now.getFullYear() && appDate.getMonth() === now.getMonth();
+        return appDate.getFullYear() === nowYear && appDate.getMonth() === nowMonth;
       }
 
       if (supervisorPeriodFilter === 'año') {
-        return appDate.getFullYear() === now.getFullYear();
+        return appDate.getFullYear() === nowYear;
       }
 
       return true;
@@ -2675,8 +3389,29 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   // Recommended booth based on load balancing
   const recommendedBooth = useMemo(() => {
-    const activeBooths = booths.filter(b => b.active);
+    let activeBooths = booths.filter(b => b.active && !b.receso);
+    if (activeBooths.length === 0) {
+      activeBooths = booths.filter(b => b.active);
+    }
+    if (activeBooths.length === 0) {
+      activeBooths = booths.slice(0, 4);
+    }
     if (activeBooths.length === 0) return null;
+
+    // PRIORITIZE OCCUPIED BOOTHS: Only assign to booths that have a logged-in agent currently attending
+    const occupiedBooths = activeBooths.filter(b => {
+      const occupant = appMetadata[`booth_occupant_${b.id}`];
+      return occupant && occupant.staffResponsable;
+    });
+    if (occupiedBooths.length > 0) {
+      activeBooths = occupiedBooths;
+    }
+
+    // EXCLUDE BUSY BOOTHS: Prioritize booths that are not busy attending
+    const freeBooths = activeBooths.filter(b => !isCubiculoBusy(b.id));
+    if (freeBooths.length > 0) {
+      activeBooths = freeBooths;
+    }
     
     const counts: Record<number, number> = {};
     activeBooths.forEach(b => {
@@ -2710,50 +3445,117 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   const queueCubiculoAssigned = useMemo(() => {
     return appointments.filter(app => {
       const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+      if (isStrictTodayOnly && app.fecha !== todayStr) {
+        return false;
+      }
       return isExtranjeriaAppointment(app) && meta && Number(meta.assignedCubiculo) === Number(selectedCubiculo) && meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada';
     });
-  }, [appointments, appMetadata, selectedCubiculo]);
+  }, [appointments, appMetadata, selectedCubiculo, isStrictTodayOnly, todayStr]);
 
-  // Count of how many citizens were attended by the active cubicle/ventanilla today
-  const attendedTodayCount = useMemo(() => {
+  // Appointments completed exclusively TODAY by the active cubicle (never yesterday or previous dates)
+  const cubiculoCompletedTodayApps = useMemo(() => {
     return appointments.filter(app => {
       const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
-      return isExtranjeriaAppointment(app) && meta && Number(meta.assignedCubiculo) === Number(selectedCubiculo) && meta.estadoTicket === 'realizada';
-    }).length;
-  }, [appointments, appMetadata, selectedCubiculo]);
+      if (!isExtranjeriaAppointment(app) || !meta) return false;
+      const isAssigned = Number(meta.assignedCubiculo) === Number(selectedCubiculo);
+      if (!isAssigned) return false;
+      return isCompletedToday(app, meta, todayStr);
+    });
+  }, [appointments, appMetadata, selectedCubiculo, todayStr]);
+
+  // Count of how many citizens were attended by the active cubicle/ventanilla today
+  const attendedTodayCount = cubiculoCompletedTodayApps.length;
 
   // 5. Supervisor Analytics / Reports: appointments in selected interval, regardless of status
-  const filterRealizadasByDateRange = (startStr: string, endStr: string) => {
+  const filterRealizadasByDateRange = useCallback((startStr: string, endStr: string) => {
+    const stdStart = standardizeDateString(startStr);
+    const stdEnd = standardizeDateString(endStr);
+
     return appointments.filter(app => {
-      if (!app.fecha) return false;
-      const isWithinDate = app.fecha >= startStr && app.fecha <= endStr;
+      if (!isExtranjeriaAppointment(app)) return false;
+
+      const rawDate = app.fecha || app.date || app.fechaCita || app.datosPersonales?.fecha || '';
+      const stdDate = standardizeDateString(rawDate);
+      if (!stdDate) return false;
+
+      const isWithinDate = stdDate >= stdStart && stdDate <= stdEnd;
       if (!isWithinDate) return false;
 
-      const meta = appMetadata[app.id];
-      // Only include appointments that were processed/assigned to a cubicle (Ventanilla / Ticket)
-      if (!meta || !meta.assignedCubiculo) return false;
+      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
 
       // Filter by dynamic Cubicle User/Operator if a specific one is selected
       if (reportOperatorFilter !== 'all') {
-        if (meta.staffResponsable !== reportOperatorFilter) {
+        if (!meta || meta.staffResponsable !== reportOperatorFilter) {
           return false;
         }
       }
+
+      // Filter by Status
+      if (reportStatusFilter === 'completadas') {
+        const isCompleted = meta?.estadoTicket === 'realizada' || 
+                            app.status === 'atendido' || 
+                            app.status === 'realizada' || 
+                            app.status === 'completada';
+        if (!isCompleted) return false;
+      } else if (reportStatusFilter === 'pendientes') {
+        const isPending = (!meta?.estadoTicket || meta.estadoTicket === 'ninguno' || meta.estadoTicket === 'en_proceso' || meta.estadoTicket === 'en_atencion') &&
+                          app.status !== 'cancelada' && app.status !== 'atendido' && app.status !== 'realizada' && app.status !== 'completada';
+        if (!isPending) return false;
+      } else if (reportStatusFilter === 'canceladas') {
+        const isCancelled = meta?.estadoTicket === 'cancelada' || app.status === 'cancelada';
+        if (!isCancelled) return false;
+      }
+
       return true;
+    }).sort((a, b) => {
+      const dateA = standardizeDateString(a.fecha || '');
+      const dateB = standardizeDateString(b.fecha || '');
+      if (dateA !== dateB) return dateA.localeCompare(dateB);
+      const seqA = a.numeroCitaDia || 999;
+      const seqB = b.numeroCitaDia || 999;
+      if (seqA !== seqB) return seqA - seqB;
+      return (a.hora || '').localeCompare(b.hora || '');
     });
-  };
+  }, [appointments, appMetadata, reportOperatorFilter, reportStatusFilter]);
+
+  // Derived matching appointments and metrics for the reports view
+  const matchingAppointments = useMemo(() => {
+    return filterRealizadasByDateRange(reportStartDate, reportEndDate);
+  }, [filterRealizadasByDateRange, reportStartDate, reportEndDate]);
+
+  const matchingCompleted = useMemo(() => {
+    return matchingAppointments.filter(app => {
+      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+      return meta?.estadoTicket === 'realizada' || app.status === 'atendido' || app.status === 'realizada' || app.status === 'completada';
+    }).length;
+  }, [matchingAppointments, appMetadata]);
+
+  const matchingPending = useMemo(() => {
+    return matchingAppointments.filter(app => {
+      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+      return (!meta?.estadoTicket || meta.estadoTicket === 'ninguno' || meta.estadoTicket === 'en_proceso' || meta.estadoTicket === 'en_atencion') &&
+             app.status !== 'cancelada' && app.status !== 'atendido' && app.status !== 'realizada' && app.status !== 'completada';
+    }).length;
+  }, [matchingAppointments, appMetadata]);
+
+  const matchingCancelled = useMemo(() => {
+    return matchingAppointments.filter(app => {
+      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+      return meta?.estadoTicket === 'cancelada' || app.status === 'cancelada';
+    }).length;
+  }, [matchingAppointments, appMetadata]);
 
   // Download performed (realized) appointments report - CSV Format
   const handleDownloadRealizadasCSV = () => {
-    const list = filterRealizadasByDateRange(reportStartDate, reportEndDate);
+    const list = matchingAppointments;
     if (list.length === 0) {
-      alert('No se encontraron citas en el intervalo seleccionado para generar el reporte.');
+      showStatus('No se encontraron citas en el rango seleccionado para exportar el CSV.', 'info');
       return;
     }
 
     const headers = ['N° Secuencia (1-56)', 'Fecha', 'Hora', 'Ciudadano', 'Pasaporte/ID', 'Resolución', 'ID Transacción', 'Operador Responsable', 'Cubículo', 'Estado', 'Hora Completado'];
     const rows = list.map(app => {
-      const meta = appMetadata[app.id];
+      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
       const name = getExtranjeriaCitizenName(app);
       const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
       const cubiculoName = booths.find(b => b.id === meta?.assignedCubiculo)?.name || (meta?.assignedCubiculo ? `Cubículo ${meta.assignedCubiculo}` : 'N/A');
@@ -2776,6 +3578,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     const filterText = reportOperatorFilter !== 'all' 
       ? `_Operador_${reportOperatorFilter.replace(/\s+/g, '_')}` 
       : '';
+    const statusText = reportStatusFilter !== 'all' ? `_${reportStatusFilter}` : '';
 
     const csvContent = "data:text/csv;charset=utf-8,\uFEFF" 
       + [headers.join(','), ...rows.map(e => e.map(val => `"${val.replace(/"/g, '""')}"`).join(','))].join('\n');
@@ -2783,198 +3586,214 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Reporte_Extranjeria_Citas_${reportStartDate}_a_${reportEndDate}${filterText}.csv`);
+    link.setAttribute("download", `Reporte_Extranjeria_Citas_${reportStartDate}_a_${reportEndDate}${statusText}${filterText}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    showStatus(`Reporte CSV exportado con éxito (${list.length} citas).`, 'success');
   };
 
   // Download performed (realized) appointments report - PDF Format using jsPDF helper
   const handleDownloadRealizadasPDF = () => {
-    const list = filterRealizadasByDateRange(reportStartDate, reportEndDate);
-    if (list.length === 0) {
-      alert('No se encontraron citas en el intervalo seleccionado para generar el reporte PDF.');
-      return;
-    }
+    try {
+      const list = matchingAppointments;
+      if (list.length === 0) {
+        showStatus(`No se encontraron citas de Extranjería en el rango seleccionado (${reportStartDate} al ${reportEndDate}).`, 'info');
+        return;
+      }
 
-    const doc = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'letter'
-    });
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'letter'
+      });
 
-    const pageW = doc.internal.pageSize.getWidth();
+      const pageW = doc.internal.pageSize.getWidth();
+      const primaryColor = [15, 23, 42]; // Slate 900
+      const accentColor = [217, 119, 6];  // Amber 600
 
-    const primaryColor = [15, 23, 42]; // Slate 900
-    const accentColor = [217, 119, 6];  // Amber 600
+      let currentY = 15;
 
-    let currentY = 15;
+      const drawHeader = () => {
+        // Top accent bar
+        doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+        doc.rect(10, currentY, pageW - 20, 10, 'F');
+        
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('Helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.text('TRIBUNAL ELECTORAL DE PANAMÁ', 15, currentY + 6.5);
+        doc.setFontSize(8);
+        doc.setFont('Helvetica', 'normal');
+        doc.text('DIRECCIÓN NACIONAL DE CEDULACIÓN - EXTRANJERÍA', pageW - 95, currentY + 6.5);
 
-    const drawHeader = () => {
-      // Top accent bar
-      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
-      doc.rect(10, currentY, pageW - 20, 10, 'F');
-      
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('Helvetica', 'bold');
-      doc.setFontSize(10);
-      doc.text('TRIBUNAL ELECTORAL DE PANAMÁ', 15, currentY + 6.5);
+        // Report Header Section
+        currentY += 16;
+        doc.setTextColor(15, 23, 42);
+        doc.setFont('Helvetica', 'bold');
+        doc.setFontSize(11);
+        
+        let titleText = 'REPORTE OFICIAL DE CITAS DE EXTRANJERÍA';
+        if (reportStatusFilter === 'completadas') titleText = 'REPORTE DE CITAS ATENDIDAS Y COMPLETADAS - EXTRANJERÍA';
+        else if (reportStatusFilter === 'pendientes') titleText = 'REPORTE DE CITAS PROGRAMADAS / PENDIENTES - EXTRANJERÍA';
+        else if (reportStatusFilter === 'canceladas') titleText = 'REPORTE DE CITAS CANCELADAS - EXTRANJERÍA';
+        else titleText = 'REPORTE GENERAL DE CITAS (TODOS LOS ESTADOS) - EXTRANJERÍA';
 
-      // Report Header Section
-      currentY += 16;
+        if (reportOperatorFilter !== 'all') {
+          titleText += ` (OPERADOR: ${reportOperatorFilter.toUpperCase()})`;
+        }
+        doc.text(titleText, 10, currentY);
+
+        currentY += 5;
+        doc.setFont('Helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text('Control Operativo de Supervisor de Extranjería - Sede Principal Ancón', 10, currentY);
+
+        currentY += 5;
+        doc.text(`Intervalo: Del ${reportStartDate} al ${reportEndDate}  |  Emisión: ${new Date().toLocaleDateString('es-ES')} ${new Date().toLocaleTimeString('es-ES')}`, 10, currentY);
+
+        currentY += 4;
+        doc.setDrawColor(accentColor[0], accentColor[1], accentColor[2]);
+        doc.setLineWidth(0.8);
+        doc.line(10, currentY, pageW - 10, currentY);
+        currentY += 8;
+      };
+
+      drawHeader();
+
+      // Summary Statistics box counting statuses
+      const totalCount = list.length;
+      const completedCount = list.filter(app => {
+        const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+        return meta?.estadoTicket === 'realizada' || app.status === 'atendido' || app.status === 'realizada' || app.status === 'completada';
+      }).length;
+      const cancelledCount = list.filter(app => {
+        const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+        return meta?.estadoTicket === 'cancelada' || app.status === 'cancelada';
+      }).length;
+      const pendingCount = totalCount - completedCount - cancelledCount;
+
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.25);
+      doc.rect(10, currentY, pageW - 20, 26, 'FD');
+
       doc.setTextColor(15, 23, 42);
       doc.setFont('Helvetica', 'bold');
-      doc.setFontSize(11);
-      let titleText = 'REPORTE GENERAL DE ATENCIÓN DE CITAS (TODOS LOS ESTADOS) - EXTRANJERÍA';
-      if (reportOperatorFilter !== 'all') {
-        titleText += ` (OPERADOR: ${reportOperatorFilter.toUpperCase()})`;
-      } else {
-        titleText += ` (TODOS LOS OPERADORES DE VENTANILLA)`;
-      }
-      doc.text(titleText, 10, currentY);
+      doc.setFontSize(9);
+      doc.text('RESUMEN ESTADÍSTICO DE OPERACIÓN', 15, currentY + 5.5);
 
-      currentY += 5;
       doc.setFont('Helvetica', 'normal');
-      doc.setFontSize(8.5);
-      doc.setTextColor(100, 116, 139);
-      doc.text('Control Operativo de Supervisor de Extranjería', 10, currentY);
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`• Total Citas en Reporte: ${totalCount}  |  Atendidas: ${completedCount}  |  Programadas/Pendientes: ${pendingCount}  |  Canceladas: ${cancelledCount}`, 15, currentY + 11);
+      doc.text(`• Intervalo de Selección: ${reportStartDate} al ${reportEndDate}`, 15, currentY + 15);
+      doc.text(`• Filtro de Estado: ${reportStatusFilter.toUpperCase()}`, pageW - 85, currentY + 11);
+      doc.text(`• Casilleros Activos: ${activeBoothsCount} puestos`, pageW - 85, currentY + 15);
 
-      currentY += 5;
-      doc.text(`Intervalo analizado: Desde ${reportStartDate} Hasta ${reportEndDate}  |  Fecha de emisión: ${new Date().toLocaleDateString('es-ES')} ${new Date().toLocaleTimeString('es-ES')}`, 10, currentY);
-
-      currentY += 4;
-      doc.setDrawColor(accentColor[0], accentColor[1], accentColor[2]);
-      doc.setLineWidth(0.8);
-      doc.line(10, currentY, pageW - 10, currentY);
-      currentY += 8;
-    };
-
-    drawHeader();
-
-    // Summary Statistics box counting statuses
-    const totalCount = list.length;
-    const completedCount = list.filter(app => appMetadata[app.id]?.estadoTicket === 'realizada').length;
-    const cancelledCount = list.filter(app => appMetadata[app.id]?.estadoTicket === 'cancelada').length;
-    const pendingCount = totalCount - completedCount - cancelledCount;
-
-    doc.setFillColor(248, 250, 252);
-    doc.setDrawColor(226, 232, 240);
-    doc.setLineWidth(0.25);
-    doc.rect(10, currentY, pageW - 20, 26, 'FD');
-
-    doc.setTextColor(15, 23, 42);
-    doc.setFont('Helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.text('RESUMEN ESTADÍSTICO DE OPERACIÓN', 15, currentY + 5.5);
-
-    doc.setFont('Helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(71, 85, 105);
-    doc.text(`• Total Citas Registradas: ${totalCount}  |  Completadas: ${completedCount}  |  Pendientes: ${pendingCount}  |  Canceladas: ${cancelledCount}`, 15, currentY + 11);
-    doc.text(`• Capacidad Máxima del Periodo: Regulada por intervalos de ${intervalo} min con promedio de ${capacidad} slots`, 15, currentY + 15);
-    doc.text(`• Casilleros Activos totales: ${activeBoothsCount} puestos`, pageW - 85, currentY + 11);
-    doc.text(`• Reporte Oficial con Estados Generales`, pageW - 85, currentY + 15);
-
-    doc.setFont('Helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text('• GUÍA DE NOMENCLATURAS: ', 15, currentY + 20.5);
-    doc.setFont('Helvetica', 'normal');
-    doc.setTextColor(71, 85, 105);
-    doc.text('ATENDIDO (Atendida con éxito y biometría validada) | PENDIENTE/CONFIRMADA (Activa programada) | CANCELADA (Anulada/Inasistencia)', 54, currentY + 20.5);
-    
-    currentY += 32;
-
-    // Table Headers
-    const drawTableHead = (y: number) => {
-      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
-      doc.rect(10, y, pageW - 20, 7, 'F');
-      
-      doc.setTextColor(255, 255, 255);
       doc.setFont('Helvetica', 'bold');
       doc.setFontSize(7.5);
-      
-      doc.text('ID CITA', 12, y + 4.8);
-      doc.text('CIUDADANO EXTRANJERO', 35, y + 4.8);
-      doc.text('PASAPORTE', 80, y + 4.8);
-      doc.text('CUBÍCULO', 105, y + 4.8);
-      doc.text('ESTADO', 130, y + 4.8);
-      doc.text('OPERADOR / ATENDIDO', 155, y + 4.8);
-    };
-
-    drawTableHead(currentY);
-    currentY += 7;
-
-    // Render Completed Appointments
-    list.forEach((app, index) => {
-      const meta = appMetadata[app.id];
-      if (currentY > 245) {
-        doc.addPage();
-        currentY = 15;
-        drawHeader();
-        drawTableHead(currentY);
-        currentY += 7;
-      }
-
-      // Zebra rows striped
-      if (index % 2 === 1) {
-        doc.setFillColor(248, 250, 252);
-        doc.rect(10, currentY, pageW - 20, 8, 'F');
-      }
-
       doc.setTextColor(15, 23, 42);
+      doc.text('• CONVENCIONES: ', 15, currentY + 20.5);
       doc.setFont('Helvetica', 'normal');
-      doc.setFontSize(7);
-
-      const dp = app.datosPersonales || {};
-      const name = dp.nombreCompleto || (dp.primerNombre || dp.primerApellido ? `${dp.primerNombre || ''} ${dp.primerApellido || ''}`.trim() : '') || app.nombre || 'N/D';
-      const nameShort = name.length > 32 ? name.slice(0, 30) + '...' : name;
-      const passport = dp.pasaporte || app.identificacion || 'N/D';
-      const labelPassport = passport.length > 15 ? passport.slice(0, 13) + '...' : passport;
-      const cubiculoName = booths.find(b => b.id === meta?.assignedCubiculo)?.name || (meta?.assignedCubiculo ? `Cubículo ${meta.assignedCubiculo}` : 'Sin Asignar');
-      const labelCubiculo = cubiculoName.length > 15 ? cubiculoName.slice(0, 13) + '...' : cubiculoName;
-      const staffName = meta?.staffResponsable || 'Oficial General';
-      const staffShort = staffName.length > 18 ? staffName.slice(0, 16) + '...' : staffName;
+      doc.setTextColor(71, 85, 105);
+      doc.text('ATENDIDO (Completada con éxito) | PENDIENTE (En agenda / espera) | CANCELADA (Inasistencia o rechazo)', 46, currentY + 20.5);
       
-      const estado = (meta?.estadoTicket || app.status || 'Pendiente').toUpperCase();
-      const tCompleted = meta?.timestampCompletado || 'N/D';
+      currentY += 32;
 
-      const labelAppId = app.id.length > 14 ? app.id.slice(0, 12) + '...' : app.id;
-
-      doc.text(labelAppId, 12, currentY + 5);
-      doc.text(nameShort.toUpperCase(), 35, currentY + 5);
-      doc.text(labelPassport, 80, currentY + 5);
-      doc.text(labelCubiculo, 105, currentY + 5);
-      
-      // Draw status with colors
-      if (estado === 'REALIZADA' || estado === 'COMPLETADA' || estado === 'CONFIRMADA' || estado === 'ATENDIDO') {
-        doc.setTextColor(16, 124, 65);
+      // Table Headers
+      const drawTableHead = (y: number) => {
+        doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+        doc.rect(10, y, pageW - 20, 7, 'F');
+        
+        doc.setTextColor(255, 255, 255);
         doc.setFont('Helvetica', 'bold');
-      } else if (estado === 'CANCELADA' || estado === 'CANCELADO' || estado === 'INASISTENCIA') {
-        doc.setTextColor(185, 28, 28);
-        doc.setFont('Helvetica', 'bold');
-      } else {
-        doc.setTextColor(180, 83, 9);
-        doc.setFont('Helvetica', 'bold');
-      }
-      doc.text(estado, 130, currentY + 5);
-      
-      doc.setTextColor(15, 23, 42);
-      doc.setFont('Helvetica', 'normal');
-      doc.text(`${staffShort} / ${tCompleted}`, 155, currentY + 5);
+        doc.setFontSize(7.5);
+        
+        doc.text('ID / N°', 12, y + 4.8);
+        doc.text('FECHA / HORA', 32, y + 4.8);
+        doc.text('CIUDADANO EXTRANJERO', 65, y + 4.8);
+        doc.text('PASAPORTE / RES', 120, y + 4.8);
+        doc.text('CUBÍCULO / OPERADOR', 152, y + 4.8);
+        doc.text('ESTADO', 188, y + 4.8);
+      };
 
-      doc.setDrawColor(241, 245, 249);
-      doc.setLineWidth(0.1);
-      doc.line(10, currentY + 8, pageW - 10, currentY + 8);
+      drawTableHead(currentY);
+      currentY += 7;
 
-      currentY += 8;
-    });
+      // Render Appointments in the range
+      list.forEach((app, index) => {
+        const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+        if (currentY > 250) {
+          doc.addPage();
+          currentY = 15;
+          drawHeader();
+          drawTableHead(currentY);
+          currentY += 7;
+        }
 
-    // Signature Area removed per user request
-    const filterText = reportOperatorFilter !== 'all' 
-      ? `_Operador_${reportOperatorFilter.replace(/\s+/g, '_')}` 
-      : '';
-    doc.save(`reporte_extranjeria_atendidos_${reportStartDate}_a_${reportEndDate}${filterText}.pdf`);
+        // Zebra rows striped
+        if (index % 2 === 1) {
+          doc.setFillColor(248, 250, 252);
+          doc.rect(10, currentY, pageW - 20, 8, 'F');
+        }
+
+        doc.setTextColor(15, 23, 42);
+        doc.setFont('Helvetica', 'normal');
+        doc.setFontSize(7);
+
+        const dp = app.datosPersonales || {};
+        const name = getExtranjeriaCitizenName(app);
+        const nameShort = name.length > 28 ? name.slice(0, 26) + '...' : name;
+        const passport = dp.pasaporte || app.identificacion || 'N/D';
+        const resolucion = app.resolucion || dp.numeroResolucion || '';
+        const passOrRes = resolucion ? `${passport} (${resolucion.slice(0, 10)})` : passport;
+        const labelPassport = passOrRes.length > 18 ? passOrRes.slice(0, 16) + '...' : passOrRes;
+        const cubiculoName = booths.find(b => b.id === meta?.assignedCubiculo)?.name || (meta?.assignedCubiculo ? `C.${meta.assignedCubiculo}` : 'Sin Asignar');
+        const staffName = meta?.staffResponsable || 'Sin Asignar';
+        const cubStaff = `${cubiculoName} / ${staffName}`.length > 20 ? `${cubiculoName} / ${staffName}`.slice(0, 18) + '...' : `${cubiculoName} / ${staffName}`;
+
+        const estado = (meta?.estadoTicket || app.status || 'Pendiente').toUpperCase();
+        const seqStr = app.numeroCitaDia ? `#${app.numeroCitaDia}` : (app.id.length > 10 ? app.id.slice(0, 8) + '...' : app.id);
+        const fechaHora = `${app.fecha || ''} ${app.hora || ''}`.trim();
+
+        doc.text(seqStr, 12, currentY + 5);
+        doc.text(fechaHora, 32, currentY + 5);
+        doc.text(nameShort.toUpperCase(), 65, currentY + 5);
+        doc.text(labelPassport, 120, currentY + 5);
+        doc.text(cubStaff, 152, currentY + 5);
+        
+        // Draw status with colors
+        if (estado === 'REALIZADA' || estado === 'COMPLETADA' || estado === 'CONFIRMADA' || estado === 'ATENDIDO') {
+          doc.setTextColor(16, 124, 65);
+          doc.setFont('Helvetica', 'bold');
+        } else if (estado === 'CANCELADA' || estado === 'CANCELADO' || estado === 'INASISTENCIA') {
+          doc.setTextColor(185, 28, 28);
+          doc.setFont('Helvetica', 'bold');
+        } else {
+          doc.setTextColor(180, 83, 9);
+          doc.setFont('Helvetica', 'bold');
+        }
+        doc.text(estado, 188, currentY + 5);
+
+        doc.setDrawColor(241, 245, 249);
+        doc.setLineWidth(0.1);
+        doc.line(10, currentY + 8, pageW - 10, currentY + 8);
+
+        currentY += 8;
+      });
+
+      const filterText = reportOperatorFilter !== 'all' 
+        ? `_Operador_${reportOperatorFilter.replace(/\s+/g, '_')}` 
+        : '';
+      const statusText = reportStatusFilter !== 'all' ? `_${reportStatusFilter}` : '';
+      doc.save(`reporte_extranjeria_${reportStartDate}_a_${reportEndDate}${statusText}${filterText}.pdf`);
+      showStatus(`Reporte PDF generado y descargado con éxito (${list.length} citas).`, 'success');
+    } catch (err: any) {
+      console.error('Error generating PDF report:', err);
+      showStatus('Error al generar el archivo PDF: ' + (err?.message || 'Error desconocido'), 'error');
+    }
   };
 
   const handlePrintPDF = () => {
@@ -3062,18 +3881,20 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 <span>Cubículo (Ventanilla)</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => { setSubRole('pantalla'); setSelectedAppForCheck(null); setSelectedAppForSupervisor(null); }}
-                className={`px-4 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider flex items-center gap-2 transition cursor-pointer ${
-                  subRole === 'pantalla'
-                    ? 'bg-emerald-600 text-white shadow-md'
-                    : 'bg-slate-950/60 text-slate-400 hover:text-slate-200 border border-slate-800'
-                }`}
-              >
-                <Tv className="w-4 h-4" />
-                <span>Pantalla de Turnos</span>
-              </button>
+              {subRole !== 'atencion' && subRole !== 'cubiculo' && (
+                <button
+                  type="button"
+                  onClick={() => { setSubRole('pantalla'); setSelectedAppForCheck(null); setSelectedAppForSupervisor(null); }}
+                  className={`px-4 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider flex items-center gap-2 transition cursor-pointer ${
+                    subRole === 'pantalla'
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'bg-slate-950/60 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  <Tv className="w-4 h-4" />
+                  <span>Pantalla de Turnos</span>
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -3098,22 +3919,24 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
               </div>
             </div>
             <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  if (subRole === 'pantalla') {
-                    if (currentRole === 'extranjeria_supervisor') setSubRole('supervisor');
-                    else if (currentRole === 'extranjeria_atencion') setSubRole('atencion');
-                    else setSubRole('cubiculo');
-                  } else {
-                    setSubRole('pantalla');
-                  }
-                }}
-                className="bg-emerald-950/40 border border-emerald-500/30 hover:border-emerald-500/60 text-emerald-400 font-black text-[10px] uppercase py-1.5 px-3 rounded-lg transition cursor-pointer select-none flex items-center gap-1.5"
-              >
-                <Tv className="w-3.5 h-3.5" />
-                <span>{subRole === 'pantalla' ? 'Regresar a Consola' : 'Ver Pantalla de Turnos 📺'}</span>
-              </button>
+              {currentRole !== 'extranjeria_atencion' && currentRole !== 'extranjeria_cubiculo' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (subRole === 'pantalla') {
+                      if ((currentRole as string) === 'extranjeria_supervisor') setSubRole('supervisor');
+                      else if ((currentRole as string) === 'extranjeria_atencion') setSubRole('atencion');
+                      else setSubRole('cubiculo');
+                    } else {
+                      setSubRole('pantalla');
+                    }
+                  }}
+                  className="bg-emerald-950/40 border border-emerald-500/30 hover:border-emerald-500/60 text-emerald-400 font-black text-[10px] uppercase py-1.5 px-3 rounded-lg transition cursor-pointer select-none flex items-center gap-1.5"
+                >
+                  <Tv className="w-3.5 h-3.5" />
+                  <span>{subRole === 'pantalla' ? 'Regresar a Consola' : 'Ver Pantalla de Turnos 📺'}</span>
+                </button>
+              )}
               <div className="bg-amber-500/20 px-3 py-1.5 border border-amber-500/30 rounded-lg text-amber-400 font-mono text-[10px] uppercase font-bold tracking-wider select-none">
                 🔴 Estación Activa
               </div>
@@ -3209,6 +4032,18 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
               <FileText className="w-3.5 h-3.5 text-amber-500" />
               <span>Reportes de Atención 📊</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setSupervisorTab('cola_cubiculos')}
+              className={`px-5 py-3 text-xs font-black uppercase tracking-wider border-b-2 transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                supervisorTab === 'cola_cubiculos'
+                  ? 'border-emerald-500 text-emerald-500 bg-emerald-500/5'
+                  : 'border-transparent text-slate-450 hover:text-slate-250 hover:bg-slate-900/40'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Monitoreo de Cubículos 👥</span>
+            </button>
           </div>
 
           {supervisorTab === 'flujo' && (
@@ -3244,14 +4079,96 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setSupervisorTab('configuracion')}
-                  className="bg-amber-500/10 hover:bg-amber-500/20 active:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/30 text-xs font-black uppercase px-3.5 py-2 rounded-lg transition flex items-center gap-2 cursor-pointer shrink-0 shadow-sm"
-                >
-                  <Settings className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Configurar Casilleros & Horarios ➜</span>
-                </button>
+
+              </div>
+
+              {/* ASIGNACIÓN MANUAL DIRECTA (Walk-ins / Entrada Directa) */}
+              <div className="bg-slate-950 rounded-xl border-2 border-amber-500/40 p-5 space-y-4 shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 px-3 py-1 text-[9px] font-mono font-black tracking-widest text-amber-300 bg-amber-950/90 border-l border-b border-amber-500/30 uppercase rounded-bl-lg">
+                  MÓDULO DE EMISIÓN DE TURNOS
+                </div>
+                
+                <div className="space-y-1 text-left pb-3 border-b border-slate-900">
+                  <h4 className="text-xs font-black uppercase text-white tracking-wider flex items-center gap-1.5">
+                    <UserPlus className="w-4 h-4 text-amber-500" />
+                    <span>Asignación Manual de Turno (Entrada Directa / Sin Cita Previa)</span>
+                  </h4>
+                  <p className="text-[9.5px] text-slate-400 font-bold uppercase">
+                    Utilice este formulario para registrar y llamar ciudadanos directamente a un cubículo de extranjería (ideal si inician sin citas anteriores)
+                  </p>
+                </div>
+
+                <form onSubmit={handleCreateAndCallManualAppointment} className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                  <div className="md:col-span-4 space-y-1.5 text-left">
+                    <label className="text-[9.5px] font-black uppercase tracking-wider text-slate-300 block">
+                      Nombre Completo del Ciudadano
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej. Juan Manuel Pérez"
+                      value={manualCitizenName}
+                      onChange={(e) => setManualCitizenName(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 outline-none transition"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2 space-y-1.5 text-left">
+                    <label className="text-[9.5px] font-black uppercase tracking-wider text-slate-300 block">
+                      Pasaporte / Cédula
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ej. N-123456"
+                      value={manualCitizenDoc}
+                      onChange={(e) => setManualCitizenDoc(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-600 outline-none transition"
+                    />
+                  </div>
+
+                  <div className="md:col-span-3 space-y-1.5 text-left">
+                    <label className="text-[9.5px] font-black uppercase tracking-wider text-slate-300 block">
+                      Trámite de Extranjería
+                    </label>
+                    <select
+                      value={manualTramiteType}
+                      onChange={(e) => setManualTramiteType(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition cursor-pointer"
+                    >
+                      <option value="ext_primera_vez">Carné de residente permanente (1ra Vez)</option>
+                      <option value="ext_renovacion">Renovación de carné extranjero</option>
+                      <option value="ext_entrega">Entrega de carné permanente</option>
+                      <option value="ext_cedulacion">Trámite de Cédula de Extranjería</option>
+                    </select>
+                  </div>
+
+                  <div className="md:col-span-3 space-y-1.5 text-left">
+                    <label className="text-[9.5px] font-black uppercase tracking-wider text-slate-300 block">
+                      Asignar y Llamar a Cubículo
+                    </label>
+                    <div className="flex gap-2">
+                      <select
+                        value={manualSelectedBooth}
+                        onChange={(e) => setManualSelectedBooth(e.target.value)}
+                        className="flex-1 bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition cursor-pointer"
+                      >
+                        <option value="">-- Cubículo --</option>
+                        {booths.filter(b => b.active).map(b => (
+                          <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                      </select>
+
+                      <button
+                        type="submit"
+                        disabled={loading}
+                        className="bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase px-4.5 py-2 rounded-lg transition shrink-0 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                        title="Registra el turno y lo llama inmediatamente en la TV del lobby"
+                      >
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>Llamar 📺</span>
+                      </button>
+                    </div>
+                  </div>
+                </form>
               </div>
 
               {/* OUTSTANDING CITATIONS FOR CUBICLE ASSIGNMENT */}
@@ -3401,8 +4318,32 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                             <CheckCheck className="w-4 h-4 text-emerald-200" />
                             <span>Marcar los 3 Requisitos y Asignar Automáticamente ⚡</span>
                           </button>
-                          <div className="text-[9.5px] text-slate-500 font-bold uppercase text-center flex items-center justify-center gap-1.5">
-                            <span>O use "Marcar los 3 al mismo tiempo ✓" arriba para chequearlos antes de firmar</span>
+                          
+                          {/* Direct Booth Selector Grid */}
+                          <div className="space-y-2 pt-2 border-t border-slate-850">
+                            <span className="text-[9px] font-black text-slate-400 block uppercase tracking-wider">
+                              O Asignar Directamente a un Cubículo:
+                            </span>
+                            <div className="grid grid-cols-2 gap-2">
+                              {(booths.filter(b => b.active).length > 0 ? booths.filter(b => b.active) : booths.slice(0, 4)).map(booth => (
+                                <button
+                                  key={`quick-assign-booth-${booth.id}`}
+                                  type="button"
+                                  onClick={() => handleAssignToCubiculo(selectedAppForSupervisor.id, booth.id)}
+                                  className="p-2.5 rounded-lg border border-slate-800 bg-slate-900/80 hover:bg-slate-850 hover:border-emerald-500/50 text-left transition flex flex-col justify-between gap-1 group cursor-pointer"
+                                >
+                                  <div className="flex items-center justify-between w-full">
+                                    <span className="text-xs font-black text-white group-hover:text-emerald-400">{booth.name}</span>
+                                    <span className="text-[8px] bg-emerald-950/60 text-emerald-400 border border-emerald-800/50 px-1 py-0.2 rounded font-mono font-bold">Activo</span>
+                                  </div>
+                                  <div className="text-[9px] text-slate-400 truncate">{booth.staff}</div>
+                                  <div className="text-[8.5px] text-emerald-400 font-extrabold uppercase mt-0.5 flex items-center gap-1">
+                                    <span>Asignar Aquí ⚡</span>
+                                    <ArrowRight className="w-2.5 h-2.5" />
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       ) : (
@@ -3422,19 +4363,52 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                                 type="button"
                                 onClick={() => {
                                   handleAutoAssignToCubiculo(selectedAppForSupervisor.id);
-                                  setSelectedAppForSupervisor(null);
-                                  setSupervisorCheckedDocs([]);
                                 }}
                                 className="w-full mt-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold text-[10.5px] tracking-wider uppercase py-3 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
                               >
-                                <span>Firmar y Despachar Turno a Pantalla ⚡</span>
+                                <span>Firmar y Despachar a {recommendedBooth.name} ⚡</span>
                               </button>
                             </div>
                           ) : (
-                            <div className="p-3 text-[10.5px] text-red-400 font-bold text-center">
-                              ⚠️ No hay cubículos activos habilitados. Active uno a la izquierda en la consola del supervisor de extranjería.
+                            <div className="p-3 text-[10.5px] text-amber-400 font-bold text-center bg-amber-950/20 border border-amber-800/40 rounded">
+                              <span>Habilitando cubículos operativos...</span>
                             </div>
                           )}
+
+                          {/* Direct Booth Selector Grid */}
+                          <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                            <span className="text-[9px] font-black text-slate-400 block uppercase tracking-wider">
+                              O Seleccionar Cubículo Específico:
+                            </span>
+                            <div className="grid grid-cols-2 gap-2">
+                              {(booths.filter(b => b.active).length > 0 ? booths.filter(b => b.active) : booths.slice(0, 4)).map(booth => {
+                                const countForBooth = Object.values(appMetadata).filter(
+                                  (m: any) => m && Number(m.assignedCubiculo) === booth.id && m.estadoTicket !== 'realizada' && m.estadoTicket !== 'cancelada'
+                                ).length;
+
+                                return (
+                                  <button
+                                    key={`assign-direct-booth-${booth.id}`}
+                                    type="button"
+                                    onClick={() => handleAssignToCubiculo(selectedAppForSupervisor.id, booth.id)}
+                                    className="p-2.5 rounded-lg border border-slate-800 bg-slate-900/90 hover:bg-slate-850 hover:border-amber-500/50 text-left transition flex flex-col justify-between gap-1 group cursor-pointer"
+                                  >
+                                    <div className="flex items-center justify-between w-full">
+                                      <span className="text-xs font-black text-white group-hover:text-amber-400">{booth.name}</span>
+                                      <span className="text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                                        {countForBooth} en cola
+                                      </span>
+                                    </div>
+                                    <div className="text-[9.5px] text-slate-400 truncate">{booth.staff}</div>
+                                    <div className="text-[8.5px] text-amber-500 font-extrabold uppercase mt-0.5 flex items-center gap-1">
+                                      <span>Asignar aquí</span>
+                                      <ArrowRight className="w-2.5 h-2.5" />
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -3463,116 +4437,45 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                         <span>Sincronizar Citas Ahora 🔄</span>
                       </button>
                     </div>
-
-                    {/* SALA DE ENTRADA MONITOR FOR SUPERVISOR */}
-                    {queueAtencionIn.length > 0 && (
-                      <div className="p-4 rounded-xl bg-slate-900/40 border border-slate-850 text-left space-y-3">
-                        <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/80 pb-2 gap-2">
-                          <div className="space-y-0.5">
-                            <h5 className="text-[11px] font-black uppercase tracking-wider text-slate-200 flex items-center gap-1.5">
-                              <Users className="w-3.5 h-3.5 text-blue-400" />
-                              <span>En Sala de Entrada / Espera de Atención ({queueAtencionIn.length})</span>
-                            </h5>
-                            <p className="text-[9px] text-slate-450 font-bold uppercase">
-                              Ciudadanos esperando revisión documental. Puede darles paso o despacharlos directamente:
-                            </p>
-                          </div>
-
-                          {/* Quick Search for Waiting Room */}
-                          <div className="relative w-full md:w-72 shrink-0">
-                            <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
-                            <input
-                              type="text"
-                              placeholder="Buscar por nombre, PAS o ID..."
-                              value={supervisorAtencionSearchQuery}
-                              onChange={(e) => setSupervisorAtencionSearchQuery(e.target.value)}
-                              className="w-full bg-slate-900 border border-slate-800 rounded-md py-1.5 pl-9 pr-8 text-[11px] text-white focus:outline-none focus:border-slate-700 focus:ring-1 focus:ring-amber-500 font-medium placeholder-slate-600"
-                            />
-                            {supervisorAtencionSearchQuery && (
-                              <button
-                                type="button"
-                                onClick={() => setSupervisorAtencionSearchQuery('')}
-                                className="absolute right-2.5 top-1.5 text-slate-500 hover:text-white text-xs font-black px-1"
-                              >
-                                ✕
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="divide-y divide-slate-850/60 max-h-[260px] overflow-y-auto pr-1">
-                          {filteredSupervisorAtencionIn.length === 0 ? (
-                            <div className="py-8 text-center text-[11px] text-slate-500 font-bold uppercase tracking-wider">
-                              🔍 No se encontraron coincidencias para "{supervisorAtencionSearchQuery}"
-                            </div>
-                          ) : (
-                            filteredSupervisorAtencionIn.map(app => {
-                              const name = getExtranjeriaCitizenName(app);
-                              const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
-
-                              return (
-                                <div key={`sup-wait-${app.id}`} className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 first:pt-1">
-                                  <div className="space-y-0.5">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-[11px] font-mono font-black text-amber-400">{app.id}</span>
-                                      <span className="text-[8px] bg-blue-950/40 text-blue-400 border border-blue-900/50 uppercase font-black px-1.5 py-0.2 rounded font-mono">
-                                        Sala de Entrada
-                                      </span>
-                                    </div>
-                                    <span className="text-[11px] font-bold text-slate-200 block uppercase">{name}</span>
-                                    <span className="text-[9px] font-mono text-slate-450 block">PAS: {passport} | Hora: {app.hora}</span>
-                                  </div>
-
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleMarkAllAndAutoAssign(app.id)}
-                                      className="flex items-center gap-1 text-emerald-300 hover:text-white bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 transition font-black uppercase text-[9px] tracking-wider px-2.5 py-1.5 rounded-md cursor-pointer shadow-sm"
-                                      title="Marcar los 3 requisitos y asignar cubículo inmediatamente"
-                                    >
-                                      <Zap className="w-3 h-3 text-emerald-400 fill-emerald-400" />
-                                      <span>Marcar 3 y Asignar ⚡</span>
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSubmitVerification(app.id)}
-                                      className="flex items-center gap-1 text-blue-300 hover:text-white bg-blue-950/80 hover:bg-blue-900 border border-blue-500/40 transition font-black uppercase text-[9px] tracking-wider px-2.5 py-1.5 rounded-md cursor-pointer shadow-sm"
-                                      title="Dar paso inmediato a la bandeja del supervisor"
-                                    >
-                                      <Send className="w-3 h-3 text-blue-400" />
-                                      <span>Dar Paso a Supervisor ⏩</span>
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 ) : (
                   <div className="space-y-3.5">
-                    {/* Live Search Input for Supervisor Pending Queue */}
-                    <div className="relative">
-                      <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
-                      <input
-                        type="text"
-                        placeholder="Búsqueda rápida por Nombre, ID, Pasaporte, Trámite, Creado por..."
-                        value={supervisorSearchQuery}
-                        onChange={(e) => setSupervisorSearchQuery(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-md py-1.5 pl-9 pr-8 text-[11px] text-white focus:outline-none focus:border-slate-700 focus:ring-1 focus:ring-amber-500 font-medium placeholder-slate-600"
-                      />
-                      {supervisorSearchQuery && (
-                        <button
-                          type="button"
-                          onClick={() => setSupervisorSearchQuery('')}
-                          className="absolute right-2.5 top-1.5 text-slate-500 hover:text-white text-xs font-black px-1"
-                        >
-                          ✕
-                        </button>
-                      )}
+                    {/* Search Input for Supervisor Pending Queue with Search Button */}
+                    <div className="flex items-center gap-1.5">
+                      <div className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
+                        <input
+                          type="text"
+                          placeholder="Búsqueda rápida por Nombre, ID, Pasaporte, Trámite, Creado por..."
+                          value={localSupervisorSearchQuery}
+                          onChange={(e) => setLocalSupervisorSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              setSupervisorSearchQuery(localSupervisorSearchQuery);
+                            }
+                          }}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-md py-1.5 pl-9 pr-8 text-[11px] text-white focus:outline-none focus:border-slate-700 focus:ring-1 focus:ring-amber-500 font-medium placeholder-slate-600"
+                        />
+                        {(localSupervisorSearchQuery || supervisorSearchQuery) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLocalSupervisorSearchQuery('');
+                              setSupervisorSearchQuery('');
+                            }}
+                            className="absolute right-2.5 top-1.5 text-slate-500 hover:text-white text-xs font-black px-1"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSupervisorSearchQuery(localSupervisorSearchQuery)}
+                        className="bg-amber-600 hover:bg-amber-500 text-slate-950 font-black uppercase text-[10px] px-3 py-1.5 rounded-md transition shadow-sm shrink-0 cursor-pointer"
+                      >
+                        Buscar
+                      </button>
                     </div>
 
                     {filteredQueueSupervisorPending.length === 0 ? (
@@ -3584,7 +4487,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                       </div>
                     ) : (
                       <div className="divide-y divide-slate-850/60 max-h-[360px] overflow-y-auto pr-1">
-                        {filteredQueueSupervisorPending.map(app => {
+                        {filteredQueueSupervisorPending.length > 50 && (
+                          <div className="p-2 mb-2 text-center bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[10px] font-bold uppercase rounded-md">
+                            Mostrando los primeros 50 de {filteredQueueSupervisorPending.length} expedientes. Use el buscador para refinar.
+                          </div>
+                        )}
+                        {filteredQueueSupervisorPending.slice(0, 50).map(app => {
                           const name = getExtranjeriaCitizenName(app);
                           const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
                           
@@ -3596,7 +4504,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                               <div 
                                 onClick={() => {
                                   setSelectedAppForSupervisor(app);
-                                  setSupervisorCheckedDocs([]);
+                                  const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+                                  const initialDocs = (meta?.checkedDocs && meta.checkedDocs.length > 0)
+                                    ? meta.checkedDocs
+                                    : REQUISITOS_EXTRANJERIA.map(r => r.id);
+                                  setSupervisorCheckedDocs(initialDocs);
                                 }}
                                 className="space-y-1 text-left cursor-pointer flex-1"
                               >
@@ -3629,7 +4541,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                                   type="button"
                                   onClick={() => {
                                     setSelectedAppForSupervisor(app);
-                                    setSupervisorCheckedDocs([]);
+                                    const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+                                    const initialDocs = (meta?.checkedDocs && meta.checkedDocs.length > 0)
+                                      ? meta.checkedDocs
+                                      : REQUISITOS_EXTRANJERIA.map(r => r.id);
+                                    setSupervisorCheckedDocs(initialDocs);
                                   }}
                                   className="flex items-center gap-1.5 text-slate-400 hover:text-white transition font-black uppercase text-[9.5px] tracking-wider shrink-0 bg-slate-900 hover:bg-slate-850 border border-slate-800 px-3 py-2 rounded-md cursor-pointer"
                                 >
@@ -3642,144 +4558,610 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                         })}
                       </div>
                     )}
+                  </div>
+                )}
+              </div>
 
-                    {/* ALWAYS VISIBLE WAITING ROOM MONITOR FOR SUPERVISOR */}
-                    {queueAtencionIn.length > 0 && (
-                      <div className="mt-4 pt-4 border-t border-slate-850/80 text-left space-y-2.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[9.5px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
-                            <Users className="w-3.5 h-3.5 text-blue-400" />
-                            <span>En Sala de Entrada / Espera de Atención ({queueAtencionIn.length})</span>
-                          </span>
-                          <span className="text-[9px] text-slate-500 font-bold uppercase font-mono">
-                            Acción rápida disponible
-                          </span>
-                        </div>
+              {/* ======================================================== */}
+              {/* SECCIÓN SEPARADA: EN SALA DE ENTRADA / ESPERA DE ATENCIÓN */}
+              {/* ======================================================== */}
+              <div className="bg-slate-950 rounded-xl border border-slate-800 p-5 space-y-4 shadow-xl text-left">
+                {/* Header with Title and Counter */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-900 gap-3">
+                  <div className="space-y-0.5 text-left">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-xs font-black uppercase text-white tracking-wider flex items-center gap-2">
+                        <Users className="w-4 h-4 text-blue-400" />
+                        <span>En Sala de Entrada / Espera de Atención</span>
+                      </h4>
+                      <span className="text-xs font-mono font-black px-2.5 py-0.5 rounded bg-blue-950/80 border border-blue-500/40 text-blue-300">
+                        {queueAtencionIn.length} en Sala
+                      </span>
+                    </div>
+                    <p className="text-[9.5px] text-slate-450 font-bold uppercase">
+                      Ciudadanos registrados esperando revisión documental o asignación directa a cubículo
+                    </p>
+                  </div>
 
-                        <div className="divide-y divide-slate-850/40 max-h-[160px] overflow-y-auto pr-1">
-                          {filteredSupervisorAtencionIn.length === 0 ? (
-                            <div className="py-4 text-center text-[10px] text-slate-500 font-bold uppercase">
-                              Sin coincidencias
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[9.5px] text-slate-450 font-mono font-bold uppercase bg-slate-900 border border-slate-800 px-2.5 py-1 rounded">
+                      Acción Rápida Disponible
+                    </span>
+                  </div>
+                </div>
+
+                {/* DEDICATED SEARCH BAR (BUSCADOR EXCLUSIVO PARA SALA DE ENTRADA) */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-2.5" />
+                    <input
+                      type="text"
+                      placeholder="Buscar en Sala de Entrada por Nombre, ID, Pasaporte, Creado por..."
+                      value={localSupervisorAtencionSearchQuery}
+                      onChange={(e) => {
+                        setLocalSupervisorAtencionSearchQuery(e.target.value);
+                        setSupervisorAtencionSearchQuery(e.target.value);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          setSupervisorAtencionSearchQuery(localSupervisorAtencionSearchQuery);
+                        }
+                      }}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg py-2 pl-10 pr-9 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-medium transition"
+                    />
+                    {(localSupervisorAtencionSearchQuery || supervisorAtencionSearchQuery) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLocalSupervisorAtencionSearchQuery('');
+                          setSupervisorAtencionSearchQuery('');
+                        }}
+                        className="absolute right-3 top-2 text-slate-400 hover:text-white text-xs font-black px-1 cursor-pointer"
+                        title="Limpiar búsqueda"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSupervisorAtencionSearchQuery(localSupervisorAtencionSearchQuery)}
+                    className="bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-black uppercase text-[11px] px-4 py-2 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    <span>Buscar</span>
+                  </button>
+                </div>
+
+                {/* Sub-counter status */}
+                <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium px-1">
+                  <span>
+                    {supervisorAtencionSearchQuery ? (
+                      <>Resultados para "<strong className="text-amber-300">{supervisorAtencionSearchQuery}</strong>": <span className="font-bold text-white">{filteredSupervisorAtencionIn.length}</span> de {queueAtencionIn.length}</>
+                    ) : (
+                      <>Total en espera en sala de entrada: <span className="font-bold text-white">{queueAtencionIn.length}</span> ciudadanos</>
+                    )}
+                  </span>
+                  {supervisorAtencionSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLocalSupervisorAtencionSearchQuery('');
+                        setSupervisorAtencionSearchQuery('');
+                      }}
+                      className="text-blue-400 hover:underline font-bold"
+                    >
+                      Mostrar todos los {queueAtencionIn.length}
+                    </button>
+                  )}
+                </div>
+
+                {/* Citizens List */}
+                <div className="divide-y divide-slate-850/60 max-h-[380px] overflow-y-auto pr-1">
+                  {filteredSupervisorAtencionIn.length === 0 ? (
+                    <div className="py-10 border border-dashed border-slate-850 rounded-lg text-center space-y-2 text-slate-500">
+                      <Users className="w-7 h-7 text-slate-600 mx-auto" />
+                      <span className="text-xs font-bold uppercase tracking-wider block text-slate-400">
+                        {supervisorAtencionSearchQuery ? 'Sin coincidencias en Sala de Entrada' : 'No hay ciudadanos en Sala de Entrada'}
+                      </span>
+                      <p className="text-[10px] max-w-xs mx-auto leading-relaxed">
+                        {supervisorAtencionSearchQuery
+                          ? `No se encontró ningún ciudadano con "${supervisorAtencionSearchQuery}". Intente con otro nombre o pasaporte.`
+                          : 'No hay ciudadanos en sala de entrada esperando en este momento.'}
+                      </p>
+                      {supervisorAtencionSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLocalSupervisorAtencionSearchQuery('');
+                            setSupervisorAtencionSearchQuery('');
+                          }}
+                          className="text-[10px] bg-slate-900 border border-slate-800 text-slate-300 hover:text-white px-3 py-1 rounded-md font-bold"
+                        >
+                          Limpiar Búsqueda
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {filteredSupervisorAtencionIn.map(app => {
+                        const name = getExtranjeriaCitizenName(app);
+                        const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
+                        const subTramiteName = app.subTramite || app.tramite || 'Atención Extranjería';
+
+                        return (
+                          <div
+                            key={`supervisor-sala-${app.id}`}
+                            className="py-3 px-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition hover:bg-slate-900/40 rounded-lg border-b border-slate-850/30 last:border-0"
+                          >
+                            <div className="space-y-1 text-left flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-mono font-black text-amber-400">{app.id}</span>
+                                <span className="text-[8.5px] bg-blue-950/60 text-blue-300 border border-blue-800/60 uppercase font-black px-2 py-0.5 rounded font-mono">
+                                  Sala de Entrada
+                                </span>
+                                {app.creadaPorSupervisor && (
+                                  <span className="text-[8px] bg-purple-950/60 text-purple-300 border border-purple-800/60 uppercase font-bold px-1.5 py-0.5 rounded font-mono">
+                                    Cupo Especial
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-xs font-bold text-slate-200 block uppercase truncate">
+                                {name}
+                              </span>
+                              <div className="flex items-center gap-3 text-[10px] text-slate-450 font-mono flex-wrap">
+                                <span>PAS: <strong className="text-slate-300">{passport}</strong></span>
+                                <span>Hora: <strong className="text-slate-300">{app.hora}</strong></span>
+                                <span className="text-slate-500">|</span>
+                                <span className="text-slate-400 font-sans truncate">{subTramiteName}</span>
+                              </div>
                             </div>
-                          ) : (
-                            filteredSupervisorAtencionIn.map(app => {
-                              const name = getExtranjeriaCitizenName(app);
-                              const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
 
-                              return (
-                                <div key={`sup-wait-sub-${app.id}`} className="py-2 flex items-center justify-between gap-2 text-xs">
-                                  <div className="space-y-0.5 truncate">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="font-mono font-bold text-amber-400 text-[10px]">{app.id}</span>
-                                      <span className="text-slate-200 font-bold uppercase truncate text-[11px]">{name}</span>
-                                    </div>
-                                    <span className="text-[9px] text-slate-450 font-mono block">PAS: {passport}</span>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleMarkAllAndAutoAssign(app.id)}
-                                    className="text-emerald-300 hover:text-white bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 transition font-black uppercase text-[8.5px] tracking-wider px-2 py-1 rounded cursor-pointer shrink-0"
-                                    title="Marcar 3 y asignar a cubículo"
-                                  >
-                                    ⚡ Marcar 3 y Asignar
-                                  </button>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleMarkAllAndAutoAssign(app.id)}
+                                className="flex items-center gap-1.5 text-emerald-300 hover:text-white bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 transition font-black uppercase text-[10px] tracking-wider px-3 py-2 rounded-md cursor-pointer shadow-sm"
+                                title="Marcar los 3 requisitos y asignar cubículo inmediatamente"
+                              >
+                                <Zap className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400" />
+                                <span>Marcar 3 y Asignar ⚡</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleSubmitVerification(app.id)}
+                                className="flex items-center gap-1 text-blue-300 hover:text-white bg-blue-950/80 hover:bg-blue-900 border border-blue-500/40 transition font-black uppercase text-[10px] tracking-wider px-3 py-2 rounded-md cursor-pointer shadow-sm"
+                                title="Dar paso inmediato a la bandeja del supervisor"
+                              >
+                                <Send className="w-3.5 h-3.5 text-blue-400" />
+                                <span>Dar Paso a Supervisor ⏩</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              </div>
+
+
+
+            </div>
+          )}
+
+          {supervisorTab === 'cola_cubiculos' && (
+            <div className="space-y-6 animate-fade-in text-slate-100">
+              
+              {/* Header */}
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-3 text-left shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-950/80 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                    <Tv className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black uppercase text-white tracking-wider font-sans">
+                      Tablero de Monitoreo de Colas & Atenciones en Cubículos 👥
+                    </h3>
+                    <p className="text-xs text-slate-400 font-semibold mt-0.5">
+                      Supervise en tiempo real el estado de atención de cada cubículo, quién lo está atendiendo actualmente, quién está en cola de espera para ese cubículo y el historial de ciudadanos atendidos hoy.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Status statistics grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 text-left">
+                  <span className="text-[10px] text-slate-450 font-black uppercase tracking-wider block">Cubículos Activos</span>
+                  <div className="flex items-baseline gap-2 mt-1">
+                    <span className="text-2xl font-black text-white">{booths.filter(b => b.active).length}</span>
+                    <span className="text-xs font-bold text-slate-500">de {booths.length} configurados</span>
+                  </div>
+                </div>
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 text-left">
+                  <span className="text-[10px] text-slate-450 font-black uppercase tracking-wider block">Ciudadanos En Atención Activa</span>
+                  <div className="flex items-baseline gap-2 mt-1">
+                    <span className="text-2xl font-black text-emerald-400">
+                      {appointments.filter(app => appMetadata[app.id]?.estadoTicket === 'en_atencion').length}
+                    </span>
+                    <span className="text-xs font-bold text-slate-500">en ventanilla</span>
+                  </div>
+                </div>
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 text-left">
+                  <span className="text-[10px] text-slate-450 font-black uppercase tracking-wider block">Pendientes en Cola de Cubículos</span>
+                  <div className="flex items-baseline gap-2 mt-1">
+                    <span className="text-2xl font-black text-amber-400">
+                      {appointments.filter(app => {
+                        const meta = appMetadata[app.id];
+                        return meta && meta.assignedCubiculo && (meta.estadoTicket === 'llamando' || meta.estadoTicket === 'asignada');
+                      }).length}
+                    </span>
+                    <span className="text-xs font-bold text-slate-500">esperando llamado</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* PANEL GENERAL DE REATENCIÓN DE CITAS (SOLO SUPERVISOR) */}
+              <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4 text-left shadow-xl">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-amber-950/80 border border-amber-500/30 flex items-center justify-center shrink-0">
+                    <RefreshCw className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-black uppercase text-white tracking-wider">
+                      Módulo de Reasignación & Reatención de Citas 🔄
+                    </h4>
+                    <p className="text-[10.5px] text-slate-400 font-bold uppercase tracking-wider font-mono">
+                      Busque cualquier ciudadano atendido o asignado hoy para re-enviarlo a reatención en cualquier cubículo activo
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                  <div className="space-y-1.5 md:col-span-2">
+                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                      Buscar Ciudadano (Nombre, Cédula, Pasaporte o Turno)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Buscar por Nombre, Pasaporte, Cédula o número de Turno..."
+                        value={reatencionSearchQuery}
+                        onChange={(e) => setReatencionSearchQuery(e.target.value)}
+                        className="w-full text-xs bg-slate-950 border border-slate-800 text-white rounded-lg pl-3 pr-10 py-2.5 focus:outline-none focus:border-amber-500 font-bold"
+                      />
+                      {reatencionSearchQuery && (
+                        <button
+                          onClick={() => setReatencionSearchQuery("")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-xs font-bold font-mono"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-500 font-semibold block">
+                      Total de citas hoy: {atencionDayUniverse.totalUniverse.length}
+                    </span>
+                  </div>
+                </div>
+
+                {reatencionSearchQuery.trim() && (
+                  <div className="border border-slate-850 rounded-xl bg-slate-950/50 p-3 space-y-2 max-h-[250px] overflow-y-auto">
+                    {reatencionCandidates.length > 0 ? (
+                      reatencionCandidates.map((app: any) => {
+                        const name = getExtranjeriaCitizenName(app);
+                        const appCode = String(app?.id || '').slice(-4).toUpperCase();
+                        const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+                        const currentStatus = meta?.estadoTicket || 'ninguno';
+                        const currentBoothName = meta?.assignedCubiculo ? (booths.find(b => b.id === meta.assignedCubiculo)?.name || `C.${meta.assignedCubiculo}`) : 'Ninguno';
+                        
+                        let badgeBg = 'bg-slate-900 border-slate-800 text-slate-400';
+                        let labelText = 'Sin iniciar';
+                        if (currentStatus === 'realizada') {
+                          badgeBg = 'bg-emerald-950 border-emerald-900 text-emerald-400';
+                          labelText = 'Completado';
+                        } else if (currentStatus === 'en_atencion') {
+                          badgeBg = 'bg-blue-950 border-blue-900 text-blue-400';
+                          labelText = 'En Ventanilla';
+                        } else if (currentStatus === 'en_proceso') {
+                          badgeBg = 'bg-amber-950 border-amber-900 text-amber-400';
+                          labelText = 'Llamando/En Cola';
+                        } else if (currentStatus === 'pagado_en_caja') {
+                          badgeBg = 'bg-purple-950 border-purple-900 text-purple-400';
+                          labelText = 'Pagando en Caja';
+                        }
+
+                        return (
+                          <div key={`reatencion-candidate-${app.id}`} className="bg-slate-900 border border-slate-850 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                            <div className="min-w-0 text-left space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[10px] font-mono font-black text-amber-500 bg-slate-950 border border-slate-850 px-1.5 py-0.5 rounded shrink-0">
+                                  E-{appCode}
+                                </span>
+                                <h5 className="text-[12px] font-black text-white uppercase truncate max-w-[200px] leading-none mt-0.5">{name}</h5>
+                                <span className={`text-[8.5px] border font-black px-1.5 py-0.2 rounded uppercase shrink-0 ${badgeBg}`}>
+                                  {labelText}
+                                </span>
+                                {meta?.reatencion && (
+                                  <span className="text-[8.5px] bg-red-950 border border-red-900 text-red-400 font-black px-1.5 py-0.2 rounded uppercase shrink-0 animate-pulse">
+                                    Reatención Activa
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-500 font-semibold pl-0.5">
+                                ID: <span className="text-slate-400">{app.identificacion || 'N/D'}</span> | Pasaporte: <span className="text-slate-400">{app.datosPersonales?.pasaporte || 'N/D'}</span> | Última estación: <span className="text-slate-400">{currentBoothName}</span>
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <label className="text-[9px] text-slate-450 font-black uppercase tracking-wider hidden sm:inline">Reasignar a:</label>
+                              <select
+                                className="text-xs bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 font-bold focus:outline-none focus:border-amber-500 cursor-pointer"
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val) {
+                                    handleReassignForReattention(app.id, Number(val));
+                                    e.target.value = ""; // reset input
+                                  }
+                                }}
+                                defaultValue=""
+                              >
+                                <option value="" disabled>Seleccionar cubículo...</option>
+                                {booths.filter(booth => booth.active).map(booth => (
+                                  <option key={`general-reassign-booth-${app.id}-${booth.id}`} value={booth.id}>
+                                    {booth.name} ({getBoothStaffName(booth)})
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="text-center py-4 text-xs text-slate-500 italic font-bold">
+                        No se encontró ningún ciudadano con "{reatencionSearchQuery}" asignado hoy
                       </div>
                     )}
                   </div>
                 )}
               </div>
 
-              {/* VISUALIZADOR DE CITAS REGISTRADAS POR PERIODO */}
-              <div className="bg-slate-950 rounded-xl border border-slate-800 p-5 space-y-4 shadow-xl text-left">
-                <div className="border-b border-slate-900 pb-3 text-left flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <h4 className="text-xs font-black uppercase text-white tracking-wider flex items-center gap-1.5 font-sans">
-                      <Calendar className="w-4 h-4 text-amber-500" />
-                      <span>Visualizador de Citas por Período</span>
-                    </h4>
-                    <p className="text-[10px] text-slate-450 font-bold uppercase font-mono">Citas agendadas en Sede Principal de Extranjería</p>
-                  </div>
+              {/* Main Cubicles Status Board */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {booths.filter(b => b.active).map(b => {
+                  const operator = getBoothStaffName(b);
                   
-                  {/* Period Switcher Tabs */}
-                  <div className="flex bg-slate-900 rounded p-1 border border-slate-800 w-fit shrink-0">
-                    {(['todos', 'dia', 'semana', 'mes', 'año'] as const).map(period => (
-                      <button
-                        key={`tab-v-${period}`}
-                        type="button"
-                        onClick={() => setSupervisorPeriodFilter(period)}
-                        className={`px-3 py-1 text-[9.5px] font-black uppercase rounded transition tracking-wider cursor-pointer ${
-                          supervisorPeriodFilter === period
-                            ? 'bg-amber-600 text-white shadow-sm font-extrabold'
-                            : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-                        }`}
-                      >
-                        {period === 'todos' ? 'Todos' : period === 'dia' ? 'Día' : period === 'semana' ? 'Semana' : period === 'mes' ? 'Mes' : 'Año'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                  // Find all active appointments for this booth (not completed/realizada)
+                  const assignedApps = appointments.filter(app => {
+                    const meta = appMetadata[app.id];
+                    return app.fecha === todayStr && meta && meta.assignedCubiculo === b.id && meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada';
+                  });
 
-                {supervisorFilteredAppointments.length === 0 ? (
-                  <div className="p-8 border border-dashed border-slate-850 rounded-lg text-center space-y-1 text-slate-450">
-                    <Info className="w-6 h-6 mx-auto text-slate-600" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider block text-slate-400">Sin Citas</span>
-                    <p className="text-[9.5px] leading-relaxed max-w-xs mx-auto text-slate-500 font-medium">
-                      No se encontraron citas agendadas registradas para el período seleccionado.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1 divide-y divide-slate-850 border border-slate-900 bg-slate-900/10 p-2 rounded-lg">
-                    {supervisorFilteredAppointments.map((app: any) => {
-                      const name = getExtranjeriaCitizenName(app);
-                      const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
-                      const subservice = app.subServicioNombre || 'Servicio de Extranjería';
-                      const stepStatus = appMetadata[app.id]?.estadoTicket || 'En Entrada';
+                  // Current active serving (en_atencion)
+                  const attendingApp = assignedApps.find(app => appMetadata[app.id]?.estadoTicket === 'en_atencion');
+                  
+                  // Remaining queued items
+                  const waitingApps = assignedApps.filter(app => app.id !== attendingApp?.id);
 
-                      // Status Badge color
-                      let badgeStyle = 'bg-slate-900 border-slate-850 text-slate-350';
-                      if (app.estado === 'cancelada') {
-                        badgeStyle = 'bg-red-950/20 border-red-900/30 text-red-400';
-                      } else if (app.estado === 'confirmada' || stepStatus === 'realizada') {
-                        badgeStyle = 'bg-emerald-950/20 border-emerald-900/30 text-emerald-400';
-                      } else if (stepStatus === 'modulo') {
-                        badgeStyle = 'bg-blue-950/20 border-blue-900/30 text-blue-400';
-                      } else if (stepStatus === 'supervisor') {
-                        badgeStyle = 'bg-amber-950/25 border-amber-800/30 text-amber-500';
-                      }
+                  // Historically completed appointments today for this cubicle (strictly today, never yesterday)
+                  const completedApps = appointments.filter(app => {
+                    const meta = appMetadata[app.id];
+                    return meta && meta.assignedCubiculo === b.id && isCompletedToday(app, meta, todayStr);
+                  });
 
-                      return (
-                        <div key={`supervisor-v-${app.id}`} className="pt-2 last:pb-1 first:pt-0 flex flex-col sm:flex-row sm:items-start justify-between gap-3 text-xs leading-relaxed">
-                          <div className="space-y-0.5">
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono font-black text-amber-500 text-[11px]">{app.id}</span>
-                              <span className="text-[8.5px] uppercase tracking-wide bg-slate-900 border border-slate-800 px-1.5 py-0.2 rounded font-black text-slate-400 font-mono">
-                                {subservice}
-                              </span>
-                            </div>
-                            <h5 className="font-bold text-slate-200 uppercase tracking-wide">{name}</h5>
-                            <p className="text-[10px] text-slate-450 font-semibold leading-none">
-                              Pasaporte: <span className="font-mono text-slate-300 font-bold">{passport}</span> | Fecha: <span className="font-mono text-amber-300 font-bold">{formatFriendlyDate(app.fecha)}</span> ({app.hora})
-                            </p>
-                          </div>
-
-                          <div className="shrink-0 flex flex-col items-end gap-1 font-sans">
-                            <span className={`text-[8.5px] font-black uppercase px-2 py-0.5 rounded border tracking-wider font-mono ${badgeStyle}`}>
-                              {app.estado === 'cancelada' ? 'Cancelada' : stepStatus === 'realizada' ? 'Atendido' : stepStatus === 'modulo' ? 'En Módulo' : stepStatus === 'supervisor' ? 'S. Control' : 'En Cola'}
-                            </span>
-                            {app.telefono && (
-                              <span className="text-[9px] font-mono text-slate-500 font-bold">{app.telefono}</span>
-                            )}
+                  return (
+                    <div key={`supervisor-monitor-booth-${b.id}`} className="bg-slate-950 border border-slate-850 rounded-2xl p-5 space-y-5 text-left shadow-lg">
+                      
+                      {/* Top Header */}
+                      <div className="flex items-center justify-between border-b border-slate-850 pb-3">
+                        <div className="space-y-1">
+                          <h4 className="text-sm font-black text-white uppercase tracking-wider">{b.name}</h4>
+                          <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                            <span className={`w-2 h-2 rounded-full ${b.receso ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+                            <span>Operador: <strong className="text-slate-200">{operator}</strong></span>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
+                        {b.receso ? (
+                          <span className="text-[10px] bg-amber-950 border border-amber-850 text-amber-400 px-2.5 py-1 rounded-md font-black uppercase tracking-wider animate-pulse">
+                            En Receso ⏸
+                          </span>
+                        ) : (
+                          <span className="text-[10px] bg-emerald-950 border border-emerald-900 text-emerald-400 px-2.5 py-1 rounded-md font-black uppercase tracking-wider">
+                            Disponible 🟢
+                          </span>
+                        )}
+                      </div>
+
+                      {/* A. SECCIÓN: CIUDADANO SIENDO ATENDIDO ACTUALMENTE */}
+                      <div className="space-y-2">
+                        <span className="text-[10px] text-slate-450 font-black uppercase tracking-wider block font-bold">Atención en Curso</span>
+                        {attendingApp ? (() => {
+                          const name = getExtranjeriaCitizenName(attendingApp);
+                          const appCode = attendingApp.id.slice(-4).toUpperCase();
+                          return (
+                            <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-xl p-4 space-y-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-black text-emerald-300 font-mono">TURNO: E-{appCode}</span>
+                                <span className="bg-emerald-950 text-emerald-400 border border-emerald-500/40 text-[9px] font-black uppercase px-2 py-0.5 rounded flex items-center gap-1.5 animate-pulse">
+                                  <span className="w-1 h-1 rounded bg-emerald-400" />
+                                  Atendiendo
+                                </span>
+                              </div>
+                              <div className="text-sm font-black text-white uppercase">{name}</div>
+                              <div className="text-[10.5px] text-slate-400 space-y-1">
+                                <p>👤 <span className="font-semibold text-slate-350">Atendido por:</span> <strong className="text-emerald-400">{operator}</strong></p>
+                                <p>📺 <span className="font-semibold text-slate-350">Asignado a:</span> <strong className="text-emerald-400">{b.name}</strong></p>
+                              </div>
+
+                              {/* Reassign currently attending citizen */}
+                              <div className="mt-2.5 pt-2 border-t border-emerald-500/20 flex items-center justify-between gap-2">
+                                <span className="text-[9px] text-slate-400 font-bold uppercase">Reatención / Reasignar:</span>
+                                <select
+                                  className="text-[9px] bg-slate-950 border border-emerald-500/30 rounded px-1.5 py-0.5 text-amber-400 font-bold focus:outline-none focus:border-amber-500 cursor-pointer"
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val) {
+                                      handleReassignForReattention(attendingApp.id, Number(val));
+                                      e.target.value = "";
+                                    }
+                                  }}
+                                  defaultValue=""
+                                >
+                                  <option value="" disabled>Cambiar cubículo...</option>
+                                  {booths.filter(booth => booth.active && booth.id !== b.id).map(booth => (
+                                    <option key={`attending-reassign-opt-${attendingApp.id}-${booth.id}`} value={booth.id} className="text-slate-300">
+                                      Mover a {booth.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          );
+                        })() : (
+                          <div className="bg-slate-900/40 border border-slate-850 border-dashed rounded-xl p-4 text-center text-xs text-slate-500 italic font-bold">
+                            Sin ciudadano en atención en este momento
+                          </div>
+                        )}
+                      </div>
+
+                      {/* B. SECCIÓN: COLA DE ESPERA EN CUBÍCULO */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-slate-450 font-black uppercase tracking-wider block font-bold">Cola de Espera</span>
+                          <span className="text-[10px] font-mono font-bold bg-slate-900 border border-slate-850 text-slate-300 px-2 py-0.2 rounded">
+                            {waitingApps.length} esperando
+                          </span>
+                        </div>
+
+                        {waitingApps.length > 0 ? (
+                          <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                            {waitingApps.map(app => {
+                              const name = getExtranjeriaCitizenName(app);
+                              const appCode = app.id.slice(-4).toUpperCase();
+                              return (
+                                <div key={`supervisor-monitor-queue-${app.id}`} className="bg-slate-900/60 border border-slate-850 rounded-lg p-3 flex items-center justify-between gap-3 shadow-sm hover:border-slate-800 transition">
+                                  <div className="min-w-0 flex-1 text-left space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-mono font-black text-amber-500 bg-slate-950 border border-slate-850 px-1.5 py-0.2 rounded">
+                                        E-{appCode}
+                                      </span>
+                                      <h6 className="text-[11.5px] font-black text-slate-200 uppercase truncate leading-none mt-0.5">{name}</h6>
+                                    </div>
+                                    <div className="text-[9.5px] text-slate-500 space-y-0.5 pl-0.5">
+                                      <p>Atiende: <strong className="text-slate-400">{operator}</strong> | Cubículo: <strong className="text-slate-400">{b.name}</strong></p>
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-col items-end gap-1 shrink-0">
+                                    <span className="text-[8px] bg-amber-950 border border-amber-800/40 text-amber-400 font-black px-1.5 py-0.5 rounded uppercase">
+                                      En Cola
+                                    </span>
+                                    <select
+                                      className="text-[9px] bg-slate-950 border border-slate-800 rounded px-1 py-0.5 text-amber-400 font-bold focus:outline-none focus:border-amber-500 cursor-pointer"
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        if (val) {
+                                          handleReassignForReattention(app.id, Number(val));
+                                          e.target.value = "";
+                                        }
+                                      }}
+                                      defaultValue=""
+                                    >
+                                      <option value="" disabled>Mover...</option>
+                                      {booths.filter(booth => booth.active && booth.id !== b.id).map(booth => (
+                                        <option key={`waiting-reassign-opt-${app.id}-${booth.id}`} value={booth.id} className="text-slate-300">
+                                          A {booth.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="bg-slate-900/20 border border-slate-900 border-dashed rounded-xl py-3 text-center text-[11px] text-slate-600 italic">
+                            Sin cola de espera asignada
+                          </div>
+                        )}
+                      </div>
+
+                      {/* C. SECCIÓN: HISTÓRICO DE CIUDADANOS ATENDIDOS HOY */}
+                      <div className="space-y-2 pt-2 border-t border-slate-900">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-slate-450 font-black uppercase tracking-wider block font-bold">Atendidos Hoy</span>
+                          <span className="text-[10px] font-mono font-bold bg-slate-900 border border-slate-850 text-emerald-400 px-2 py-0.2 rounded">
+                            {completedApps.length} completados
+                          </span>
+                        </div>
+
+                        {completedApps.length > 0 ? (
+                          <div className="space-y-2 max-h-[130px] overflow-y-auto pr-1">
+                            {completedApps.map(app => {
+                              const name = getExtranjeriaCitizenName(app);
+                              const appCode = app.id.slice(-4).toUpperCase();
+                              const meta = appMetadata[app.id];
+                              const attendedBy = meta?.staffResponsable || operator;
+                              return (
+                                <div key={`supervisor-monitor-completed-${app.id}`} className="bg-slate-900/30 border border-slate-900 rounded-lg p-2.5 flex items-center justify-between gap-3 text-xs">
+                                  <div className="min-w-0 flex-1 space-y-0.5">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[9.5px] font-mono font-bold text-slate-400">E-{appCode}</span>
+                                      <h6 className="text-[11px] font-black text-slate-350 uppercase truncate leading-none">{name}</h6>
+                                    </div>
+                                    <div className="text-[9.5px] text-slate-500 pl-0.5">
+                                      <p>Atendido por: <strong className="text-slate-400">{attendedBy}</strong> | Cubículo: <strong className="text-slate-400">{b.name}</strong></p>
+                                    </div>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <span className="text-[8px] bg-emerald-950 border border-emerald-900 text-emerald-400 font-black px-1.5 py-0.5 rounded uppercase block w-fit ml-auto">
+                                      Listo
+                                    </span>
+                                    {meta?.timestampCompletado && (
+                                      <span className="text-[8.5px] font-mono font-semibold text-slate-500 block mt-0.5">
+                                        {meta.timestampCompletado.split(' ').pop()}
+                                      </span>
+                                    )}
+                                    {/* Quick re-assign to any active booth */}
+                                    <div className="mt-1">
+                                      <select
+                                        className="text-[9px] bg-slate-950 border border-slate-800 rounded px-1 py-0.5 text-amber-400 font-bold focus:outline-none focus:border-amber-500 cursor-pointer"
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          if (val) {
+                                            handleReassignForReattention(app.id, Number(val));
+                                            e.target.value = ""; // reset
+                                          }
+                                        }}
+                                        defaultValue=""
+                                      >
+                                        <option value="" disabled>🔄 Reatención</option>
+                                        {booths.filter(booth => booth.active).map(booth => (
+                                          <option key={`quick-reassign-opt-${app.id}-${booth.id}`} value={booth.id} className="text-slate-300">
+                                            Enviar a {booth.name}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="bg-slate-900/10 rounded-xl py-2.5 text-center text-[10.5px] text-slate-600 italic">
+                            No se han completado trámites en este cubículo hoy
+                          </div>
+                        )}
+                      </div>
+
+                    </div>
+                  );
+                })}
               </div>
 
             </div>
@@ -3824,8 +5206,8 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 )}
 
                 <div className="bg-slate-900/60 border border-slate-850 p-4 rounded-xl space-y-4">
-                  {/* Date Input Range and Cubiculo Selectors */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-left">
+                  {/* Date Input Range, Cubiculo, and Status Selectors */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-left">
                     <div className="space-y-1">
                       <label className="text-[10.5px] font-black uppercase tracking-wider text-slate-400 block font-mono">
                         Fecha Desde
@@ -3899,9 +5281,10 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           onClick={() => {
                             const d = new Date();
                             const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-                            const tStr = d.toISOString().substring(0, 10);
+                            const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+                            const endMonthStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
                             setReportStartDate(mStr);
-                            setReportEndDate(tStr);
+                            setReportEndDate(endMonthStr);
                           }}
                           className="bg-slate-950 border border-slate-800 hover:border-amber-500/50 text-slate-300 hover:text-white px-1 py-1.5 rounded text-[9px] font-mono font-bold uppercase transition cursor-pointer"
                         >
@@ -3916,7 +5299,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           }}
                           className="bg-slate-950 border border-slate-800 hover:border-amber-500/50 text-slate-300 hover:text-white px-1 py-1.5 rounded text-[9px] font-mono font-bold uppercase transition cursor-pointer"
                         >
-                          Año '26
+                          Año
                         </button>
                         <button
                           type="button"
@@ -3926,49 +5309,71 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           }}
                           className="bg-slate-950 border border-slate-800 hover:border-amber-500/50 text-slate-300 hover:text-white px-1 py-1.5 rounded text-[9px] font-mono font-bold uppercase transition cursor-pointer"
                         >
-                          Todo
+                          Todo '26
                         </button>
                       </div>
                     </div>
 
                     <div className="space-y-1">
                       <label className="text-[10.5px] font-black uppercase tracking-wider text-slate-400 block font-mono">
-                        Usuario / Operador de Ventanilla
+                        Operador de Ventanilla
                       </label>
                       <select
                         value={reportOperatorFilter}
                         onChange={(e) => setReportOperatorFilter(e.target.value)}
                         className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-amber-500 transition font-black"
                       >
-                        <option value="all">TODOS LOS USUARIOS DE VENTANILLA</option>
+                        <option value="all">TODOS LOS OPERADORES</option>
                         {availableCubiculoUsers.map(user => {
                           const todayCount = cubiculoUserStats[user]?.today || 0;
                           const rangeCount = cubiculoUserStats[user]?.range || 0;
                           return (
                             <option key={user} value={user}>
-                              {user.toUpperCase()} ({todayCount} atendidos hoy | {rangeCount} en rango)
+                              {user.toUpperCase()} ({todayCount} hoy | {rangeCount} rango)
                             </option>
                           );
                         })}
                       </select>
                     </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10.5px] font-black uppercase tracking-wider text-slate-400 block font-mono">
+                        Estado de las Citas
+                      </label>
+                      <select
+                        value={reportStatusFilter}
+                        onChange={(e) => setReportStatusFilter(e.target.value as any)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-amber-500 transition font-black"
+                      >
+                        <option value="all">TODOS LOS ESTADOS</option>
+                        <option value="completadas">SOLO ATENDIDAS / REALIZADAS</option>
+                        <option value="pendientes">SOLO PROGRAMADAS / PENDIENTES</option>
+                        <option value="canceladas">SOLO CANCELADAS</option>
+                      </select>
+                    </div>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-850">
-                    <div className="text-left space-y-0.5">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block font-mono">
-                        Citas Atendidas Encontradas
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-800">
+                    <div className="text-left space-y-1">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block font-mono">
+                        Citas en el Rango Seleccionado
                       </span>
-                      <p className="text-xl font-mono font-black text-white">
-                        {filterRealizadasByDateRange(reportStartDate, reportEndDate).length} <span className="text-xs font-sans font-medium text-slate-400">citas completadas</span>
-                      </p>
+                      <div className="flex flex-wrap items-baseline gap-2">
+                        <p className="text-xl font-mono font-black text-amber-400">
+                          {matchingAppointments.length} <span className="text-xs font-sans font-medium text-slate-300">citas encontradas</span>
+                        </p>
+                        <span className="text-xs font-mono text-slate-400">
+                          ({matchingCompleted} atendidas | {matchingPending} pendientes | {matchingCancelled} canceladas)
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex gap-2 w-full sm:w-auto shrink-0 justify-end">
                       <button
                         type="button"
                         onClick={handleDownloadRealizadasCSV}
-                        className="flex-1 sm:flex-none bg-slate-950 hover:bg-slate-800 border border-slate-800 px-4 py-2.5 rounded text-[10px] font-black uppercase text-slate-300 flex items-center justify-center gap-1.5 cursor-pointer transition min-w-[100px]"
+                        disabled={matchingAppointments.length === 0}
+                        className="flex-1 sm:flex-none bg-slate-950 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed border border-slate-800 px-4 py-2.5 rounded text-[10px] font-black uppercase text-slate-300 flex items-center justify-center gap-1.5 cursor-pointer transition min-w-[110px]"
                       >
                         <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
                         <span>EXPORTAR CSV</span>
@@ -3977,7 +5382,8 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                       <button
                         type="button"
                         onClick={handleDownloadRealizadasPDF}
-                        className="flex-1 sm:flex-none bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded text-[10px] font-black uppercase flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition min-w-[100px]"
+                        disabled={matchingAppointments.length === 0}
+                        className="flex-1 sm:flex-none bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded text-[10px] font-black uppercase flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition min-w-[120px]"
                       >
                         <Download className="w-4 h-4" />
                         <span>DESCARGAR PDF</span>
@@ -4094,7 +5500,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                               </select>
                             </div>
 
-                            <div className="pt-1">
+                            <div className="pt-1 flex items-center justify-between gap-2 flex-wrap">
                               {b.empty ? (
                                 <span className="text-[8px] bg-slate-900/50 text-slate-450 border border-slate-800 font-black uppercase px-2 py-0.5 rounded">
                                   Reserva Vacía
@@ -4103,6 +5509,21 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                                 <span className="text-[8px] bg-emerald-950/40 text-emerald-400 border border-emerald-900 font-black uppercase px-2 py-0.5 rounded">
                                   Fijo Habilitado
                                 </span>
+                              )}
+                              
+                              {b.active && (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleBoothReceso(b.id)}
+                                  className={`px-2 py-0.5 rounded text-[8px] font-extrabold uppercase transition cursor-pointer border ${
+                                    b.receso
+                                      ? 'bg-amber-950 text-amber-400 border-amber-800 animate-pulse font-bold'
+                                      : 'bg-emerald-950 text-emerald-400 border-emerald-900 hover:bg-emerald-900/50 font-bold'
+                                  }`}
+                                  title="Alternar estado de receso de la estación"
+                                >
+                                  {b.receso ? '⏸ En Receso' : '🟢 Disponible'}
+                                </button>
                               )}
                             </div>
                           </div>
@@ -4277,20 +5698,54 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           onClick={() => {
                             const prev = new Date(safeCalendarDate.getFullYear(), safeCalendarDate.getMonth() - 1, 1);
                             setCalendarDate(prev);
+                            const mStr = String(prev.getMonth() + 1).padStart(2, '0');
+                            const prefix = `${prev.getFullYear()}-${mStr}`;
+                            const found = Object.keys(appointmentsByDate).filter(d => d.startsWith(prefix)).sort()[0];
+                            setSelectedCalendarDateStr(found || `${prefix}-01`);
                           }}
                           className="bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-amber-500/50 p-2 rounded cursor-pointer transition font-bold"
                           title="Mes anterior"
                         >
                           &larr;
                         </button>
-                        <span className="text-xs font-black uppercase tracking-wider text-amber-500 px-3 py-1 bg-amber-500/5 border border-amber-500/10 rounded font-mono">
-                          {mesesNombres[safeCalendarDate.getMonth()]} {safeCalendarDate.getFullYear()}
-                        </span>
+                        <select
+                          value={`${safeCalendarDate.getFullYear()}-${safeCalendarDate.getMonth()}`}
+                          onChange={(e) => {
+                            const [y, m] = e.target.value.split('-').map(Number);
+                            const newD = new Date(y, m, 1);
+                            setCalendarDate(newD);
+                            const mStr = String(m + 1).padStart(2, '0');
+                            const prefix = `${y}-${mStr}`;
+                            const found = Object.keys(appointmentsByDate).filter(d => d.startsWith(prefix)).sort()[0];
+                            setSelectedCalendarDateStr(found || `${prefix}-01`);
+                          }}
+                          className="text-xs font-black uppercase tracking-wider text-amber-500 px-2.5 py-1.5 bg-slate-900 border border-amber-500/30 rounded font-mono cursor-pointer outline-none hover:border-amber-400"
+                          title="Seleccionar mes y año"
+                        >
+                          <optgroup label="Año 2026" className="bg-slate-900 text-slate-200">
+                            {mesesNombres.map((mName, idx) => (
+                              <option key={`opt-2026-${idx}`} value={`2026-${idx}`}>
+                                {mName} 2026
+                              </option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="Año 2027" className="bg-slate-900 text-slate-200">
+                            {mesesNombres.map((mName, idx) => (
+                              <option key={`opt-2027-${idx}`} value={`2027-${idx}`}>
+                                {mName} 2027
+                              </option>
+                            ))}
+                          </optgroup>
+                        </select>
                         <button
                           type="button"
                           onClick={() => {
                             const next = new Date(safeCalendarDate.getFullYear(), safeCalendarDate.getMonth() + 1, 1);
                             setCalendarDate(next);
+                            const mStr = String(next.getMonth() + 1).padStart(2, '0');
+                            const prefix = `${next.getFullYear()}-${mStr}`;
+                            const found = Object.keys(appointmentsByDate).filter(d => d.startsWith(prefix)).sort()[0];
+                            setSelectedCalendarDateStr(found || `${prefix}-01`);
                           }}
                           className="bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:border-amber-500/50 p-2 rounded cursor-pointer transition font-bold"
                           title="Mes siguiente"
@@ -4304,10 +5759,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                             setNewCitaFecha(selectedCalendarDateStr);
                             setShowCreateForm(!showCreateForm);
                           }}
-                          className="ml-2 bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[10.5px] uppercase tracking-wider px-3.5 py-2 rounded transition flex items-center gap-1.5 shadow-md cursor-pointer"
+                          className="ml-2 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white font-extrabold text-[10.5px] uppercase tracking-wider px-3.5 py-2 rounded-lg transition flex items-center gap-1.5 shadow-md cursor-pointer border border-amber-400/40"
+                          title="Crear cita especial autorizada por supervisión (cupo adicional que supera el límite de 56)"
                         >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Crear Cita</span>
+                          <Star className="w-3.5 h-3.5 text-amber-200 fill-amber-300" />
+                          <span>+ Cita Especial</span>
                         </button>
                       </div>
                     </div>
@@ -4411,28 +5867,42 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                                 {isToday && <span className="text-[7.5px] font-sans ml-1 text-emerald-500 uppercase font-black tracking-widest">(HOY)</span>}
                               </span>
                               
-                              {dayCitas.length > 0 && (
-                                <span className={`text-[8.5px] font-black px-1.5 py-0.5 rounded font-mono shadow-xs ${
-                                  dayCitas.length >= 56 
-                                    ? 'bg-rose-600 text-white font-black' 
-                                    : 'bg-amber-500 text-slate-950'
-                                }`}>
-                                  {dayCitas.length}/56
-                                </span>
-                              )}
+                              {dayCitas.length > 0 && (() => {
+                                const regularCitas = dayCitas.filter((c: any) => !c.creadaPorSupervisor && !c.esEspecial && !c.citaEspecial && !c.esCupoAdicional);
+                                const specialCitas = dayCitas.filter((c: any) => c.creadaPorSupervisor || c.esEspecial || c.citaEspecial || c.esCupoAdicional);
+                                return (
+                                  <div className="flex items-center gap-1">
+                                    {specialCitas.length > 0 && (
+                                      <span className="text-[8px] font-black px-1.5 py-0.5 rounded font-mono bg-purple-600 text-white shadow-xs border border-purple-400/40" title={`${specialCitas.length} Cita(s) Especial(es) adicional(es) autorizada(s) por supervisión`}>
+                                        +{specialCitas.length}★
+                                      </span>
+                                    )}
+                                    <span className={`text-[8.5px] font-black px-1.5 py-0.5 rounded font-mono shadow-xs ${
+                                      regularCitas.length >= 56 
+                                        ? 'bg-rose-600 text-white font-black' 
+                                        : 'bg-amber-500 text-slate-950'
+                                    }`}>
+                                      {regularCitas.length}/56
+                                    </span>
+                                  </div>
+                                );
+                              })()}
                             </div>
 
                             {/* Informative contents placed inside the day */}
-                            {dayCitas.length > 0 ? (
-                              <div className="space-y-1 mt-1.5 w-full">
-                                <div className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-black uppercase flex items-center justify-between ${
-                                  dayCitas.length >= 56 
-                                    ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30' 
-                                    : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                                }`}>
-                                  <span>{dayCitas.length} citas</span>
-                                  <span>{dayCitas.length >= 56 ? 'Lleno' : 'Disp.'}</span>
-                                </div>
+                            {dayCitas.length > 0 ? (() => {
+                              const regularCitas = dayCitas.filter((c: any) => !c.creadaPorSupervisor && !c.esEspecial && !c.citaEspecial && !c.esCupoAdicional);
+                              const specialCitas = dayCitas.filter((c: any) => c.creadaPorSupervisor || c.esEspecial || c.citaEspecial || c.esCupoAdicional);
+                              return (
+                                <div className="space-y-1 mt-1.5 w-full">
+                                  <div className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-black uppercase flex items-center justify-between ${
+                                    regularCitas.length >= 56 
+                                      ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30' 
+                                      : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                  }`}>
+                                    <span>{regularCitas.length} ord {specialCitas.length > 0 ? `+ ${specialCitas.length} esp` : ''}</span>
+                                    <span>{regularCitas.length >= 56 ? (specialCitas.length > 0 ? 'Cupo Esp.' : 'Lleno') : 'Disp.'}</span>
+                                  </div>
                                 <div className="space-y-0.5 overflow-hidden max-h-[34px] w-full hidden sm:block">
                                   {dayCitas.slice(0, 2).map((c: any) => (
                                     <div key={`prev-line-${c.id}`} className="text-[8px] font-medium text-slate-350 truncate tracking-tight uppercase leading-none font-sans">
@@ -4446,7 +5916,8 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                                   )}
                                 </div>
                               </div>
-                            ) : (
+                            );
+                          })() : (
                               <div className="mt-1 hidden sm:block text-[8px] font-mono text-slate-650 italic">
                                 Sin citas
                               </div>
@@ -4465,7 +5936,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                   {showCreateForm ? (
                     <div className="space-y-4 animate-fade-in">
                       <div className="flex items-center justify-between pb-2 border-b border-slate-900">
-                        <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest block font-mono">Registro de Nueva Cita</span>
+                        <div className="flex items-center gap-1.5">
+                          <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                          <span className="text-[10.5px] font-black text-amber-400 uppercase tracking-widest block font-mono">
+                            Cita Especial de Supervisión
+                          </span>
+                        </div>
                         <button
                           type="button"
                           onClick={() => setShowCreateForm(false)}
@@ -4475,7 +5951,40 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                         </button>
                       </div>
 
-                      <form onSubmit={handleCreateCitaSupervisor} className="space-y-3.5">
+                      {/* Informative banner about supervisor special quota */}
+                      {(() => {
+                        const targetDayAppointments = appointmentsByDate[newCitaFecha || selectedCalendarDateStr] || [];
+                        const currentSpecialCount = targetDayAppointments.filter((a: any) => a.creadaPorSupervisor || a.esEspecial || a.citaEspecial || a.esCupoAdicional).length;
+                        const isLimitReached = currentSpecialCount >= 30;
+
+                        return (
+                          <div className="bg-amber-950/30 border border-amber-500/40 rounded-lg p-2.5 space-y-1.5">
+                            <div className="flex items-center justify-between gap-1.5 text-amber-300 text-[10px] font-black uppercase font-mono">
+                              <div className="flex items-center gap-1.5">
+                                <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                                <span>Cupo Adicional Autorizado</span>
+                              </div>
+                              <span className={`px-2 py-0.5 rounded text-[9px] font-mono border ${
+                                isLimitReached
+                                  ? 'bg-rose-950/80 text-rose-300 border-rose-800 font-bold'
+                                  : 'bg-purple-950/80 text-purple-300 border-purple-800'
+                              }`}>
+                                {currentSpecialCount} / 30 Extras
+                              </span>
+                            </div>
+                            <p className="text-[9.5px] text-slate-350 leading-relaxed">
+                              Las citas creadas por supervisores son <strong className="text-amber-200">cupos especiales adicionales (máximo 30 por día)</strong> por encima de los 56 cupos ordinarios de la jornada.
+                            </p>
+                            {isLimitReached && (
+                              <p className="text-[9.5px] text-rose-400 font-bold">
+                                ⚠️ Se ha alcanzado el límite reglamentario de 30 cupos especiales autorizados para esta fecha.
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      <form onSubmit={handleCreateCitaSupervisor} className="space-y-3">
                         <div className="space-y-1">
                           <label className="text-[9.5px] font-extrabold uppercase text-slate-450 block">Nombre Completo del Ciudadano *</label>
                           <input
@@ -4515,10 +6024,35 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
                         <div className="grid grid-cols-2 gap-3">
                           <div className="space-y-1">
+                            <label className="text-[9.5px] font-extrabold uppercase text-slate-450 block">No. Resolución Migratoria</label>
+                            <input
+                              type="text"
+                              placeholder="Ej. RES-2024-8910"
+                              value={newCitaResolucion}
+                              onChange={(e) => setNewCitaResolucion(e.target.value)}
+                              className="w-full bg-slate-900 border border-slate-800 text-white p-2 rounded text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono text-slate-100"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[9.5px] font-extrabold uppercase text-slate-450 block">Motivo Cita Especial</label>
+                            <input
+                              type="text"
+                              placeholder="Motivo o justificación"
+                              value={newCitaMotivoEspecial}
+                              onChange={(e) => setNewCitaMotivoEspecial(e.target.value)}
+                              className="w-full bg-slate-900 border border-slate-800 text-white p-2 rounded text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 text-slate-100"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
                             <label className="text-[9.5px] font-extrabold uppercase text-slate-450 block">Fecha Cita *</label>
                             <input
                               type="date"
                               required
+                              min="2026-01-04"
                               value={newCitaFecha}
                               onChange={(e) => setNewCitaFecha(e.target.value)}
                               className="w-full bg-slate-900 border border-slate-800 text-white p-2 rounded text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono text-slate-100 cursor-pointer"
@@ -4533,20 +6067,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                               onChange={(e) => setNewCitaHora(e.target.value)}
                               className="w-full bg-slate-900 border border-slate-800 text-white p-2 rounded text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono text-slate-100 cursor-pointer"
                             >
-                              <option value="07:00 AM">07:00 AM</option>
-                              <option value="07:30 AM">07:30 AM</option>
-                              <option value="08:00 AM">08:00 AM</option>
-                              <option value="08:30 AM">08:30 AM</option>
-                              <option value="09:00 AM">09:00 AM</option>
-                              <option value="09:30 AM">09:30 AM</option>
-                              <option value="10:00 AM">10:00 AM</option>
-                              <option value="10:30 AM">10:30 AM</option>
-                              <option value="11:00 AM">11:00 AM</option>
-                              <option value="11:30 AM">11:30 AM</option>
-                              <option value="12:00 PM">12:00 PM</option>
-                              <option value="12:30 PM">12:30 PM</option>
-                              <option value="01:00 PM">01:00 PM</option>
-                              <option value="01:30 PM">01:30 PM</option>
+                              {SELECT_TIMES_OPTIONS.map((timeOption) => (
+                                <option key={timeOption} value={timeOption}>
+                                  {timeOption}
+                                </option>
+                              ))}
                             </select>
                           </div>
                         </div>
@@ -4575,32 +6100,64 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           </div>
                         </div>
 
-                        <button
-                          type="submit"
-                          className="w-full bg-amber-600 hover:bg-amber-700 text-white font-black text-xs uppercase tracking-wider py-3 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
-                        >
-                          <Check className="w-4 h-4" />
-                          <span>Agendar Cita Oficial</span>
-                        </button>
+                        {(() => {
+                          const targetDayAppointments = appointmentsByDate[newCitaFecha || selectedCalendarDateStr] || [];
+                          const currentSpecialCount = targetDayAppointments.filter((a: any) => a.creadaPorSupervisor || a.esEspecial || a.citaEspecial || a.esCupoAdicional).length;
+                          const isLimitReached = currentSpecialCount >= 30;
+
+                          return (
+                            <button
+                              type="submit"
+                              disabled={isLimitReached}
+                              className={`w-full font-black text-xs uppercase tracking-wider py-3 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 border ${
+                                isLimitReached
+                                  ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed opacity-60'
+                                  : 'bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white border-amber-400/30 cursor-pointer'
+                              }`}
+                            >
+                              <Star className="w-4 h-4 text-amber-200 fill-amber-300" />
+                              <span>{isLimitReached ? 'Límite de 30 Cupos Extras Alcanzado' : 'Agendar Cita Especial (Cupo Adicional)'}</span>
+                            </button>
+                          );
+                        })()}
                       </form>
                     </div>
                   ) : (
                     <div className="space-y-4 flex-1 flex flex-col justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest block font-mono">Detalles de la Jornada</span>
-                          <span className={`text-[10px] font-black px-2 py-0.5 rounded font-mono border ${
-                            (appointmentsByDate[selectedCalendarDateStr] || []).length >= 56
-                              ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
-                              : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                          }`}>
-                            {(appointmentsByDate[selectedCalendarDateStr] || []).length} / 56 Citas Permitidas
-                          </span>
-                        </div>
-                        <h4 className="text-sm font-black text-white flex items-center gap-1.5">
-                          <span>Citas para el {selectedCalendarDateStr}</span>
-                        </h4>
-                      </div>
+                      {(() => {
+                        const dayAllCitas = appointmentsByDate[selectedCalendarDateStr] || [];
+                        const regCount = dayAllCitas.filter((c: any) => !c.creadaPorSupervisor && !c.esEspecial && !c.citaEspecial && !c.esCupoAdicional).length;
+                        const specCount = dayAllCitas.filter((c: any) => c.creadaPorSupervisor || c.esEspecial || c.citaEspecial || c.esCupoAdicional).length;
+
+                        return (
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between flex-wrap gap-1">
+                              <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest block font-mono">Detalles de la Jornada</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className={`text-[10px] font-black px-2 py-0.5 rounded font-mono border ${
+                                  regCount >= 56
+                                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                }`}>
+                                  {regCount} / 56 Ordinarias
+                                </span>
+                                {specCount > 0 && (
+                                  <span className={`text-[10px] font-black px-2 py-0.5 rounded font-mono border ${
+                                    specCount >= 30
+                                      ? 'bg-rose-950/80 text-rose-300 border-rose-800 font-bold'
+                                      : 'bg-purple-950/40 text-purple-300 border-purple-500/40'
+                                  }`}>
+                                    +{specCount} / 30 Especiales
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <h4 className="text-sm font-black text-white flex items-center gap-1.5">
+                              <span>Citas para el {selectedCalendarDateStr}</span>
+                            </h4>
+                          </div>
+                        );
+                      })()}
 
                       {/* List of appointments for selected day */}
                       <div className="flex-1 mt-2 overflow-y-auto max-h-[380px] space-y-3.5 pr-1 divide-y divide-slate-850">
@@ -4617,6 +6174,9 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                             const stepStatus = appMetadata[app.id]?.estadoTicket || 'En Entrada';
                             const pName = getExtranjeriaCitizenName(app);
                             const passportVal = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
+                            const isSpecial = Boolean(app.creadaPorSupervisor || app.esEspecial || app.citaEspecial || app.esCupoAdicional);
+                            const resolucionNum = app.resolucion || app.datosPersonales?.numeroResolucion;
+                            const motivoEsp = app.motivoEspecial || app.datosPersonales?.motivoEspecial;
                             
                             const subservice = app.subServicioNombre || (isExtranjeriaAppointment(app) ? 'Servicio de Extranjería' : 'Cédula Pasados de Edad');
                             
@@ -4624,10 +6184,17 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                               <div key={`cal-det-${app.id}`} className="space-y-1.5 pt-3.5 first:pt-0">
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="space-y-0.5">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      <span className="text-[10px] font-black bg-amber-500/20 border border-amber-500/30 text-amber-300 px-1.5 py-0.5 rounded font-mono">
-                                        N° {app.numeroCitaDia || (appIdx + 1)} de 56
-                                      </span>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {isSpecial ? (
+                                        <span className="text-[9.5px] font-black bg-purple-600/30 border border-purple-400/50 text-purple-200 px-1.5 py-0.5 rounded font-mono flex items-center gap-1">
+                                          <Star className="w-2.5 h-2.5 text-purple-300 fill-purple-300" />
+                                          <span>CITA ESPECIAL (N° {app.numeroCitaDia || (appIdx + 1)})</span>
+                                        </span>
+                                      ) : (
+                                        <span className="text-[10px] font-black bg-amber-500/20 border border-amber-500/30 text-amber-300 px-1.5 py-0.5 rounded font-mono">
+                                          N° {app.numeroCitaDia || (appIdx + 1)} de 56
+                                        </span>
+                                      )}
                                       <span className="text-amber-500 font-mono font-black text-xs">{app.id}</span>
                                       <span className="text-[9px] bg-slate-900 text-slate-400 border border-slate-800 px-1 rounded font-mono font-bold leading-none py-0.5">
                                         {app.hora}
@@ -4636,9 +6203,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                                         {subservice}
                                       </span>
                                     </div>
-                                    <h5 className="font-extrabold text-white text-[11px] uppercase truncate max-w-[170px]">
-                                      {pName}
-                                    </h5>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <h5 className="font-extrabold text-white text-[11px] uppercase truncate max-w-[320px] md:max-w-[420px]" title={pName}>
+                                        {pName}
+                                      </h5>
+                                    </div>
                                   </div>
 
                                   <button
@@ -4653,6 +6222,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
                                 <div className="text-[9.5px] text-slate-455 space-y-0.5 font-sans leading-relaxed">
                                   <div>PAS: <span className="font-mono text-slate-350">{passportVal}</span></div>
+                                  {resolucionNum && (
+                                    <div>Res. Migración: <span className="font-mono text-amber-300/90">{resolucionNum}</span></div>
+                                  )}
+                                  {motivoEsp && (
+                                    <div className="text-[9px] text-purple-300/80 font-mono">Motivo: {motivoEsp}</div>
+                                  )}
                                   <div>Contacto: <span className="font-mono text-slate-350">{app.telefono || 'N/D'}</span> | <span className="text-slate-350">{app.correo || 'N/D'}</span></div>
                                   <div className="flex items-center gap-1.5 pt-0.5">
                                     <span className="text-[8.5px] font-black uppercase text-slate-500">Estado:</span>
@@ -4698,21 +6273,26 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
           <div className="lg:col-span-7 bg-slate-950 rounded-xl border border-slate-800 p-5 space-y-4 shadow-xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-900">
               <div className="space-y-0.5 text-left">
-                <h4 className="text-xs font-black uppercase tracking-wider text-slate-200 flex items-center gap-2">
-                  <span>Ciudadanos en Entrada de Extranjería</span>
-                  <span className="bg-slate-900 border border-slate-750 text-slate-400 px-2.5 py-0.5 rounded-full text-[10px] font-black font-mono">
-                    {filteredQueueAtencionIn.length}
-                    {filteredQueueAtencionIn.length !== queueAtencionIn.length && ` / ${queueAtencionIn.length}`}
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-white flex items-center gap-2">
+                    <Users className="w-4 h-4 text-blue-400" />
+                    <span>En Sala de Entrada / Espera de Atención</span>
+                  </h4>
+                  <span className="text-xs font-mono font-black px-2.5 py-0.5 rounded bg-blue-950/80 border border-blue-500/40 text-blue-300">
+                    {queueAtencionIn.length} en Sala
                   </span>
-                </h4>
-                <p className="text-[10px] text-slate-455 font-bold uppercase leading-relaxed text-left">Seleccione el ciudadano para verificar documentos y pasarlo al Supervisor</p>
+                </div>
+                <p className="text-[10px] text-slate-455 font-bold uppercase leading-relaxed text-left">
+                  Ciudadanos registrados esperando revisión documental o dar paso al Supervisor
+                </p>
               </div>
 
               <button
                 type="button"
                 onClick={fetchAppointments}
                 disabled={loading}
-                className="text-slate-400 hover:text-white transition bg-slate-900 p-2 rounded border border-slate-800 flex items-center gap-1 text-[10px] font-extrabold uppercase"
+                className="text-slate-400 hover:text-white transition bg-slate-900 p-2 rounded border border-slate-800 flex items-center gap-1 text-[10px] font-extrabold uppercase cursor-pointer"
+                title="Actualizar lista de citas"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
               </button>
@@ -4721,112 +6301,97 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
             {/* BUSCADOR POR NOMBRE O PASAPORTE Y FILTRO POR DÍA */}
             <div className="bg-slate-900/80 p-3 rounded-lg border border-slate-800 space-y-2.5 text-left">
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                {/* Campo de búsqueda por Nombre o Pasaporte */}
-                <div className="relative flex-1">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    placeholder="Buscar por nombre o pasaporte..."
-                    value={atencionSearchQuery}
-                    onChange={(e) => setAtencionSearchQuery(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-750 text-white rounded-md py-1.5 pl-9 pr-8 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-medium placeholder-slate-500"
-                  />
-                  {atencionSearchQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setAtencionSearchQuery('')}
-                      className="absolute right-2.5 top-1.5 text-slate-400 hover:text-white text-xs font-black px-1"
-                      title="Limpiar búsqueda"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-
-                {/* Filtro de Citas en el Día */}
-                {isStrictTodayOnly ? (
-                  <div className="flex items-center gap-2 shrink-0">
-                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-950/40 border border-blue-900/50 rounded-lg text-[11px] font-black uppercase text-blue-300">
-                      <Calendar className="w-3.5 h-3.5 text-blue-400" />
-                      <span>Solo Citas de Hoy: {todayStr}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setAtencionShowAllDates(true)}
-                      className="px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-850 rounded-md text-[10.5px] font-black uppercase tracking-wider transition cursor-pointer flex items-center gap-1 hover:text-amber-400"
-                      title="Ver citas de cualquier fecha, incluyendo importaciones CSV o citas de otras fechas"
-                    >
-                      <span>Ver Todas las Fechas 📂</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                    <div className="relative">
-                      <Calendar className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2 pointer-events-none" />
-                      <input
-                        type="date"
-                        value={atencionDateFilter}
-                        onChange={(e) => setAtencionDateFilter(e.target.value)}
-                        className="bg-slate-950 border border-slate-750 text-white rounded-md py-1.5 pl-8 pr-2 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono cursor-pointer"
-                        title="Seleccionar fecha de citas"
-                      />
-                    </div>
-
-                    {/* Botón rápido "Hoy" */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const today = new Date().toISOString().substring(0, 10);
-                        setAtencionDateFilter(atencionDateFilter === today ? '' : today);
+                {/* Campo de búsqueda por Nombre o Pasaporte con Búsqueda Instantánea en las 56 + Cupos Supervisor */}
+                <div className="flex items-center gap-1.5 flex-1">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      type="text"
+                      placeholder="Buscar por nombre, pasaporte o código en las 56 del día..."
+                      value={localAtencionSearchQuery}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setLocalAtencionSearchQuery(val);
+                        setAtencionSearchQuery(val);
                       }}
-                      className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold uppercase transition flex items-center gap-1 cursor-pointer whitespace-nowrap border ${
-                        atencionDateFilter === new Date().toISOString().substring(0, 10)
-                          ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
-                          : 'bg-slate-950 hover:bg-slate-850 text-slate-300 border-slate-750'
-                      }`}
-                      title="Filtrar citas del día de hoy"
-                    >
-                      <span>Hoy 📅</span>
-                    </button>
-
-                    {/* Botón rápido para volver a "Solo Hoy" */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAtencionShowAllDates(false);
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          setAtencionSearchQuery(localAtencionSearchQuery);
+                        }
                       }}
-                      className="px-2.5 py-1.5 rounded-md text-[11px] font-black uppercase bg-slate-900 hover:bg-slate-850 text-amber-400 border border-slate-800 transition flex items-center gap-1 cursor-pointer"
-                      title="Forzar vista a sólo citas del día actual"
-                    >
-                      <span>🔒 Solo Hoy</span>
-                    </button>
-
-                    {/* Botón "Todas" */}
-                    {atencionDateFilter && (
+                      className="w-full bg-slate-950 border border-slate-750 text-white rounded-md py-1.5 pl-9 pr-8 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-medium placeholder-slate-500"
+                    />
+                    {(localAtencionSearchQuery || atencionSearchQuery) && (
                       <button
                         type="button"
-                        onClick={() => setAtencionDateFilter('')}
-                        className="px-2 py-1.5 rounded-md text-[11px] font-bold uppercase bg-slate-950 hover:bg-slate-850 text-slate-400 hover:text-white border border-slate-750 transition cursor-pointer"
-                        title="Ver citas de todas las fechas"
+                        onClick={() => {
+                          setLocalAtencionSearchQuery('');
+                          setAtencionSearchQuery('');
+                        }}
+                        className="absolute right-2.5 top-1.5 text-slate-400 hover:text-white text-xs font-black px-1 cursor-pointer"
+                        title="Limpiar búsqueda"
                       >
-                        Todas
+                        ✕
                       </button>
                     )}
                   </div>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setAtencionSearchQuery(localAtencionSearchQuery)}
+                    className="bg-blue-600 hover:bg-blue-500 text-white font-black uppercase text-xs px-3 py-1.5 rounded-md transition shadow-sm shrink-0 cursor-pointer"
+                  >
+                    Buscar
+                  </button>
+                </div>
+
+                {/* Filtro y Selector de Día de Atención */}
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-950/60 border border-blue-800/60 rounded-lg text-[11px] font-black uppercase text-blue-300">
+                    <Calendar className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Día: {activeAtencionDate}</span>
+                  </div>
+
+                  <div className="relative">
+                    <input
+                      type="date"
+                      value={atencionDateFilter || activeAtencionDate}
+                      onChange={(e) => {
+                        setAtencionDateFilter(e.target.value);
+                      }}
+                      className="bg-slate-950 border border-slate-750 text-white rounded-md py-1.5 px-2.5 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono cursor-pointer"
+                      title="Seleccionar fecha de atención"
+                    />
+                  </div>
+
+                  {/* Botón rápido "Hoy" */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAtencionDateFilter(todayStr);
+                    }}
+                    className={`px-2.5 py-1.5 rounded-md text-[11px] font-bold uppercase transition flex items-center gap-1 cursor-pointer whitespace-nowrap border ${
+                      (atencionDateFilter || activeAtencionDate) === todayStr
+                        ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                        : 'bg-slate-950 hover:bg-slate-850 text-slate-300 border-slate-750'
+                    }`}
+                    title="Filtrar citas del día de hoy"
+                  >
+                    <span>Hoy 📅</span>
+                  </button>
+                </div>
               </div>
 
-              {/* Días con citas cargadas (si hay más de 1 fecha disponible y no es rol de atención estricta) */}
-              {!isStrictTodayOnly && availableAppointmentDates.length > 1 && (
+              {/* Días con citas cargadas para selección rápida */}
+              {availableAppointmentDates.length > 1 && (
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 pt-0.5 text-[9.5px]">
                   <span className="text-slate-500 font-bold uppercase shrink-0">Días con citas:</span>
                   {availableAppointmentDates.map(d => (
                     <button
                       key={`atencion-d-${d}`}
                       type="button"
-                      onClick={() => setAtencionDateFilter(atencionDateFilter === d ? '' : d)}
+                      onClick={() => setAtencionDateFilter(d)}
                       className={`px-2 py-0.5 rounded font-mono font-bold transition whitespace-nowrap border cursor-pointer ${
-                        atencionDateFilter === d
+                        activeAtencionDate === d
                           ? 'bg-blue-500/20 text-blue-300 border-blue-500/40'
                           : 'bg-slate-950 text-slate-400 hover:text-slate-200 border-slate-800'
                       }`}
@@ -4837,34 +6402,50 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 </div>
               )}
 
-              {/* Indicador de filtros activos */}
-              {(atencionSearchQuery || (atencionDateFilter && !isStrictTodayOnly)) && (
+              {/* Banner Regulatorio Oficial: 56 del Día + Cupos Supervisor */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] bg-slate-950/70 p-2 rounded-lg border border-slate-850">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-blue-400 font-black uppercase tracking-wider">Universo de Búsqueda:</span>
+                  <span className="text-emerald-400 font-mono font-bold bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded">
+                    56 Ordinarias ({atencionDayUniverse.ordinary56.length})
+                  </span>
+                  {atencionDayUniverse.supervisorCreated.length > 0 ? (
+                    <span className="text-amber-300 font-mono font-bold bg-amber-950/40 border border-amber-800/40 px-2 py-0.5 rounded">
+                      + {atencionDayUniverse.supervisorCreated.length} Creadas por Supervisor
+                    </span>
+                  ) : (
+                    <span className="text-slate-500 font-mono text-[9px]">
+                      (Sin cupos supervisor creados hoy)
+                    </span>
+                  )}
+                </div>
+                <div className="text-slate-400 font-mono text-[9.5px]">
+                  Total activo del día: <strong className="text-white">{atencionDayUniverse.totalUniverse.length}</strong> | En sala: <strong className="text-white">{queueAtencionIn.length}</strong>
+                </div>
+              </div>
+
+              {/* Indicador de búsqueda activa */}
+              {(localAtencionSearchQuery || atencionSearchQuery) && (
                 <div className="flex flex-wrap items-center justify-between text-[10.5px] text-slate-400 pt-1 border-t border-slate-800/60">
                   <div className="flex items-center gap-2">
-                    <span>Coincidencias: <strong className="text-white font-mono">{filteredQueueAtencionIn.length}</strong></span>
-                    {atencionDateFilter && (
-                      <span className="text-blue-400 font-mono bg-blue-950/60 border border-blue-900/50 px-1.5 py-0.2 rounded text-[9.5px]">
-                        📅 {atencionDateFilter}
-                      </span>
-                    )}
-                    {atencionSearchQuery && (
-                      <span className="text-amber-400 font-mono bg-amber-950/60 border border-amber-900/50 px-1.5 py-0.2 rounded text-[9.5px]">
-                        🔍 "{atencionSearchQuery}"
-                      </span>
-                    )}
+                    <span>Coincidencias: <strong className="text-white font-mono">{filteredQueueAtencionIn.length}</strong> de {queueAtencionIn.length} en sala</span>
+                    <span className="text-amber-400 font-mono bg-amber-950/60 border border-amber-900/50 px-1.5 py-0.2 rounded text-[9.5px]">
+                      🔍 "{localAtencionSearchQuery || atencionSearchQuery}"
+                    </span>
+                    <span className="text-slate-500 text-[9.5px]">
+                      (Búsqueda instantánea en las 56 del día + cupos supervisor)
+                    </span>
                   </div>
 
                   <button
                     type="button"
                     onClick={() => {
+                      setLocalAtencionSearchQuery('');
                       setAtencionSearchQuery('');
-                      if (!isStrictTodayOnly) {
-                        setAtencionDateFilter('');
-                      }
                     }}
                     className="text-[10px] text-slate-400 hover:text-amber-400 font-bold underline cursor-pointer"
                   >
-                    Limpiar filtros
+                    Limpiar búsqueda
                   </button>
                 </div>
               )}
@@ -4873,76 +6454,103 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
             {/* List */}
             {filteredQueueAtencionIn.length === 0 ? (
               <div className="py-14 text-center space-y-2 text-slate-450 border border-dashed border-slate-850 rounded">
-                {atencionSearchQuery || (atencionDateFilter && !isStrictTodayOnly) ? (
+                {(localAtencionSearchQuery || atencionSearchQuery) ? (
                   <>
                     <Search className="w-8 h-8 text-slate-600 mx-auto" />
                     <span className="text-[11px] font-bold uppercase tracking-wider block text-slate-350">
-                      Sin resultados para esta búsqueda
+                      Sin resultados en las citas de hoy
                     </span>
                     <p className="text-[10px] max-w-xs mx-auto leading-relaxed text-slate-400">
-                      No se encontraron ciudadanos en sala de entrada con {atencionSearchQuery ? `"${atencionSearchQuery}"` : ''} {atencionDateFilter && !isStrictTodayOnly ? `en la fecha ${atencionDateFilter}` : ''}.
+                      No se encontraron ciudadanos en las 56 citas del día ({activeAtencionDate}) ni en los cupos del supervisor con "{localAtencionSearchQuery || atencionSearchQuery}".
                     </p>
                     <button
                       type="button"
                       onClick={() => {
+                        setLocalAtencionSearchQuery('');
                         setAtencionSearchQuery('');
-                        if (!isStrictTodayOnly) {
-                          setAtencionDateFilter('');
-                        }
                       }}
                       className="text-[10.5px] text-blue-400 hover:text-blue-300 font-bold underline cursor-pointer inline-block mt-1"
                     >
-                      Limpiar filtros y ver todos
+                      Limpiar búsqueda
                     </button>
                   </>
                 ) : (
                   <>
                     <CheckCircle className="w-8 h-8 text-slate-600 mx-auto" />
-                    <span className="text-[11px] font-bold uppercase tracking-wider block text-slate-350">Sin citas en espera</span>
-                    <p className="text-[10px] max-w-xs mx-auto leading-relaxed">Todos los ciudadanos registrados de Extranjería ya han sido procesados por la Unidad de Entrada.</p>
+                    <span className="text-[11px] font-bold uppercase tracking-wider block text-slate-350">Sin citas en espera para este día</span>
+                    <p className="text-[10px] max-w-xs mx-auto leading-relaxed">Todos los ciudadanos del día ({activeAtencionDate}) han sido procesados por la Unidad de Entrada o no hay citas registradas para esta fecha.</p>
                   </>
                 )}
               </div>
             ) : (
               <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
-                {filteredQueueAtencionIn.map(app => {
+                {filteredQueueAtencionIn.map((app, appIdx) => {
                   const name = getExtranjeriaCitizenName(app);
                   const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
                   const isSelected = selectedAppForCheck?.id === app.id;
+                  const isSupervisorQuota = Boolean(
+                    app.creadaPorSupervisor || 
+                    app.esCupoAdicional || 
+                    app.citaEspecial || 
+                    app.esEspecial || 
+                    (app.creadoPor && String(app.creadoPor).toLowerCase().includes('supervisor'))
+                  );
 
                   return (
-                    <button
+                    <div
                       key={`atencion-list-${app.id}`}
-                      type="button"
                       onClick={() => {
                         setSelectedAppForCheck(app);
                         const meta = appMetadata[app.id];
                         setTempCheckedDocs(meta?.checkedDocs || []);
                       }}
-                      className={`w-full p-4 rounded-lg border text-left flex items-start justify-between gap-4 transition cursor-pointer ${
+                      className={`w-full p-4 rounded-lg border text-left flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition cursor-pointer ${
                         isSelected 
                           ? 'bg-blue-950/45 border-blue-500 shadow-md shadow-blue-950/25'
                           : 'bg-slate-900/60 border-slate-850 hover:border-slate-700'
                       }`}
                     >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
+                      <div className="space-y-1 flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-mono font-black text-amber-500">{app.id}</span>
                           <span className="text-[8.5px] bg-slate-950 border border-slate-800 text-slate-400 font-extrabold px-1.5 py-0.2 rounded font-mono">
                             Código Tx: {app.codigoTransaccion}
                           </span>
+                          {isSupervisorQuota ? (
+                            <span className="text-[8.5px] bg-amber-950/80 border border-amber-600/60 text-amber-300 font-black px-1.5 py-0.2 rounded font-mono">
+                              ⭐ Cupo Especial Supervisor
+                            </span>
+                          ) : (
+                            <span className="text-[8.5px] bg-emerald-950/80 border border-emerald-600/60 text-emerald-300 font-black px-1.5 py-0.2 rounded font-mono">
+                              Cita N° {app.numeroCitaDia || (appIdx + 1)} de 56
+                            </span>
+                          )}
                         </div>
-                        <span className="text-xs font-bold text-slate-100 block uppercase">{name}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-slate-100 block uppercase truncate">{name}</span>
+                        </div>
                         <span className="text-[9.5px] font-bold text-slate-450 block font-mono">PAS: {passport}  |  Fecha: {formatFriendlyDate(app.fecha)} ({app.hora})</span>
-                        <span className="text-[9.5px] text-emerald-400 block font-semibold">Agendado por: {app.creadoPor || app.datosPersonales?.creadoPor || 'Portal del Ciudadano'}</span>
+                        <span className="text-[9.5px] text-emerald-400 block font-semibold truncate">Agendado por: {app.creadoPor || app.datosPersonales?.creadoPor || 'Portal del Ciudadano'}</span>
                       </div>
 
-                      <div className="py-1">
+                      <div className="py-1 shrink-0 flex items-center gap-2">
                         <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded border border-blue-900 bg-blue-950/30 text-blue-400">
                           Sala de Entrada
                         </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSubmitVerification(app.id);
+                          }}
+                          className="flex items-center gap-1 text-blue-300 hover:text-white bg-blue-950/80 hover:bg-blue-900 border border-blue-500/40 transition font-black uppercase text-[10px] tracking-wider px-2.5 py-1.5 rounded-md cursor-pointer shadow-sm"
+                          title="Dar paso inmediato a la bandeja del supervisor"
+                        >
+                          <Send className="w-3.5 h-3.5 text-blue-400" />
+                          <span>Dar Paso a Supervisor ⏩</span>
+                        </button>
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -5006,7 +6614,9 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 <div className="bg-slate-900 p-3.5 rounded-lg border border-slate-850 space-y-1.5">
                   <span className="text-[9px] font-black text-blue-400 uppercase tracking-widest block font-mono">Cita para Validación</span>
                   <div className="text-xs font-mono font-black text-white">{selectedAppForCheck.id}</div>
-                  <div className="text-sm font-bold text-slate-100 uppercase">{getExtranjeriaCitizenName(selectedAppForCheck)}</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-bold text-slate-100 uppercase">{getExtranjeriaCitizenName(selectedAppForCheck)}</div>
+                  </div>
                   <div className="text-[10px] text-emerald-400 font-bold block font-sans">
                     Agendado por: {selectedAppForCheck.creadoPor || selectedAppForCheck.datosPersonales?.creadoPor || 'Portal del Ciudadano'}
                   </div>
@@ -5248,6 +6858,49 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           </p>
                         )}
                       </div>
+
+                      {b?.active && (
+                        <div className="pt-2 border-t border-slate-800/60 flex flex-col gap-1.5">
+                          <span className="text-[8.5px] font-black uppercase text-slate-450 block font-mono">Modo de Atención</span>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (b.receso) {
+                                  toggleBoothReceso(b.id);
+                                }
+                              }}
+                              className={`flex-1 py-1 px-2 text-[10px] font-black rounded border transition cursor-pointer text-center ${
+                                !b.receso
+                                  ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-400'
+                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              🟢 Disponible
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!b.receso) {
+                                  toggleBoothReceso(b.id);
+                                }
+                              }}
+                              className={`flex-1 py-1 px-2 text-[10px] font-black rounded border transition cursor-pointer text-center ${
+                                b.receso
+                                  ? 'bg-amber-950/80 border-amber-500/60 text-amber-400 font-bold'
+                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              ⏸ En Receso
+                            </button>
+                          </div>
+                          {b.receso && (
+                            <p className="text-[9px] text-amber-400/95 font-bold mt-1.5 animate-pulse bg-amber-950/20 border border-amber-950/40 p-1.5 rounded leading-relaxed">
+                              ⏸ ALERTA DE RECESO: No se le asignarán ciudadanos automáticamente mientras se encuentre en este estado. Cambie a "Disponible" para retomar.
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -5260,10 +6913,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                   <div className="bg-slate-900 p-3 rounded border border-slate-850 text-center">
                     <span className="text-[8px] text-slate-450 uppercase font-black block">Atendidos Hoy</span>
                     <span className="text-xl font-mono font-black text-indigo-400">
-                      {appointments.filter(app => {
-                        const meta = appMetadata[app.id];
-                        return meta && meta.assignedCubiculo === selectedCubiculo && meta.estadoTicket === 'realizada';
-                      }).length}
+                      {attendedTodayCount}
                     </span>
                   </div>
                   <div className="bg-slate-900 p-3 rounded border border-slate-850 text-center">
@@ -5307,27 +6957,74 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
               </div>
             </h4>
 
-            {currentRole === 'extranjeria_cubiculo' && (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-slate-900/60 border border-slate-800/80 rounded-xl mb-2">
-                <div className="text-left space-y-1">
-                  <span className="text-[9px] font-black text-slate-450 uppercase block tracking-wider">Estación Operando</span>
-                  <span className="text-xs font-black text-indigo-400">{booths.find(b => b.id === selectedCubiculo)?.name || 'N/D'}</span>
+            {currentRole === 'extranjeria_cubiculo' && (() => {
+              const b = booths.find(x => x.id === selectedCubiculo);
+              return (
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 p-4 bg-slate-900/60 border border-slate-800/80 rounded-xl mb-2">
+                  <div className="text-left space-y-1">
+                    <span className="text-[9px] font-black text-slate-450 uppercase block tracking-wider">Estación Operando</span>
+                    <span className="text-xs font-black text-indigo-400">{b?.name || 'N/D'}</span>
+                  </div>
+                  <div className="text-left space-y-1">
+                    <span className="text-[9px] font-black text-slate-450 uppercase block tracking-wider">Personas Atendidas en el Día</span>
+                    <span className="text-xs font-mono font-black text-emerald-400 flex items-center gap-1">
+                      <span>{attendedTodayCount} Ciudadanos</span>
+                      <span className="text-[8px] bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.2 rounded font-sans uppercase font-bold">✓ Conteo Activo</span>
+                    </span>
+                  </div>
+                  <div className="text-left space-y-1">
+                    <span className="text-[9px] font-black text-slate-450 uppercase block tracking-wider">Usuario / Operador</span>
+                    <span className="text-xs font-semibold text-slate-300 truncate block">
+                      {sessionStorage.getItem('admin_nombre') || sessionStorage.getItem('admin_username') || 'Usuario de Ventanilla'}
+                    </span>
+                  </div>
+                  <div className="text-left space-y-1 bg-slate-950/60 p-2.5 rounded border border-slate-800/60 flex flex-col justify-between">
+                    <span className="text-[8.5px] font-black uppercase text-slate-455 block font-mono">Modo de Atención</span>
+                    {b && (
+                      <div className="flex gap-1.5 mt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (b.receso) {
+                              toggleBoothReceso(b.id);
+                            }
+                          }}
+                          className={`flex-1 py-1 text-[9px] font-black rounded border transition cursor-pointer text-center ${
+                            !b.receso
+                              ? 'bg-emerald-950/80 border-emerald-500/60 text-emerald-400'
+                              : 'bg-slate-900 border-slate-800 text-slate-450 hover:text-slate-200'
+                          }`}
+                        >
+                          🟢 Disp.
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!b.receso) {
+                              toggleBoothReceso(b.id);
+                            }
+                          }}
+                          className={`flex-1 py-1 text-[9px] font-black rounded border transition cursor-pointer text-center ${
+                            b.receso
+                              ? 'bg-amber-950/80 border-amber-500/60 text-amber-400 font-bold'
+                              : 'bg-slate-900 border-slate-800 text-slate-450 hover:text-slate-200'
+                          }`}
+                        >
+                          ⏸ Receso
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {b?.receso && (
+                    <div className="sm:col-span-4 mt-2">
+                      <p className="text-[9.5px] text-amber-400 font-bold leading-normal bg-amber-950/35 border border-amber-800/40 p-2 rounded animate-pulse">
+                        ⚠️ ATENCIÓN: Se encuentra en estado de RECESO (Break). No se le asignarán ciudadanos automáticamente hasta que marque su estado como "Disponible".
+                      </p>
+                    </div>
+                  )}
                 </div>
-                <div className="text-left space-y-1">
-                  <span className="text-[9px] font-black text-slate-450 uppercase block tracking-wider">Personas Atendidas en el Día</span>
-                  <span className="text-xs font-mono font-black text-emerald-400 flex items-center gap-1">
-                    <span>{attendedTodayCount} Ciudadanos</span>
-                    <span className="text-[8px] bg-emerald-950/80 border border-emerald-800/60 px-1.5 py-0.2 rounded font-sans uppercase font-bold">✓ Conteo Activo</span>
-                  </span>
-                </div>
-                <div className="text-left space-y-1">
-                  <span className="text-[9px] font-black text-slate-450 uppercase block tracking-wider">Usuario / Operador</span>
-                  <span className="text-xs font-semibold text-slate-300 truncate block">
-                    {sessionStorage.getItem('admin_nombre') || sessionStorage.getItem('admin_username') || 'Usuario de Ventanilla'}
-                  </span>
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {queueCubiculoAssigned.length === 0 ? (
               <div className="py-24 text-center space-y-2 text-slate-500 border border-dashed border-slate-850 rounded">
@@ -5338,147 +7035,319 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 </p>
               </div>
             ) : (
-              <div className="space-y-4">
-                {queueCubiculoAssigned.map(app => {
-                  const name = getExtranjeriaCitizenName(app);
-                  const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
-                  const meta = appMetadata[app.id];
-                  const isInAttention = meta?.estadoTicket === 'en_atencion';
-                  const isPaidInCaja = meta?.estadoTicket === 'pagado_en_caja';
+              (() => {
+                const attendingApp = queueCubiculoAssigned.find(app => appMetadata[app.id]?.estadoTicket === 'en_atencion');
+                const activeMainApp = attendingApp || queueCubiculoAssigned[0];
+                const listApps = queueCubiculoAssigned.filter(app => app.id !== activeMainApp?.id);
 
-                  return (
-                    <div 
-                      key={`cubiculo-row-${app.id}`} 
-                      className={`border p-5 rounded-lg space-y-4 shadow-md text-left transition ${
-                        isInAttention 
-                          ? 'bg-slate-900/90 border-emerald-500/80 ring-1 ring-emerald-500/40 shadow-emerald-950/30' 
-                          : 'bg-slate-900/60 border-slate-850'
-                      }`}
-                    >
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold font-mono text-amber-500">{app.id}</span>
-                            <span className="text-[9px] bg-slate-950 border border-slate-800 text-slate-400 font-black px-1.5 py-0.2 rounded font-mono">
-                              Tx: {app.codigoTransaccion}
-                            </span>
-                            <span className="text-[9px] bg-slate-950 border border-indigo-900/60 text-indigo-400 font-black px-2 py-0.2 rounded font-mono">
-                              Turno: E-{app.id.slice(-4).toUpperCase()}
-                            </span>
-                          </div>
-                          <h5 className="text-sm font-black text-slate-100 uppercase leading-snug">{name}</h5>
-                          <span className="text-[10px] text-emerald-400 font-bold block">Agendado por: {app.creadoPor || app.datosPersonales?.creadoPor || 'Portal del Ciudadano'}</span>
-                          <span className="text-[10px] text-slate-450 font-bold block">Nacionalidad: {app.datosPersonales?.nacionalidad || 'N/D'}  |  Pasaporte: {passport}</span>
-                        </div>
+                return (
+                  <div className="space-y-6">
+                    {/* 1. SECCIÓN PRINCIPAL: CIUDADANO EN ATENCIÓN / POR INICIAR (GRANDE) */}
+                    {activeMainApp && (() => {
+                      const app = activeMainApp;
+                      const name = getExtranjeriaCitizenName(app);
+                      const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
+                      const meta = appMetadata[app.id];
+                      const isInAttention = meta?.estadoTicket === 'en_atencion';
+                      const isPaidInCaja = meta?.estadoTicket === 'pagado_en_caja';
 
-                        {/* Status Badge */}
-                        <div className="shrink-0 flex items-center gap-2">
-                          {isInAttention ? (
-                            <span className="bg-emerald-950/90 border border-emerald-500/80 text-emerald-300 font-black text-[10.5px] uppercase px-3.5 py-1 rounded-full flex items-center gap-2 shadow-sm">
-                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                              <span>EN ATENCIÓN ACTIVA</span>
-                            </span>
-                          ) : isPaidInCaja ? (
-                            <span className="bg-indigo-950/90 border border-indigo-500/80 text-indigo-300 font-black text-[10px] uppercase px-3 py-1 rounded-full flex items-center gap-1.5 shadow-sm">
-                              <CreditCard className="w-3.5 h-3.5 text-indigo-400" />
-                              <span>ENVIADO A CAJA</span>
-                            </span>
-                          ) : (
-                            <span className="bg-amber-950/80 border border-amber-500/60 text-amber-300 font-black text-[10px] uppercase px-3 py-1 rounded-full flex items-center gap-1.5 shadow-sm">
-                              <Clock className="w-3.5 h-3.5 text-amber-400" />
-                              <span>EN ESPERA DE ATENCIÓN</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-lg">
-                        <p className="text-xs text-slate-400 leading-relaxed font-semibold">
-                          {isInAttention ? (
-                            <span className="text-emerald-300">
-                              🟢 <strong>Atención presencial en progreso:</strong> El ciudadano está siendo atendido en su cubículo. Cuando complete la entrevista o verificación, puede enviarlo a caja con su ticket o dar por concluido el trámite.
-                            </span>
-                          ) : (
-                            <span>
-                              Ciudadano asignado a este cubículo. Si el ciudadano no se ha presentado, puede pulsar <strong>Llamar a Pantalla</strong> para emitir el anuncio por la Pantalla de Turnos (sin sonido en su equipo). Cuando el ciudadano esté listo en su cubículo, presione <strong>Iniciar Atención</strong>.
-                            </span>
-                          )}
-                        </p>
-                      </div>
-
-                      {/* TICKET SYSTEM SIMULATION PANEL BLOCK */}
-                      <div className="bg-slate-950 border border-slate-850 p-4 rounded-lg space-y-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <CreditCard className="w-4 h-4 text-indigo-400" />
-                            <span className="text-[10px] font-black text-indigo-400 uppercase tracking-wide">Módulo de Sistema de Tickets Oficial</span>
-                          </div>
-                          <a 
-                            href={ticketKioscoUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="bg-slate-900 hover:bg-slate-850 border border-slate-850 text-slate-350 hover:text-white px-2.5 py-1 rounded text-[9px] font-black uppercase tracking-wider flex items-center gap-1 cursor-pointer transition select-none"
-                            referrerPolicy="no-referrer"
-                          >
-                            <span>Abrir Kiosco de Tickets</span>
-                            <ExternalLink className="w-2.5 h-2.5" />
-                          </a>
-                        </div>
-
-                        <p className="text-[10.5px] text-slate-400 leading-relaxed font-semibold">
-                          Por normativas, todo trámite migratorio presencial en el Tribunal Electoral requiere emitirse primero con el número oficial de ticket de caja en <strong className="text-slate-200 font-mono break-all">{ticketKioscoUrl}</strong> para la recaudación tributaria.
-                        </p>
-                      </div>
-
-                      {/* Cubicle Action Controls */}
-                      <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 border-t border-slate-800/80">
-                        {/* Call citizen to Turn Screen (no sound on operator workstation) */}
-                        <button
-                          type="button"
-                          onClick={() => handleRecallCitizen(app.id)}
-                          className="px-3.5 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-750 cursor-pointer transition flex items-center justify-center gap-1.5"
-                          title="Llamar al ciudadano a través de la Pantalla de Turnos en sala (sin sonido en este equipo)"
+                      return (
+                        <div 
+                          key={`cubiculo-row-main-${app.id}`} 
+                          className={`border p-5 rounded-lg space-y-4 shadow-md text-left transition ${
+                            isInAttention 
+                              ? 'bg-slate-900 border-emerald-500/80 ring-1 ring-emerald-500/40 shadow-emerald-950/30' 
+                              : 'bg-slate-900 border-indigo-500/50 ring-1 ring-indigo-500/20 shadow-indigo-950/25'
+                          }`}
                         >
-                          <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-                          <span>Llamar a Pantalla</span>
-                        </button>
+                          {/* Banner explicativo del estado principal */}
+                          <div className="flex items-center gap-2 px-3 py-1.5 rounded bg-slate-950 border border-slate-900 text-[10px] font-black uppercase tracking-wider text-indigo-400 w-fit">
+                            <span>Foco de Atención Activa</span>
+                          </div>
 
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          {/* BOTÓN INICIAR ATENCIÓN */}
-                          {!isInAttention ? (
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold font-mono text-amber-500">{app.id}</span>
+                                <span className="text-[9px] bg-slate-950 border border-slate-800 text-slate-400 font-black px-1.5 py-0.2 rounded font-mono">
+                                  Tx: {app.codigoTransaccion}
+                                </span>
+                                <span className="text-[9px] bg-slate-950 border border-indigo-900/60 text-indigo-400 font-black px-2 py-0.2 rounded font-mono">
+                                  Turno: E-{app.id.slice(-4).toUpperCase()}
+                                </span>
+                              </div>
+                              <h5 className="text-base font-black text-slate-100 uppercase leading-snug">{name}</h5>
+                              <span className="text-[11px] text-emerald-400 font-bold block">Agendado por: {app.creadoPor || app.datosPersonales?.creadoPor || 'Portal del Ciudadano'}</span>
+                              <span className="text-[11px] text-slate-450 font-bold block">Nacionalidad: {app.datosPersonales?.nacionalidad || 'N/D'}  |  Pasaporte: {passport}</span>
+                            </div>
+
+                            {/* Status Badge */}
+                            <div className="shrink-0 flex items-center gap-2">
+                              {isInAttention ? (
+                                <span className="bg-emerald-950/90 border border-emerald-500/80 text-emerald-300 font-black text-[10.5px] uppercase px-3.5 py-1.5 rounded-full flex items-center gap-2 shadow-sm">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                                  <span>EN ATENCIÓN ACTIVA</span>
+                                </span>
+                              ) : isPaidInCaja ? (
+                                <span className="bg-indigo-950/90 border border-indigo-500/80 text-indigo-300 font-black text-[10.5px] uppercase px-3.5 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm">
+                                  <CreditCard className="w-4 h-4 text-indigo-400" />
+                                  <span>ENVIADO A CAJA</span>
+                                </span>
+                              ) : (
+                                <span className="bg-amber-950/80 border border-amber-500/60 text-amber-300 font-black text-[10.5px] uppercase px-3.5 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm">
+                                  <Clock className="w-4 h-4 text-amber-400" />
+                                  <span>EN ESPERA DE ATENCIÓN</span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-lg">
+                            <p className="text-xs text-slate-400 leading-relaxed font-semibold">
+                              {isInAttention ? (
+                                <span className="text-emerald-300">
+                                  🟢 <strong>Atención presencial en progreso:</strong> El ciudadano está siendo atendido en su cubículo. Cuando complete la entrevista o verificación, puede enviarlo a caja con su ticket o dar por concluido el trámite.
+                                </span>
+                              ) : (
+                                <span>
+                                  Ciudadano asignado a este cubículo. Si el ciudadano no se ha presentado, puede pulsar <strong>Llamar a Pantalla</strong> para emitir el anuncio por la Pantalla de Turnos (sin sonido en su equipo). Cuando el ciudadano esté listo en su cubículo, presione <strong>Iniciar Atención</strong>.
+                                </span>
+                              )}
+                            </p>
+                          </div>
+
+                          {/* TICKET SYSTEM SIMULATION PANEL BLOCK */}
+                          <div className="bg-slate-950 border border-slate-850 p-4 rounded-lg space-y-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5">
+                                <CreditCard className="w-4 h-4 text-indigo-400" />
+                                <span className="text-[10px] font-black text-indigo-400 uppercase tracking-wide">Módulo de Sistema de Tickets Oficial</span>
+                              </div>
+                              <a 
+                                href={ticketKioscoUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="bg-slate-900 hover:bg-slate-850 border border-slate-850 text-slate-350 hover:text-white px-2.5 py-1 rounded text-[9px] font-black uppercase tracking-wider flex items-center gap-1 cursor-pointer transition select-none"
+                                referrerPolicy="no-referrer"
+                              >
+                                <span>Abrir Kiosco de Tickets</span>
+                                <ExternalLink className="w-2.5 h-2.5" />
+                              </a>
+                            </div>
+
+                            <p className="text-[10.5px] text-slate-400 leading-relaxed font-semibold">
+                              Por normativas, todo trámite migratorio presencial en el Tribunal Electoral requiere emitirse primero con el número oficial de ticket de caja en <strong className="text-slate-200 font-mono break-all">{ticketKioscoUrl}</strong> para la recaudación tributaria.
+                            </p>
+                          </div>
+
+                          {/* Cubicle Action Controls */}
+                          <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 border-t border-slate-800/80">
+                            {/* Call citizen to Turn Screen (no sound on operator workstation) */}
                             <button
                               type="button"
-                              onClick={() => handleStartAttention(app.id)}
-                              className="px-5 py-2.5 rounded-lg text-[10.5px] font-black uppercase tracking-wider shadow-lg flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500 cursor-pointer transition shadow-emerald-950/40"
-                              title="Haga clic para iniciar la atención presencial de este ciudadano"
+                              onClick={() => handleRecallCitizen(app.id)}
+                              className="px-3.5 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-750 cursor-pointer transition flex items-center justify-center gap-1.5"
+                              title="Llamar al ciudadano a través de la Pantalla de Turnos en sala (sin sonido en este equipo)"
                             >
-                              <Play className="w-4 h-4 fill-white" />
-                              <span>Iniciar Atención</span>
+                              <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Llamar a Pantalla</span>
                             </button>
-                          ) : (
-                            <div className="flex items-center gap-1.5 bg-emerald-950/90 border border-emerald-600/80 px-4 py-2 rounded-lg text-emerald-300 text-[10.5px] font-black uppercase tracking-wider shadow-inner">
-                              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                              <span>Atención en Curso</span>
-                            </div>
-                          )}
 
-                          {/* Concluir trámite */}
-                          <button
-                            type="button"
-                            onClick={() => handleCompleteAppointment(app.id)}
-                            className="px-5 py-2.5 rounded-lg text-[10.5px] font-black uppercase tracking-wider shadow flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-700 cursor-pointer transition"
-                            title="Concluir el trámite y liberar el cubículo"
-                          >
-                            <UserCheck className="w-4 h-4" />
-                            <span>Concluir Trámite</span>
-                          </button>
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              {/* BOTÓN INICIAR ATENCIÓN */}
+                              {!isInAttention ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartAttention(app.id)}
+                                  className="px-5 py-2.5 rounded-lg text-[10.5px] font-black uppercase tracking-wider shadow-lg flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500 cursor-pointer transition shadow-emerald-950/40"
+                                  title="Haga clic para iniciar la atención presencial de este ciudadano"
+                                >
+                                  <Play className="w-4 h-4 fill-white" />
+                                  <span>Iniciar Atención</span>
+                                </button>
+                              ) : (
+                                <div className="flex items-center gap-1.5 bg-emerald-950/90 border border-emerald-600/80 px-4 py-2 rounded-lg text-emerald-300 text-[10.5px] font-black uppercase tracking-wider shadow-inner">
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                                  <span>Atención en Curso</span>
+                                </div>
+                              )}
+
+                              {/* Concluir trámite */}
+                              <button
+                                type="button"
+                                onClick={() => handleCompleteAppointment(app.id)}
+                                className="px-5 py-2.5 rounded-lg text-[10.5px] font-black uppercase tracking-wider shadow flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-700 cursor-pointer transition"
+                                title="Concluir el trámite y liberar el cubículo"
+                              >
+                                <UserCheck className="w-4 h-4" />
+                                <span>Concluir Trámite</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* 2. PRÓXIMOS EN COLA DE ESPERA: TAMAÑO MÁS CHICO Y EN LISTA ABAJO */}
+                    {listApps.length > 0 && (
+                      <div className="space-y-3.5 pt-4">
+                        <div className="flex items-center gap-2 border-b border-slate-900 pb-3">
+                          <Users className="w-4 h-4 text-indigo-400" />
+                          <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">
+                            Próximos en Cola de Espera ({listApps.length})
+                          </span>
+                        </div>
+
+                        <div className="space-y-3">
+                          {listApps.map(app => {
+                            const name = getExtranjeriaCitizenName(app);
+                            const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
+                            const meta = appMetadata[app.id];
+                            const isPaidInCaja = meta?.estadoTicket === 'pagado_en_caja';
+
+                            return (
+                              <div 
+                                key={`cubiculo-row-compact-${app.id}`}
+                                className="bg-slate-900/40 hover:bg-slate-900/70 border border-slate-850 rounded-xl p-4 transition duration-250 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm"
+                              >
+                                <div className="flex items-start gap-3 min-w-0 flex-1">
+                                  {/* Small Badge */}
+                                  <div className="w-9 h-9 rounded-lg bg-slate-950 border border-slate-850 flex items-center justify-center shrink-0">
+                                    <span className="text-[9.5px] font-black font-mono text-amber-500">
+                                      E-{app.id.slice(-3).toUpperCase()}
+                                    </span>
+                                  </div>
+                                  
+                                  <div className="min-w-0 text-left space-y-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <h6 className="text-xs font-black text-slate-200 uppercase leading-tight truncate">
+                                        {name}
+                                      </h6>
+                                      {isPaidInCaja ? (
+                                        <span className="text-[8px] bg-indigo-950/80 border border-indigo-800/40 text-indigo-300 font-black px-2 py-0.2 rounded uppercase">
+                                          Enviado a Caja
+                                        </span>
+                                      ) : (
+                                        <span className="text-[8px] bg-amber-950/80 border border-amber-800/40 text-amber-300 font-black px-2 py-0.2 rounded uppercase">
+                                          En Espera
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-[10px] text-slate-450 font-bold block truncate leading-none">
+                                      Nac: <span className="text-slate-350">{app.datosPersonales?.nacionalidad || 'N/D'}</span> | Pasaporte: <span className="text-slate-350">{passport}</span> | Tx: <span className="text-slate-350 font-mono">{app.codigoTransaccion}</span>
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {/* Compact Actions */}
+                                <div className="flex flex-wrap items-center gap-2 shrink-0 md:self-center">
+                                  {/* Llamar a pantalla */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRecallCitizen(app.id)}
+                                    className="p-2 bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white rounded-lg transition cursor-pointer"
+                                    title="Llamar a Pantalla 📺"
+                                  >
+                                    <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                                  </button>
+
+                                  {/* Iniciar atención */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartAttention(app.id)}
+                                    className="px-3.5 py-1.5 bg-emerald-600/90 hover:bg-emerald-500 hover:text-white text-white rounded-lg text-[9.5px] font-black uppercase tracking-wider transition cursor-pointer flex items-center gap-1 shadow-sm"
+                                    title="Iniciar Atención"
+                                  >
+                                    <Play className="w-3 h-3 fill-white" />
+                                    <span>Iniciar</span>
+                                  </button>
+
+                                  {/* Concluir trámite */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCompleteAppointment(app.id)}
+                                    className="px-3.5 py-1.5 bg-indigo-600/90 hover:bg-indigo-700 hover:text-white text-white rounded-lg text-[9.5px] font-black uppercase tracking-wider transition cursor-pointer flex items-center gap-1 shadow-sm"
+                                    title="Concluir Trámite"
+                                  >
+                                    <UserCheck className="w-3 h-3" />
+                                    <span>Concluir</span>
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    )}
+                  </div>
+                );
+              })()
             )}
+
+            {/* SECCIÓN: HISTORIAL DE ATENDIDOS HOY EN ESTE CUBÍCULO (EXCLUSIVAMENTE HOY) */}
+            <div className="pt-5 border-t border-slate-900 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="space-y-0.5">
+                  <h5 className="text-xs font-black uppercase tracking-wider text-slate-200 flex items-center gap-2">
+                    <UserCheck className="w-4 h-4 text-emerald-400" />
+                    <span>Ciudadanos Atendidos Hoy en este Cubículo</span>
+                    <span className="bg-emerald-950/80 border border-emerald-800 text-emerald-300 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold">
+                      {cubiculoCompletedTodayApps.length}
+                    </span>
+                  </h5>
+                  <p className="text-[10px] text-slate-450 font-semibold">
+                    Solo muestra los trámites concluidos en esta estación hoy ({todayStr}). Las citas de días anteriores no se muestran aquí.
+                  </p>
+                </div>
+              </div>
+
+              {cubiculoCompletedTodayApps.length === 0 ? (
+                <div className="bg-slate-900/40 border border-slate-850 border-dashed rounded-xl p-4 text-center text-slate-500 text-[11px] italic">
+                  Aún no se han concluido trámites hoy en esta estación.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                  {cubiculoCompletedTodayApps.map(app => {
+                    const name = getExtranjeriaCitizenName(app);
+                    const appCode = app.id.slice(-4).toUpperCase();
+                    const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+                    const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
+                    const timeOnly = meta?.timestampCompletado ? meta.timestampCompletado.split(' ').pop() : '';
+
+                    return (
+                      <div
+                        key={`cubiculo-completed-${app.id}`}
+                        className="bg-slate-900/60 border border-slate-850 hover:border-slate-800 rounded-lg p-3 flex items-center justify-between gap-3 text-xs transition"
+                      >
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono font-bold text-indigo-400 bg-indigo-950/80 border border-indigo-900/80 px-2 py-0.5 rounded">
+                              TURNO: E-{appCode}
+                            </span>
+                            <h6 className="text-[11.5px] font-black text-slate-200 uppercase truncate">
+                              {name}
+                            </h6>
+                          </div>
+                          <p className="text-[10px] text-slate-400 font-medium truncate">
+                            Pasaporte: <span className="text-slate-300 font-mono">{passport}</span> | Trámite: <span className="text-slate-300">{app.subTramite || app.tramite || 'Atención Extranjería'}</span>
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0 space-y-0.5">
+                          <span className="text-[8.5px] bg-emerald-950 border border-emerald-800 text-emerald-400 font-black px-2 py-0.5 rounded uppercase block w-fit ml-auto">
+                            ✓ Concluido Hoy
+                          </span>
+                          {timeOnly && (
+                            <span className="text-[9px] font-mono font-semibold text-slate-400 block">
+                              Hora: {timeOnly}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -5493,7 +7362,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         let featuredBooth: any = null;
 
         // 1. Verificar si hay un evento de llamado activo emitido recientemente
-        if (lastCallEvent && (Date.now() - lastCallEvent.timestamp < 90000)) {
+        if (lastCallEvent && (Math.abs(Date.now() - lastCallEvent.timestamp) < 300000)) {
           const matchingApp = appointments.find(a => a.id === lastCallEvent.appId);
           const meta = matchingApp ? appMetadata[matchingApp.id] : null;
           // Si el ciudadano ya pasó a "en_atencion" o "realizada", el llamado se retira de inmediato
@@ -5502,19 +7371,6 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
             featuredBooth = booths.find(b => b.id === (meta?.assignedCubiculo || lastCallEvent.boothId));
           }
         }
-
-        const formattedDay = liveTime.toLocaleDateString('es-PA', { weekday: 'long' });
-        const formattedDate = liveTime.toLocaleDateString('es-PA', {
-          day: 'numeric',
-          month: 'long',
-          year: 'numeric'
-        });
-        const formattedTime = liveTime.toLocaleTimeString('es-PA', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: true
-        });
 
         // Helper to format clean, readable ticket code for waiting room screen
         const getDisplayTurnCode = (app: any) => {
@@ -5582,14 +7438,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
    
                 {/* Real-time Clock Info Panel */}
                 <div className="flex flex-wrap items-center justify-center lg:justify-end gap-3 w-full lg:w-auto">
-                  <div className="bg-slate-900 border-2 border-slate-800 rounded-2xl px-5 py-3 text-center lg:text-right shrink-0 min-w-[220px] shadow-lg font-sans">
-                    <div className="text-2xl sm:text-3xl font-black text-amber-400 font-mono tracking-widest uppercase leading-none mb-1">
-                      {formattedTime}
-                    </div>
-                    <div className="text-xs sm:text-sm font-black text-slate-200 uppercase">
-                      <span className="text-amber-500 font-black">{formattedDay}</span>, {formattedDate}
-                    </div>
-                  </div>
+                  <TurnScreenClock />
    
                   <div className="flex items-center gap-2">
                     {/* Sound Status Indicator for Pantalla */}
@@ -5707,12 +7556,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 // Find active appointments for this booth (not completed/realizada)
                 const assignedApps = appointments.filter(app => {
                   const meta = appMetadata[app.id];
-                  return meta && meta.assignedCubiculo === b.id && meta.estadoTicket !== 'realizada';
+                  return app.fecha === todayStr && meta && meta.assignedCubiculo === b.id && meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada';
                 });
 
-                // Current serving
-                const activeApp = assignedApps[0]; 
-                const queueRemaining = assignedApps.slice(1);
+                // Current serving: Prioritize the one in 'en_atencion' state (green display) so newly assigned tickets do not override active attention
+                const activeApp = assignedApps.find(app => appMetadata[app.id]?.estadoTicket === 'en_atencion') || assignedApps[0]; 
+                const queueRemaining = activeApp ? assignedApps.filter(app => app.id !== activeApp.id) : [];
 
                 // Dynamic name sizing for big view
                 const citizenName = activeApp ? getExtranjeriaCitizenName(activeApp) : '';
@@ -5744,7 +7593,9 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                         ? (appMetadata[activeApp.id]?.estadoTicket === 'en_atencion'
                             ? 'border-emerald-500/80 border-3 shadow-2xl shadow-emerald-950/30 bg-gradient-to-b from-slate-900 via-slate-900/95 to-emerald-950/25'
                             : 'border-amber-400 border-3 shadow-2xl shadow-amber-500/20 bg-gradient-to-b from-slate-900 via-slate-900/95 to-amber-950/30 scale-[1.01]')
-                        : 'border-slate-800/90 shadow-lg shadow-black/50'
+                        : b.receso
+                          ? 'border-amber-600/45 shadow-lg shadow-amber-950/20 bg-gradient-to-b from-slate-900 via-slate-900/95 to-amber-950/15'
+                          : 'border-slate-800/90 shadow-lg shadow-black/50'
                     }`}
                   >
                     {/* Top Header of booth */}
@@ -5754,7 +7605,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           {b.name}
                         </span>
                         <div className="flex items-center gap-2">
-                          {activeApp && (
+                          {activeApp ? (
                             appMetadata[activeApp.id]?.estadoTicket === 'en_atencion' ? (
                               <span className={`bg-emerald-950 text-emerald-300 border border-emerald-500/50 rounded-md font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm ${isFullscreen ? 'text-sm px-3.5 py-1.5' : 'text-xs px-2.5 py-1'}`}>
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
@@ -5765,13 +7616,19 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                                 LLAMANDO
                               </span>
                             )
-                          )}
+                          ) : b.receso ? (
+                            <span className={`bg-amber-950/80 text-amber-400 border border-amber-500/40 rounded-md font-black tracking-wider uppercase shadow-sm animate-pulse ${isFullscreen ? 'text-sm px-3.5 py-1.5' : 'text-xs px-2.5 py-1'}`}>
+                              RECESO ⏸
+                            </span>
+                          ) : null}
                           <span className={`rounded-full ${
                             isFullscreen ? 'w-4 h-4' : 'w-3.5 h-3.5'
                           } ${
-                            activeApp 
-                              ? (appMetadata[activeApp.id]?.estadoTicket === 'en_atencion' ? 'bg-emerald-400' : 'bg-amber-400 animate-ping')
-                              : 'bg-emerald-500'
+                            b.receso
+                              ? 'bg-amber-500 animate-pulse'
+                              : activeApp 
+                                ? (appMetadata[activeApp.id]?.estadoTicket === 'en_atencion' ? 'bg-emerald-400' : 'bg-amber-400 animate-ping')
+                                : 'bg-emerald-500'
                           }`} />
                         </div>
                       </div>
@@ -5816,21 +7673,43 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <span className={`font-black uppercase tracking-wider block bg-emerald-950/60 border border-emerald-500/30 rounded-md mx-auto w-fit ${
-                            isFullscreen ? 'text-sm sm:text-base py-1.5 px-4' : 'text-xs sm:text-sm py-1 px-3'
-                          }`}>
-                            CUBÍCULO DISPONIBLE
-                          </span>
-                          <div className={`font-mono font-black text-slate-700 tracking-widest select-none py-1 ${
-                            isFullscreen ? 'text-6xl sm:text-7xl lg:text-8xl xl:text-[6.5rem]' : 'text-4xl sm:text-5xl lg:text-6xl'
-                          }`}>
-                            ----
-                          </div>
-                          <p className={`text-slate-450 font-extrabold uppercase mt-1 leading-none ${
-                            isFullscreen ? 'text-sm sm:text-base tracking-widest' : 'text-xs sm:text-sm'
-                          }`}>
-                            Esperando Ciudadano
-                          </p>
+                          {b.receso ? (
+                            <>
+                              <span className={`font-black uppercase tracking-wider block bg-amber-950/80 border border-amber-500/40 text-amber-400 rounded-md mx-auto w-fit animate-pulse ${
+                                isFullscreen ? 'text-sm sm:text-base py-1.5 px-4' : 'text-xs sm:text-sm py-1 px-3'
+                              }`}>
+                                CUBÍCULO EN RECESO ⏸
+                              </span>
+                              <div className={`font-mono font-black text-amber-950/40 tracking-widest select-none py-1 ${
+                                isFullscreen ? 'text-6xl sm:text-7xl lg:text-8xl xl:text-[6.5rem]' : 'text-4xl sm:text-5xl lg:text-6xl'
+                              }`}>
+                                ----
+                              </div>
+                              <p className={`text-amber-500/80 font-extrabold uppercase mt-1 leading-none ${
+                                isFullscreen ? 'text-sm sm:text-base tracking-widest' : 'text-xs sm:text-sm'
+                              }`}>
+                                En Descanso Temporal
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <span className={`font-black uppercase tracking-wider block bg-emerald-950/60 border border-emerald-500/30 text-emerald-450 rounded-md mx-auto w-fit ${
+                                isFullscreen ? 'text-sm sm:text-base py-1.5 px-4' : 'text-xs sm:text-sm py-1 px-3'
+                              }`}>
+                                CUBÍCULO DISPONIBLE
+                              </span>
+                              <div className={`font-mono font-black text-slate-700 tracking-widest select-none py-1 ${
+                                isFullscreen ? 'text-6xl sm:text-7xl lg:text-8xl xl:text-[6.5rem]' : 'text-4xl sm:text-5xl lg:text-6xl'
+                              }`}>
+                                ----
+                              </div>
+                              <p className={`text-slate-450 font-extrabold uppercase mt-1 leading-none ${
+                                isFullscreen ? 'text-sm sm:text-base tracking-widest' : 'text-xs sm:text-sm'
+                              }`}>
+                                Esperando Ciudadano
+                              </p>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
@@ -5899,6 +7778,17 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 </div>
               </div>
             )}
+
+            {/* Cintillo Informativo de Turnos en la Parte Inferior (Cintillo de Agendamiento) */}
+            <div className="w-full bg-slate-900/90 border-2 border-amber-500/40 p-3.5 sm:p-4 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center justify-center gap-3 mt-2 shrink-0 backdrop-blur-sm">
+              <span className="flex-shrink-0 inline-flex items-center gap-1.5 bg-amber-500 text-slate-950 text-xs sm:text-sm font-black uppercase px-3 py-1.5 rounded-lg shadow-md animate-pulse">
+                <Globe className="w-4 h-4 animate-spin-slow" />
+                <span>NUEVA CITA ONLINE</span>
+              </span>
+              <p className="text-xs sm:text-sm lg:text-base font-black text-slate-100 uppercase tracking-wide text-center leading-normal">
+                Agende su nueva cita ingresando aquí: <span className="text-amber-300 underline select-all font-mono font-black ml-1 tracking-wider bg-slate-950 px-3.5 py-1.5 rounded-lg border border-slate-800/80">agendate.te.gob.pa/citas/extranjeria/ext_primera_vez</span>
+              </p>
+            </div>
           </div>
         );
       })()}

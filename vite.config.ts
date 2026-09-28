@@ -7,7 +7,7 @@ export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'import.meta.env.VITE_APP_VERSION': JSON.stringify("5.06 test")
+      'import.meta.env.VITE_APP_VERSION': JSON.stringify("5.15.2")
     },
     resolve: {
       alias: {

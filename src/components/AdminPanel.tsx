@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useDeferredValue } from 'react';
 import { jsPDF } from 'jspdf';
 import { 
   Shield, 
@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { Cita, DatosPersonales, ServicioCategoriaId, TipoIdentificacion, Sucursal, CategoriaServicio, SubServicio, ExtranjeriaRecord, AdminRole, AdminUser, OFFICES_CONFIG } from '../types';
 import { SUCURSALES_TE, SERVICIOS_TRIBUNAL, saveTramiteMutation, saveSucursalMutation } from '../data';
+import { resolveCitizenName } from '../utils/citizenNameResolver';
 import ExtranjeriaController from './ExtranjeriaController';
 import TardiaController from './TardiaController';
 import AdminCmsEditor from './AdminCmsEditor';
@@ -98,6 +99,14 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
 
   // Selected item to edit details
   const [editingCita, setEditingCita] = useState<Cita | null>(null);
+  
+  const todayStr = useMemo(() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }, []);
   
   // Custom states for editing
   const [editFecha, setEditFecha] = useState('');
@@ -1039,8 +1048,12 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
       );
     }
     if (currentRole.startsWith('extranjeria')) {
-      return cleanCitas.filter(cita => 
-        cita && (
+      return cleanCitas.filter(cita => {
+        if (!cita) return false;
+        // Si ya pasó la fecha de la cita (es anterior a hoy), no debe aparecer en el listado ni en el conteo
+        if (cita.fecha && cita.fecha < todayStr) return false;
+        
+        return (
           cita.servicioCategoria === 'extranjeria' || 
           cita.subServicioId?.includes('extranj') || 
           cita.subServicioId?.startsWith('ext_') ||
@@ -1048,8 +1061,8 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
           String(cita.id || '').includes('CSV') ||
           String(cita.codigoTransaccion || '').startsWith('EXT-') ||
           String(cita.creadoPor || '').toLowerCase().includes('csv')
-        )
-      );
+        );
+      });
     }
     if (currentRole.startsWith('pasado_edad')) {
       return cleanCitas.filter(cita => cita && cita.subServicioId === 'ced_pasados_edad');
@@ -1275,9 +1288,22 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
   }, [roleFilteredCitas]);
 
   // Filtering filter logic
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const filteredCitas = useMemo(() => {
+    const q = deferredSearchQuery.trim().toLowerCase();
     return roleFilteredCitas.filter(cita => {
-      // Search
+      // Category filter first
+      if (filterCategoria !== 'Todos' && cita.servicioCategoria !== filterCategoria) return false;
+
+      // Sucursal filter
+      if (filterSucursal !== 'Todos' && cita.sucursalId !== filterSucursal) return false;
+
+      // Status filter
+      if (filterEstado !== 'Todos' && cita.estado !== filterEstado) return false;
+
+      // Search match
+      if (!q) return true;
+
       let extraText = '';
       const dp = cita.datosPersonales || {};
       if (cita.servicioCategoria === 'extranjeria') {
@@ -1286,20 +1312,9 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
         extraText = ` ${dp.nombreCompleto || ''}`;
       }
       const text = `${cita.codigoTransaccion} ${dp.identificacion || ''} ${dp.correo || ''} ${dp.telefono || ''}${extraText}`.toLowerCase();
-      const matchesSearch = text.includes(searchQuery.toLowerCase());
-
-      // Category filter
-      const matchesCategory = filterCategoria === 'Todos' || cita.servicioCategoria === filterCategoria;
-
-      // Sucursal filter
-      const matchesSucursal = filterSucursal === 'Todos' || cita.sucursalId === filterSucursal;
-
-      // Status filter
-      const matchesEstado = filterEstado === 'Todos' || cita.estado === filterEstado;
-
-      return matchesSearch && matchesCategory && matchesSucursal && matchesEstado;
+      return text.includes(q);
     });
-  }, [roleFilteredCitas, searchQuery, filterCategoria, filterSucursal, filterEstado, mutableSucursales, mutableServicios]);
+  }, [roleFilteredCitas, deferredSearchQuery, filterCategoria, filterSucursal, filterEstado, mutableSucursales, mutableServicios]);
 
   // Reset scrolling to top when filters are updated
   useEffect(() => {
@@ -1307,7 +1322,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     if (appointmentsTableContainerRef.current) {
       appointmentsTableContainerRef.current.scrollTop = 0;
     }
-  }, [searchQuery, filterCategoria, filterSucursal, filterEstado]);
+  }, [deferredSearchQuery, filterCategoria, filterSucursal, filterEstado]);
 
   // Virtualization variables
   const appointmentsContainerHeight = appointmentsTableContainerRef.current ? appointmentsTableContainerRef.current.clientHeight : 500;
@@ -2954,24 +2969,24 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                                   {cit.servicioCategoria === 'extranjeria' ? (
                                     <>
                                       <span className="text-[11px] font-extrabold text-blue-300 leading-tight">
-                                        {[cit.datosPersonales?.primerNombre, cit.datosPersonales?.segundoNombre, cit.datosPersonales?.primerApellido, cit.datosPersonales?.segundoApellido].filter(Boolean).join(' ')}
+                                        {resolveCitizenName(cit)}
                                       </span>
                                       <span className="text-[10px] text-slate-400 font-mono tracking-tight leading-tight mt-0.5">
-                                        Pasaporte: <strong className="text-amber-200">{cit.datosPersonales?.pasaporte}</strong> • {cit.datosPersonales?.nacionalidad}
+                                        Pasaporte: <strong className="text-amber-200">{cit.datosPersonales?.pasaporte || cit.datosPersonales?.pasaporte_numero || cit.identificacion || 'N/D'}</strong> • {cit.datosPersonales?.nacionalidad || 'N/D'}
                                       </span>
                                       <span className="text-[9px] text-amber-500 font-bold leading-normal mt-1 bg-amber-955/30 border border-amber-900/30 px-1.5 py-0.5 rounded w-max">
-                                        Res: {cit.datosPersonales?.numeroResolucion} ({cit.datosPersonales?.fechaResolucion})
+                                        Res: {cit.datosPersonales?.numeroResolucion || cit.datosPersonales?.numero_resolucion || cit.resolucion || 'N/D'} ({cit.datosPersonales?.fechaResolucion || cit.datosPersonales?.fecha_resolucion || 'N/D'})
                                       </span>
                                     </>
                                   ) : (
                                     <>
-                                      {cit.datosPersonales?.nombreCompleto && (
+                                      {(cit.datosPersonales?.nombreCompleto || cit.datosPersonales?.nombre_completo || cit.nombre) && (
                                         <span className="text-[11px] font-extrabold text-slate-200 leading-tight">
-                                          {cit.datosPersonales?.nombreCompleto.toUpperCase()}
+                                          {resolveCitizenName(cit).toUpperCase()}
                                         </span>
                                       )}
                                       <span className="font-mono text-[10px] font-bold text-slate-400 mt-0.5">
-                                        {(cit.datosPersonales?.tipoIdentificacion || 'Cedula') === 'Cedula' ? 'Cédula' : cit.datosPersonales?.tipoIdentificacion === 'CedulaJuvenil' ? 'Céd. Juvenil' : cit.datosPersonales?.tipoIdentificacion === 'Extranjero' ? 'Céd. Ext' : 'Pasaporte'}: <span className="text-blue-300">{cit.datosPersonales?.identificacion || 'N/D'}</span>
+                                        {(cit.datosPersonales?.tipoIdentificacion || 'Cedula') === 'Cedula' ? 'Cédula' : cit.datosPersonales?.tipoIdentificacion === 'CedulaJuvenil' ? 'Céd. Juvenil' : cit.datosPersonales?.tipoIdentificacion === 'Extranjero' ? 'Céd. Ext' : 'Pasaporte'}: <span className="text-blue-300">{cit.datosPersonales?.identificacion || cit.identificacion || 'N/D'}</span>
                                       </span>
                                       <span className="text-[10px] text-slate-450 leading-tight">
                                         Tel: {cit.datosPersonales?.telefono || 'N/D'}

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useDeferredValue } from 'react';
 import { 
   Shield, 
   Download, 
@@ -806,45 +806,49 @@ Su número de seguimiento es: ${trackNum}`;
   };
 
   // Dynamic filter lists for citations in Supervisor view based on search/filters
-  const filteredTardiaCitas = useMemo(() => {
-    return allTardiaCitas.filter(c => {
-      // Search text match
-      const query = searchQuery.trim().toLowerCase();
-      const citizen = c.datosPersonales;
-      const matchSearch = !query || 
-        (citizen?.nombreCompleto || '').toLowerCase().includes(query) ||
-        (citizen?.identificacion || '').toLowerCase().includes(query) ||
-        (citizen?.correo || '').toLowerCase().includes(query) ||
-        (citizen?.telefono || '').toLowerCase().includes(query) ||
-        c.codigoTransaccion.toLowerCase().includes(query);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const deferredSearchExpQuery = useDeferredValue(searchExpQuery);
 
-      // Status match
+  const filteredTardiaCitas = useMemo(() => {
+    const query = deferredSearchQuery.trim().toLowerCase();
+    return allTardiaCitas.filter(c => {
+      // Status match first
       const matchStatus = statusFilter === 'todos' || 
         (statusFilter === 'realizada' && c.estado === 'realizada') ||
         (statusFilter === 'confirmada' && (c.estado === 'confirmada' || c.estado === 'asistire')) ||
         (statusFilter === 'cancelada' && (c.estado === 'cancelada' || c.estado === 'no_asistire'));
 
-      return matchSearch && matchStatus;
+      if (!matchStatus) return false;
+      if (!query) return true;
+
+      // Search text match
+      const citizen = c.datosPersonales;
+      return (
+        (citizen?.nombreCompleto || '').toLowerCase().includes(query) ||
+        (citizen?.identificacion || '').toLowerCase().includes(query) ||
+        (citizen?.correo || '').toLowerCase().includes(query) ||
+        (citizen?.telefono || '').toLowerCase().includes(query) ||
+        c.codigoTransaccion.toLowerCase().includes(query)
+      );
     });
-  }, [allTardiaCitas, searchQuery, statusFilter]);
+  }, [allTardiaCitas, deferredSearchQuery, statusFilter]);
 
   // Filtered list of authorized trackings/expedientes
   const filteredHistoricalExp = useMemo(() => {
-    let result = historicalExp;
+    const query = deferredSearchExpQuery.trim().toLowerCase();
+    const lowerCatSelected = searchExpCategory !== 'Todas' ? searchExpCategory.toLowerCase() : '';
 
-    if (searchExpCategory !== 'Todas') {
-      result = result.filter(rec => {
+    return historicalExp.filter(rec => {
+      if (lowerCatSelected) {
         const cat = (rec.category || '').toLowerCase();
         const notes = (rec.notes || '').toLowerCase();
-        const lowerCatSelected = searchExpCategory.toLowerCase();
-        return cat === lowerCatSelected || notes.includes(lowerCatSelected);
-      });
-    }
+        if (cat !== lowerCatSelected && !notes.includes(lowerCatSelected)) {
+          return false;
+        }
+      }
 
-    const query = searchExpQuery.trim().toLowerCase();
-    if (!query) return result;
+      if (!query) return true;
 
-    return result.filter(rec => {
       const name = (rec.citizenName || '').toLowerCase();
       const number = (rec.number || '').toLowerCase();
       const id = (rec.id || '').toLowerCase();
@@ -852,6 +856,7 @@ Su número de seguimiento es: ${trackNum}`;
       const correo = (rec.correo || '').toLowerCase();
       const notes = (rec.notes || '').toLowerCase();
       const category = (rec.category || '').toLowerCase();
+
       return (
         name.includes(query) ||
         number.includes(query) ||
@@ -862,7 +867,7 @@ Su número de seguimiento es: ${trackNum}`;
         category.includes(query)
       );
     });
-  }, [historicalExp, searchExpQuery, searchExpCategory]);
+  }, [historicalExp, deferredSearchExpQuery, searchExpCategory]);
 
   // Filter helper for exact period of appointments based on date range
   const getCitasByDateRange = (startStr: string, endStr: string) => {

@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Volume2, VolumeX, Tv, UserCheck, Users, HelpCircle, ArrowRight, UserMinus, ShieldAlert, Clock, Copy, Check } from "lucide-react";
 import { getOfficeSchedule } from "../utils/scheduleStorage";
 import { announceAndCall, stopAllAudio } from "../utils/audio";
-import { getServerTime } from "../utils/serverTime";
+import { getServerTime, getServerTimestamp } from "../utils/serverTime";
 
 interface MainScreenProps {
   tickets: Ticket[];
@@ -58,7 +58,12 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     }
   }, [initialChannel]);
   const [layoutFocus, setLayoutFocus] = useState<"both" | "cubicles" | "queue" >("both");
-  const [isImmersiveFullscreen, setIsImmersiveFullscreen] = useState(false);
+  const [isImmersiveFullscreen, setIsImmersiveFullscreen] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("immersive_fullscreen_v1") === "true";
+    }
+    return false;
+  });
   const [copiedTvUrl, setCopiedTvUrl] = useState(false);
 
   const handleCopyTvUrl = (e?: React.MouseEvent) => {
@@ -94,6 +99,15 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     eventSource.addEventListener("tickets_updated", () => {
       onRefresh(); // Trigger instant refresh on push event immediately
     });
+    eventSource.addEventListener("system-reload", (e: any) => {
+      try {
+        const data = JSON.parse(e.data || "{}");
+        console.log("[SSE] Recibida orden de recarga del sistema en TV:", data);
+        import("../utils/autoUpdate").then(m => m.forceClientReload(`SSE: ${data.reason || "Manual reset"}`));
+      } catch {
+        import("../utils/autoUpdate").then(m => m.forceClientReload("SSE: Recarga de sistema"));
+      }
+    });
 
     // Fallback polling (backed off to 2000ms for high-speed responsiveness)
     const interval = setInterval(() => {
@@ -120,6 +134,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       const isFs = !!document.fullscreenElement;
       if (!isFs) {
         setIsImmersiveFullscreen(false);
+        localStorage.setItem("immersive_fullscreen_v1", "false");
       }
     };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -128,9 +143,45 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     };
   }, []);
 
+  // Persist and restore immersive fullscreen safely
+  useEffect(() => {
+    const savedFs = localStorage.getItem("immersive_fullscreen_v1") === "true";
+    if (savedFs) {
+      setIsImmersiveFullscreen(true);
+      
+      const attemptFullscreen = () => {
+        const element = document.getElementById("main-public-screen") || document.documentElement;
+        if (element && element.requestFullscreen) {
+          element.requestFullscreen().catch(() => {});
+        }
+      };
+
+      // Try immediately (usually blocked by browser unless a gesture occurred)
+      attemptFullscreen();
+
+      // Register temporary global handlers to upgrade to native fullscreen on first interaction
+      const handleUserInteraction = () => {
+        if (!document.fullscreenElement) {
+          attemptFullscreen();
+        }
+        document.removeEventListener("click", handleUserInteraction);
+        document.removeEventListener("keydown", handleUserInteraction);
+      };
+
+      document.addEventListener("click", handleUserInteraction);
+      document.addEventListener("keydown", handleUserInteraction);
+
+      return () => {
+        document.removeEventListener("click", handleUserInteraction);
+        document.removeEventListener("keydown", handleUserInteraction);
+      };
+    }
+  }, []);
+
   const toggleImmersiveFullscreen = () => {
     if (!isImmersiveFullscreen) {
       setIsImmersiveFullscreen(true);
+      localStorage.setItem("immersive_fullscreen_v1", "true");
       const element = document.getElementById("main-public-screen") || document.documentElement;
       if (element && element.requestFullscreen) {
         element.requestFullscreen().catch((err) => {
@@ -139,6 +190,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       }
     } else {
       setIsImmersiveFullscreen(false);
+      localStorage.setItem("immersive_fullscreen_v1", "false");
       if (document.fullscreenElement) {
         document.exitFullscreen().catch((err) => {
           console.log("Error exiting browser fullscreen:", err);
@@ -150,6 +202,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
   const launchFullscreenForChannel = (channel: TicketPhase | "OR" | "OHV" | "RC_OTROS" | "general") => {
     setSelectedChannel(channel);
     setIsImmersiveFullscreen(true);
+    localStorage.setItem("immersive_fullscreen_v1", "true");
 
     setTimeout(() => {
       const element = document.getElementById("main-public-screen");
@@ -330,13 +383,6 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         const filtered = prev.filter(item => item.ticket.id !== displayedActiveCall.ticket.id);
         return [{ ...displayedActiveCall, timestamp: Date.now() }, ...filtered].slice(0, 8);
       });
-
-      // Auto-dismiss call alert banner after 8 seconds for a clean and snappy experience
-      const timer = setTimeout(() => {
-        setLatestCall(null);
-      }, 8000);
-
-      return () => clearTimeout(timer);
     }
   }, [displayedActiveCall]);
 
@@ -399,6 +445,50 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
   // Effective call to show prominently in large format on the screen (strictly validated for current channel)
   const primaryCallToDisplay = displayedActiveCall || validatedLatestCall || fallbackActiveCall;
+
+  // Automatic timeout to clear the active call overlay visually from the TV screen
+  const [showCallOverlay, setShowCallOverlay] = useState<boolean>(false);
+  const lastCallIdRef = useRef<string | null>(null);
+  const lastCalledAtRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (primaryCallToDisplay) {
+      const ticketId = primaryCallToDisplay.ticket.id;
+      const calledAt = primaryCallToDisplay.ticket.calledAt || 0;
+      
+      // If it is a new ticket or a newer call of the same ticket (recall)
+      if (lastCallIdRef.current !== ticketId || lastCalledAtRef.current !== calledAt) {
+        lastCallIdRef.current = ticketId;
+        lastCalledAtRef.current = calledAt;
+        setShowCallOverlay(true);
+      }
+    } else {
+      setShowCallOverlay(false);
+    }
+  }, [primaryCallToDisplay]);
+
+  // Set timeout of 8s (for 1 call) or 13s (for 2 calls) to automatically hide the overlay
+  useEffect(() => {
+    if (showCallOverlay) {
+      const duration = voiceCallRepeat === 1 ? 8000 : 13000;
+      const timer = setTimeout(() => {
+        setShowCallOverlay(false);
+      }, duration);
+      return () => clearTimeout(timer);
+    }
+  }, [showCallOverlay, primaryCallToDisplay, voiceCallRepeat]);
+
+  // Bulletproof live status check: if the currently displayed ticket is no longer in CALLING status in the live ecosystem (e.g. when agent clicks 'Iniciar Atención'), dismiss it immediately!
+  useEffect(() => {
+    if (primaryCallToDisplay) {
+      const liveTicket = ecosystemTickets.find(t => t.id === primaryCallToDisplay.ticket.id);
+      if (liveTicket && liveTicket.status !== TicketStatus.CALLING) {
+        setShowCallOverlay(false);
+        setLatestCall(null);
+        stopAllAudio();
+      }
+    }
+  }, [primaryCallToDisplay, ecosystemTickets]);
 
   // Audio announcement ref to keep track of the last announced ticket and calledAt
   const lastAnnouncedRef = useRef<{ id: string; calledAt: number } | null>(null);
@@ -1254,7 +1344,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
         {/* --- HERO: FLASHING CALL OUT SECTION --- */}
         <div id="hero-callout-screen" className="min-h-[220px] relative">
           <AnimatePresence mode="wait">
-            {primaryCallToDisplay ? (
+            {primaryCallToDisplay && showCallOverlay ? (
               <motion.div
                 key={primaryCallToDisplay.ticket.id + "-" + (primaryCallToDisplay.ticket.calledAt || 0)}
                 initial={{ opacity: 0, scale: 0.96 }}
@@ -1364,6 +1454,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                         onClearActiveCall();
                       }
                       setLatestCall(null);
+                      setShowCallOverlay(false);
                     }}
                     className="absolute top-4 right-4 text-sky-200 hover:text-white p-2 text-xs rounded-full transition-colors cursor-pointer bg-white/10 border border-white/10 hover:bg-white/20"
                     title="Ocultar llamado"
@@ -1515,37 +1606,44 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                            : `(FILTRADOS POR ${PHASES_CONFIG[selectedChannel as TicketPhase].shortName.toUpperCase()})` 
                      : ""}
                   </span>
-                 <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
-                  isTriadaChannel ? "text-slate-500" : "text-sky-300/60"
-                }`}>{filteredCubicles.length} EN SERVICIO</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-mono tracking-wider font-bold uppercase px-2.5 py-0.5 rounded-full ${
+                      isTriadaChannel ? "bg-emerald-100 text-emerald-800" : "bg-emerald-950/70 text-emerald-300 border border-emerald-500/40"
+                    }`}>
+                      {filteredCubicles.filter(c => c.status === "ONLINE_AVAILABLE" && Boolean(c.agentName && c.agentName.trim() !== "" && !c.agentName.includes("Sin Agente") && !c.agentName.startsWith("Agente M"))).length} DISPONIBLES
+                    </span>
+                    <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
+                      isTriadaChannel ? "text-slate-500" : "text-sky-300/60"
+                    }`}>
+                      DE {filteredCubicles.length} MÓDULOS
+                    </span>
+                  </div>
               </div>
 
               {/* Responsive grid matching the 2-column layout from Photo when view is maximized */}
               <div className={`grid grid-cols-1 ${layoutFocus === "cubicles" ? "md:grid-cols-2" : "grid-cols-2"} gap-4.5 max-h-[490px] overflow-y-auto pr-1.5 scrollbar-thin scrollbar-thumb-blue-900/50`}>
                 {filteredCubicles.map((cubicle) => {
                   const currentTicket = ecosystemTickets.find(t => t.id === cubicle.currentTicketId);
-                  const isFree = cubicle.status === "ONLINE_AVAILABLE";
-                  const isBreak = cubicle.status === "BREAK";
-                  const isAttending = cubicle.status === "ATTENDING";
+                  const hasAgent = Boolean(cubicle.agentName && cubicle.agentName.trim() !== "" && !cubicle.agentName.includes("Sin Agente") && !cubicle.agentName.startsWith("Agente M"));
+                  const isFree = cubicle.status === "ONLINE_AVAILABLE" && hasAgent;
+                  const isAttending = cubicle.status === "ATTENDING" && hasAgent;
+                  const isUnavailable = !isFree && !isAttending;
 
                   // Extract desk digit (e.g. "Módulo 24" -> "24") precisely matching numbers in Photo
                   const cajaNumber = cubicle.name.replace(/\D/g, '') || cubicle.name;
 
                   // Text to display for Line 1: prioritized name, or code, or fallback
                   let mainText = "DISPONIBLE";
-                  let textStyle = isTriadaChannel ? "text-slate-500 font-semibold" : "text-[#00d0ff]/70 font-semibold";
+                  let textStyle = isTriadaChannel ? "text-emerald-700 font-extrabold" : "text-[#00ffcc] font-extrabold";
 
                   if (isAttending && currentTicket) {
                     mainText = currentTicket.name && currentTicket.name.trim() !== ""
                       ? currentTicket.name
                       : currentTicket.numberCode;
                     textStyle = isTriadaChannel ? "text-slate-900 font-black" : "text-white font-black";
-                  } else if (isBreak) {
-                    mainText = "EN RECESO";
-                    textStyle = "text-amber-500 font-bold";
-                  } else if (cubicle.status === "OFFLINE") {
-                    mainText = "MÓDULO INACTIVO";
-                    textStyle = "text-slate-400 font-semibold opacity-60";
+                  } else if (isUnavailable) {
+                    mainText = "NO DISPONIBLE";
+                    textStyle = isTriadaChannel ? "text-slate-400 font-bold" : "text-slate-400/80 font-bold";
                   }
 
                   return (
@@ -1553,16 +1651,16 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       key={cubicle.id}
                       className={`relative p-5 rounded-[22px] flex flex-col justify-center min-h-[92px] transition-all duration-300 ${
                         isTriadaChannel
-                          ? `bg-white border-2 border-slate-200 border-b-[5px] border-r-[4px] border-b-[#003087] border-r-[#0047ab] shadow-[0_4px_12px_rgba(0,0,0,0.06)] ${
-                              isAttending
-                                ? "scale-[1.01] ring-2 ring-[#003087]/30 bg-blue-50/40"
-                                : "opacity-95 hover:border-slate-300"
-                            }`
-                          : `bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9] shadow-[0_5px_15px_rgba(0,0,0,0.25)] ${
-                              isAttending 
-                                ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]" 
-                                : "opacity-95"
-                            }`
+                          ? isAttending
+                            ? "scale-[1.01] ring-2 ring-[#003087]/30 bg-blue-50/40 border-2 border-slate-200 border-b-[5px] border-r-[4px] border-b-[#003087] border-r-[#0047ab] shadow-[0_4px_12px_rgba(0,0,0,0.06)]"
+                            : isFree
+                              ? "bg-white border-2 border-emerald-300 border-b-[5px] border-r-[4px] border-b-emerald-600 border-r-emerald-700 shadow-[0_4px_12px_rgba(0,0,0,0.06)] ring-1 ring-emerald-400/20"
+                              : "bg-slate-50/80 border border-slate-200 border-b-[4px] border-r-[3px] border-b-slate-300 border-r-slate-300 opacity-60"
+                          : isAttending 
+                            ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9]" 
+                            : isFree
+                              ? "bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-emerald-500/30 border-b-[5px] border-r-[4px] border-b-emerald-400 border-r-cyan-400 shadow-[0_5px_15px_rgba(0,0,0,0.25)]"
+                              : "bg-[#021333]/80 border border-slate-800/60 border-b-[4px] border-r-[3px] border-b-slate-700 border-r-slate-800 opacity-55"
                       }`}
                     >
                       {/* Bouncing call highlight backdrop */}
@@ -1575,7 +1673,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       {/* Line 1: Accent chevron and Main Text */}
                       <div className="flex items-center w-full truncate">
                         <span className={`text-base md:text-lg mr-2 leading-none select-none font-sans ${
-                          isTriadaChannel ? "text-[#003087]" : "text-[#00d0ff]"
+                          isTriadaChannel ? (isUnavailable ? "text-slate-400" : isFree ? "text-emerald-600" : "text-[#003087]") : (isUnavailable ? "text-slate-500" : isFree ? "text-emerald-400" : "text-[#00d0ff]")
                         }`}>
                           ▶
                         </span>
@@ -1595,17 +1693,27 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
 
                         {/* Semantic indicators */}
                         {isFree && (
-                          <span className={`ml-2.5 text-[8.5px] uppercase font-mono tracking-widest font-bold animate-pulse ${
-                            isTriadaChannel ? "text-emerald-700" : "text-[#00d0ff]/65"
+                          <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-black flex items-center gap-1 ${
+                            isTriadaChannel ? "bg-emerald-100 text-emerald-800 border border-emerald-300" : "bg-emerald-950/80 text-emerald-300 border border-emerald-500/50 shadow-sm"
                           }`}>
-                            ★ LIBRE
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            DISPONIBLE
                           </span>
                         )}
-                        {isBreak && (
-                          <span className={`ml-2.5 text-[8.5px] uppercase font-mono tracking-widest font-bold ${
-                            isTriadaChannel ? "text-amber-700" : "text-amber-400/65"
+                        {isAttending && (
+                          <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-black flex items-center gap-1 ${
+                            isTriadaChannel ? "bg-blue-100 text-blue-900 border border-blue-300" : "bg-blue-950/80 text-blue-200 border border-blue-500/50 shadow-sm"
                           }`}>
-                            ★ REC
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
+                            EN ATENCIÓN
+                          </span>
+                        )}
+                        {isUnavailable && (
+                          <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-bold flex items-center gap-1 ${
+                            isTriadaChannel ? "bg-rose-50 text-rose-700 border border-rose-200" : "bg-rose-950/60 text-rose-300 border border-rose-500/40"
+                          }`}>
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                            NO DISPONIBLE
                           </span>
                         )}
                       </div>
@@ -1693,8 +1801,8 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                   {phaseTickets.length > 0 ? (
                                     <div className={`flex flex-wrap gap-1.5 ${layoutFocus === "queue" ? "max-h-[145px]" : "max-h-[85px]"} overflow-y-auto pt-1 content-start scrollbar-none`}>
                                       {phaseTickets.map(t => {
-                                        const secondsWaiting = Math.round((Date.now() - t.createdAt) / 1000);
-                                        const isOverdue = secondsWaiting > 60;
+                                        const secondsWaiting = Math.round((getServerTimestamp() - t.createdAt) / 1000);
+                                        const isOverdue = secondsWaiting > 600;
                                         return (
                                           <span
                                             key={t.id}
@@ -1839,7 +1947,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                 {ticket.numberCode}
                               </span>
                               <span className={`text-[9px] px-2 py-0.5 font-black uppercase text-center rounded ${styleConfig.color}`}>
-                                {styleConfig.prefix}
+                                {styleConfig.prefix} • {Math.max(0, Math.floor((getServerTimestamp() - ticket.createdAt) / 60000))} min
                               </span>
                             </div>
                           </div>
@@ -2022,49 +2130,58 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       <UserCheck className={`w-5 h-5 ${isTriadaChannel ? "text-[#003087]" : "text-[#00aaff]"}`} />
                       CAJAS DISPONIBLES
                     </span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-mono tracking-wider font-bold uppercase px-2.5 py-0.5 rounded-full ${
+                      isTriadaChannel ? "bg-emerald-100 text-emerald-800" : "bg-emerald-950/70 text-emerald-300 border border-emerald-500/40"
+                    }`}>
+                      {filteredCubicles.filter(c => c.status === "ONLINE_AVAILABLE" && Boolean(c.agentName && c.agentName.trim() !== "" && !c.agentName.includes("Sin Agente") && !c.agentName.startsWith("Agente M"))).length} DISPONIBLES
+                    </span>
                     <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
                       isTriadaChannel ? "text-slate-500" : "text-sky-300/60"
                     }`}>
-                      {filteredCubicles.length} ACTIVO
+                      DE {filteredCubicles.length} MÓDULOS
                     </span>
+                  </div>
                   </div>
 
                   <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 overflow-y-auto pr-1 flex-grow max-h-[75vh] scrollbar-thin scrollbar-thumb-blue-900/50">
                     {filteredCubicles.map((cubicle) => {
                       const currentTicket = ecosystemTickets.find(t => t.id === cubicle.currentTicketId);
-                      const isFree = cubicle.status === "ONLINE_AVAILABLE";
-                      const isBreak = cubicle.status === "BREAK";
-                      const isAttending = cubicle.status === "ATTENDING";
+                      const hasAgent = Boolean(cubicle.agentName && cubicle.agentName.trim() !== "" && !cubicle.agentName.includes("Sin Agente") && !cubicle.agentName.startsWith("Agente M"));
+                      const isFree = cubicle.status === "ONLINE_AVAILABLE" && hasAgent;
+                      const isAttending = cubicle.status === "ATTENDING" && hasAgent;
+                      const isUnavailable = !isFree && !isAttending;
                       const cajaNumber = cubicle.name.replace(/\D/g, '') || cubicle.name;
 
                       let mainText = "DISPONIBLE";
-                      let textStyle = "text-[#00d0ff]/70 font-semibold";
+                      let textStyle = "text-[#00ffcc] font-extrabold";
 
                       if (isAttending && currentTicket) {
                         mainText = currentTicket.name && currentTicket.name.trim() !== ""
                           ? currentTicket.name
                           : currentTicket.numberCode;
                         textStyle = "text-white font-black";
-                      } else if (isBreak) {
-                        mainText = "EN RECESO";
-                        textStyle = "text-amber-400 font-bold";
-                      } else if (cubicle.status === "OFFLINE") {
-                        mainText = "MÓDULO INACTIVO";
-                        textStyle = "text-slate-450 font-semibold opacity-40";
+                      } else if (isUnavailable) {
+                        mainText = "NO DISPONIBLE";
+                        textStyle = "text-slate-400/80 font-bold";
                       }
 
                       return (
                         <div
                           key={cubicle.id}
-                          className={`relative p-4 rounded-xl bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-blue-950/20 border-b-[4px] border-r-[3px] border-b-[#00b0ff] border-r-[#0081f9] flex flex-col justify-center min-h-[78px] shadow-[0_4px_10px_rgba(0,0,0,0.2)] ${
-                            isAttending ? "scale-[1.01] brightness-110 shadow-[0_6px_20px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]" : ""
+                          className={`relative p-4 rounded-xl border border-blue-950/20 border-b-[4px] border-r-[3px] border-b-[#00b0ff] border-r-[#0081f9] flex flex-col justify-center min-h-[78px] shadow-[0_4px_10px_rgba(0,0,0,0.2)] transition-all ${
+                            isAttending
+                              ? "scale-[1.01] brightness-110 shadow-[0_6px_20px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]"
+                              : isFree
+                                ? "bg-gradient-to-r from-[#031d4c] to-[#0c316e] border-b-emerald-400 border-r-cyan-400"
+                                : "bg-[#021333]/80 border-b-slate-700 border-r-slate-800 opacity-55"
                           }`}
                         >
                           {isAttending && (
                             <div className="absolute inset-0 bg-blue-400/5 animate-pulse rounded-xl" />
                           )}
                           <div className="flex items-center w-full truncate">
-                            <span className="text-[#00d0ff] text-xs mr-1.5 select-none">▶</span>
+                            <span className={`text-xs mr-1.5 select-none ${isUnavailable ? "text-slate-500" : isFree ? "text-emerald-400" : "text-[#00d0ff]"}`}>▶</span>
                             <span className={`uppercase font-sans tracking-wide text-xs leading-tight truncate ${textStyle}`}>
                               {mainText}
                             </span>
@@ -2076,13 +2193,21 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                               <span>{cajaNumber}</span>
                             </div>
                             {isFree && (
-                              <span className="ml-2 text-[8px] uppercase font-mono tracking-widest text-[#00d0ff]/65 font-bold animate-pulse">
-                                ★ LIBRE
+                              <span className="ml-2 px-2 py-0.5 rounded-full text-[8px] uppercase font-mono tracking-widest font-black bg-emerald-950/80 text-emerald-300 border border-emerald-500/50 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                DISPONIBLE
                               </span>
                             )}
-                            {isBreak && (
-                              <span className="ml-2 text-[8px] uppercase font-mono tracking-widest text-amber-400/65 font-bold">
-                                ★ REC
+                            {isAttending && (
+                              <span className="ml-2 px-2 py-0.5 rounded-full text-[8px] uppercase font-mono tracking-widest font-black bg-blue-950/80 text-blue-200 border border-blue-500/50 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
+                                ATENCIÓN
+                              </span>
+                            )}
+                            {isUnavailable && (
+                              <span className="ml-2 px-2 py-0.5 rounded-full text-[8px] uppercase font-mono tracking-widest font-bold bg-rose-950/60 text-rose-300 border border-rose-500/40 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                NO DISPONIBLE
                               </span>
                             )}
                           </div>
@@ -2222,35 +2347,40 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                   : `(FILTRADOS: ${PHASES_CONFIG[selectedChannel as TicketPhase]?.name?.toUpperCase() || "MONITOR"})`
                         }
                       </span>
-                      <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
-                        isTriadaChannel ? "text-slate-500" : "text-sky-300/60"
-                      }`}>
-                        {filteredCubicles.length} EN SERVICIO
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[11px] font-mono tracking-wider font-bold uppercase px-2.5 py-0.5 rounded-full ${
+                          isTriadaChannel ? "bg-emerald-100 text-emerald-800" : "bg-emerald-950/70 text-emerald-300 border border-emerald-500/40"
+                        }`}>
+                          {filteredCubicles.filter(c => c.status === "ONLINE_AVAILABLE" && Boolean(c.agentName && c.agentName.trim() !== "" && !c.agentName.includes("Sin Agente") && !c.agentName.startsWith("Agente M"))).length} DISPONIBLES
+                        </span>
+                        <span className={`text-xs font-mono tracking-wider font-bold uppercase ${
+                          isTriadaChannel ? "text-slate-500" : "text-sky-300/60"
+                        }`}>
+                          DE {filteredCubicles.length} MÓDULOS
+                        </span>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4 overflow-y-auto pr-1 flex-grow max-h-[50vh] scrollbar-thin scrollbar-thumb-blue-900/50">
                       {filteredCubicles.map((cubicle) => {
                         const currentTicket = ecosystemTickets.find(t => t.id === cubicle.currentTicketId);
-                        const isFree = cubicle.status === "ONLINE_AVAILABLE";
-                        const isBreak = cubicle.status === "BREAK";
-                        const isAttending = cubicle.status === "ATTENDING";
+                        const hasAgent = Boolean(cubicle.agentName && cubicle.agentName.trim() !== "" && !cubicle.agentName.includes("Sin Agente") && !cubicle.agentName.startsWith("Agente M"));
+                        const isFree = cubicle.status === "ONLINE_AVAILABLE" && hasAgent;
+                        const isAttending = cubicle.status === "ATTENDING" && hasAgent;
+                        const isUnavailable = !isFree && !isAttending;
                         const cajaNumber = cubicle.name.replace(/\D/g, '') || cubicle.name;
 
                         let mainText = "DISPONIBLE";
-                        let textStyle = isTriadaChannel ? "text-slate-500 font-semibold" : "text-[#00d0ff]/70 font-semibold";
+                        let textStyle = isTriadaChannel ? "text-emerald-700 font-extrabold" : "text-[#00ffcc] font-extrabold";
 
                         if (isAttending && currentTicket) {
                           mainText = currentTicket.name && currentTicket.name.trim() !== ""
                             ? currentTicket.name
                             : currentTicket.numberCode;
                           textStyle = isTriadaChannel ? "text-slate-900 font-black" : "text-white font-black";
-                        } else if (isBreak) {
-                          mainText = "EN RECESO";
-                          textStyle = "text-amber-500 font-bold";
-                        } else if (cubicle.status === "OFFLINE") {
-                          mainText = "MÓDULO INACTIVO";
-                          textStyle = "text-slate-400 font-semibold opacity-60";
+                        } else if (isUnavailable) {
+                          mainText = "NO DISPONIBLE";
+                          textStyle = isTriadaChannel ? "text-slate-400 font-bold" : "text-slate-400/80 font-bold";
                         }
 
                         return (
@@ -2258,14 +2388,16 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                             key={cubicle.id}
                             className={`relative p-5 rounded-[22px] flex flex-col justify-center min-h-[92px] transition-all duration-300 ${
                               isTriadaChannel
-                                ? `bg-white border-2 border-slate-200 border-b-[5px] border-r-[4px] border-b-[#003087] border-r-[#0047ab] shadow-[0_4px_12px_rgba(0,0,0,0.06)] ${
-                                    isAttending
-                                      ? "scale-[1.01] ring-2 ring-[#003087]/30 bg-blue-50/40"
-                                      : "opacity-95"
-                                  }`
-                                : `bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9] shadow-[0_5px_15px_rgba(0,0,0,0.25)] ${
-                                    isAttending ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]" : ""
-                                  }`
+                                ? isAttending
+                                  ? "scale-[1.01] ring-2 ring-[#003087]/30 bg-blue-50/40 border-2 border-slate-200 border-b-[5px] border-r-[4px] border-b-[#003087] border-r-[#0047ab] shadow-[0_4px_12px_rgba(0,0,0,0.06)]"
+                                  : isFree
+                                    ? "bg-white border-2 border-emerald-300 border-b-[5px] border-r-[4px] border-b-emerald-600 border-r-emerald-700 shadow-[0_4px_12px_rgba(0,0,0,0.06)] ring-1 ring-emerald-400/20"
+                                    : "bg-slate-50/80 border border-slate-200 border-b-[4px] border-r-[3px] border-b-slate-300 border-r-slate-300 opacity-60"
+                                : isAttending
+                                  ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9]"
+                                  : isFree
+                                    ? "bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-emerald-500/30 border-b-[5px] border-r-[4px] border-b-emerald-400 border-r-cyan-400 shadow-[0_5px_15px_rgba(0,0,0,0.25)]"
+                                    : "bg-[#021333]/80 border border-slate-800/60 border-b-[4px] border-r-[3px] border-b-slate-700 border-r-slate-800 opacity-55"
                             }`}
                           >
                             {isAttending && (
@@ -2275,7 +2407,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                             )}
                             <div className="flex items-center w-full truncate">
                               <span className={`text-base mr-2 font-sans select-none ${
-                                isTriadaChannel ? "text-[#003087]" : "text-[#00d0ff]"
+                                isTriadaChannel ? (isUnavailable ? "text-slate-400" : isFree ? "text-emerald-600" : "text-[#003087]") : (isUnavailable ? "text-slate-500" : isFree ? "text-emerald-400" : "text-[#00d0ff]")
                               }`}>▶</span>
                               <span className={`uppercase font-sans tracking-wide text-sm md:text-base leading-tight truncate ${textStyle}`}>
                                 {mainText}
@@ -2290,17 +2422,27 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                 <span>{cajaNumber}</span>
                               </div>
                               {isFree && (
-                                <span className={`ml-2.5 text-[8.5px] uppercase font-mono tracking-widest font-bold animate-pulse ${
-                                  isTriadaChannel ? "text-emerald-700" : "text-[#00d0ff]/65"
+                                <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-black flex items-center gap-1 ${
+                                  isTriadaChannel ? "bg-emerald-100 text-emerald-800 border border-emerald-300" : "bg-emerald-950/80 text-emerald-300 border border-emerald-500/50 shadow-sm"
                                 }`}>
-                                  ★ LIBRE
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                  DISPONIBLE
                                 </span>
                               )}
-                              {isBreak && (
-                                <span className={`ml-2.5 text-[8.5px] uppercase font-mono tracking-widest font-bold ${
-                                  isTriadaChannel ? "text-amber-700" : "text-amber-400/65"
+                              {isAttending && (
+                                <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-black flex items-center gap-1 ${
+                                  isTriadaChannel ? "bg-blue-100 text-blue-900 border border-blue-300" : "bg-blue-950/80 text-blue-200 border border-blue-500/50 shadow-sm"
                                 }`}>
-                                  ★ REC
+                                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
+                                  EN ATENCIÓN
+                                </span>
+                              )}
+                              {isUnavailable && (
+                                <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-bold flex items-center gap-1 ${
+                                  isTriadaChannel ? "bg-rose-50 text-rose-700 border border-rose-200" : "bg-rose-950/60 text-rose-300 border border-rose-500/40"
+                                }`}>
+                                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                  NO DISPONIBLE
                                 </span>
                               )}
                             </div>
@@ -2380,7 +2522,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                     {ticket.numberCode}
                                   </span>
                                   <span className={`text-[9px] px-2 py-0.5 font-black uppercase text-center rounded ${styleConfig.color}`}>
-                                    {styleConfig.prefix}
+                                    {styleConfig.prefix} • {Math.max(0, Math.floor((getServerTimestamp() - ticket.createdAt) / 60000))} min
                                   </span>
                                 </div>
                               </div>

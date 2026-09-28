@@ -143,6 +143,7 @@ export interface Cubicle {
   totalAttendedCount: number;
   isPreferential?: boolean; // True for modules specifically designated for preferenciales (embarazadas, tercera edad, discapacidad)
   area?: string; // e.g. "Caja", "Triada / Fotografía"
+  lastLocalUpdate?: number; // Timestamp of the last local update to guard against polling overrides
 }
 
 export interface Office {
@@ -321,12 +322,20 @@ export interface Cita {
   fechaCreacion: string;
   estado: 'confirmada' | 'cancelada' | 'asistire' | 'no_asistire' | 'realizada';
   creadaPorSupervisor?: boolean;
+  esEspecial?: boolean;
+  citaEspecial?: boolean;
+  esCupoAdicional?: boolean;
+  motivoEspecial?: string;
   creadoPor?: string;
   ticketTurnoCode?: string;
   llegadaConfirmadaAuto?: boolean;
   numeroCitaDia?: number; // Secuencia de cita del día (1 a 56 en extranjería)
   resolucion?: string;
   nombre?: string;
+  identificacion?: string;
+  correo?: string;
+  telefono?: string;
+  subServicioNombre?: string;
 }
 
 export interface ExtranjeriaRecord {

@@ -1,7 +1,7 @@
 [
   {
     "username": "login",
-    "password": "login",
+    "password": "5f0833239791f60ec75edace84bc96ad69d52e6f34ec6ff6c2789ad0a56ae337",
     "role": "super",
     "nombre": "Usuario Inicial (Cambio Requerido)",
     "sucursalId": "OFF-1",
@@ -10,7 +10,7 @@
   },
   {
     "username": "superadmin",
-    "password": "superadmin",
+    "password": "3e1b5c082e31fd7f6a6afd054da6cb65bca6dacd534cabcfd5bdbf39323fbc8f",
     "role": "super",
     "nombre": "Administrador Central",
     "sucursalId": "OFF-1",
@@ -18,7 +18,7 @@
   },
   {
     "username": "rsanchez",
-    "password": "rsanchez",
+    "password": "7c92cbadeff1125ca777295565617fa6b4eef331ef5e7b8020e02518307d6fe5",
     "role": "super",
     "nombre": "Ricardo Sánchez (Supervisor Sede Ancón)",
     "sucursalId": "OFF-1",
@@ -26,7 +26,7 @@
   },
   {
     "username": "amora",
-    "password": "amora",
+    "password": "5d320e664936d6f87dcd412cb684f90102c0ece65dfb6369516557e1222ebddf",
     "role": "super",
     "nombre": "Ana María Mora (Supervisor Regional Bocas)",
     "sucursalId": "OFF-2",
@@ -34,7 +34,7 @@
   },
   {
     "username": "mcruz",
-    "password": "mcruz",
+    "password": "5beb9fd10aa2d39761f42122ad364b5473ac0b58b01e67b265f8da3adb5695f5",
     "role": "agent_caja",
     "nombre": "Mateo Cruz (Cajero Sede Ancón)",
     "sucursalId": "OFF-1",
@@ -42,7 +42,7 @@
   },
   {
     "username": "jgutierrez",
-    "password": "jgutierrez",
+    "password": "814ab4ef3864a30d3089dd30dedcff989ebe3bd1ba2f46dce73e9448e6285f63",
     "role": "agent_triada",
     "nombre": "Julia Gutiérrez (Tríada Sede Ancón)",
     "sucursalId": "OFF-1",
@@ -50,7 +50,7 @@
   },
   {
     "username": "frios",
-    "password": "frios",
+    "password": "3c3cb0b6ea980a2102721c5eaff343cd69af3a6ea50681c0a9e2af0bb9e30326",
     "role": "agent_caja",
     "nombre": "Felipe Ríos (Cajero Bocas del Toro)",
     "sucursalId": "OFF-2",
@@ -58,7 +58,7 @@
   },
   {
     "username": "spadilla",
-    "password": "spadilla",
+    "password": "e1a332ee4aa3eface0be76c48b7db55eff9d2fe1fc0117524029a0a9d11285a9",
     "role": "agent_triada",
     "nombre": "Silvia Padilla (Tríada Bocas del Toro)",
     "sucursalId": "OFF-2",
@@ -66,72 +66,86 @@
   },
   {
     "username": "oscargave3003",
-    "password": "Value1234",
+    "password": "167acba7d42c3df905b4d0632a10bae9e9fe6f6388de8880da08e76f987d25c7",
     "role": "super",
     "nombre": "Oscar Super Admin",
     "fechaCreacion": "2026-06-05T18:11:00Z"
   },
   {
     "username": "oscargave3003@gmail.com",
-    "password": "Value1234",
+    "password": "167acba7d42c3df905b4d0632a10bae9e9fe6f6388de8880da08e76f987d25c7",
     "role": "super",
     "nombre": "Oscar Super Admin (Email)",
     "fechaCreacion": "2026-06-05T18:11:00Z"
   },
   {
     "username": "adminmini",
-    "password": "admin1234",
+    "password": "de321cd791d54491b09c695dbba1504ad71849d9c110ee66b16bd5d3b44f99b8",
     "role": "sencillo",
     "nombre": "Administrador Sencillo",
     "fechaCreacion": "2026-05-26T15:18:27Z"
   },
   {
     "username": "adminte",
-    "password": "Value1234",
+    "password": "167acba7d42c3df905b4d0632a10bae9e9fe6f6388de8880da08e76f987d25c7",
     "role": "super",
     "nombre": "Super Administrador TE",
     "fechaCreacion": "2026-05-26T15:18:27Z"
   },
   {
     "username": "migra26",
-    "password": "12345678",
+    "password": "86ca7166207eea4ce1c36bfa7dd81f77da4d32fdf8ee0a910a1dba1229120a9f",
     "role": "extranjeria",
     "nombre": "Gestor de Extranjería",
     "fechaCreacion": "2026-05-26T15:18:27Z"
   },
   {
     "username": "adminpedad",
-    "password": "PasaDodeEdad2026",
+    "password": "a96e5ace558b232104ea156d61554f331312da86d752134044515b252c8d25b8",
     "role": "pasado_edad",
     "nombre": "Gestor Pasado de Edad",
     "fechaCreacion": "2026-05-26T15:18:27Z"
   },
   {
     "username": "superit",
-    "password": "1234",
+    "password": "20b1a5260ffcf5e1e9682f23da7900207eea09f60d1a7c75fa9ef90424bc167a",
     "role": "pasado_edad",
     "nombre": "SuperIT - Supervisor Inscripción Tardía",
     "fechaCreacion": "2026-05-27T19:27:00Z"
   },
   {
     "username": "supermigra",
-    "password": "1234",
+    "password": "20b1a5260ffcf5e1e9682f23da7900207eea09f60d1a7c75fa9ef90424bc167a",
     "role": "extranjeria_supervisor",
     "nombre": "Supervisor de Extranjería",
     "fechaCreacion": "2026-05-28T18:13:00Z"
   },
   {
     "username": "atencionmigra",
-    "password": "1234",
+    "password": "20b1a5260ffcf5e1e9682f23da7900207eea09f60d1a7c75fa9ef90424bc167a",
     "role": "extranjeria_atencion",
     "nombre": "Atendimiento Entrada Extranjería",
     "fechaCreacion": "2026-05-28T18:13:00Z"
   },
   {
     "username": "cubiculomigra",
-    "password": "1234",
+    "password": "20b1a5260ffcf5e1e9682f23da7900207eea09f60d1a7c75fa9ef90424bc167a",
     "role": "extranjeria_cubiculo",
     "nombre": "Cubículo Ticket Extranjería",
+    "fechaCreacion": "2026-05-28T18:13:00Z"
+  },
+  {
+    "username": "supertriada",
+    "password": "20b1a5260ffcf5e1e9682f23da7900207eea09f60d1a7c75fa9ef90424bc167a",
+    "role": "triada_supervisor",
+    "nombre": "Supervisor de Tríada y Foto",
+    "fechaCreacion": "2026-05-28T18:13:00Z"
+  },
+  {
+    "username": "supercaja",
+    "password": "20b1a5260ffcf5e1e9682f23da7900207eea09f60d1a7c75fa9ef90424bc167a",
+    "role": "caja_supervisor",
+    "nombre": "Supervisor de Caja y Pagos",
     "fechaCreacion": "2026-05-28T18:13:00Z"
   }
 ]
