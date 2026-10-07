@@ -86,10 +86,10 @@ export default function SuperAdminConsole({
     let isMounted = true;
     const fetchUsersFromDB = async () => {
       try {
-        const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
-        const res = await fetch('/api/users', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const res = await fetch('/api/users', { headers });
         if (res.ok) {
           const data = await res.json();
           if (data.success && Array.isArray(data.users) && isMounted) {
@@ -308,13 +308,12 @@ export default function SuperAdminConsole({
     setDbStatusMsg("Enviando orden de actualización remota a todas las pantallas...");
     
     try {
-      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
       const response = await fetch("/api/admin/force-clients-reload", {
         method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
-        },
+        headers,
         body: JSON.stringify({ reason: "Refresco remoto forzado por Super Administrador" })
       });
       
@@ -468,13 +467,12 @@ export default function SuperAdminConsole({
 
     // 2. Persistir en la API y Base de Datos PostgreSQL del servidor
     try {
-      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch('/api/users', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers,
         body: JSON.stringify({
           username: cleanedUsername,
           password: newPassword.trim(),
@@ -509,12 +507,12 @@ export default function SuperAdminConsole({
 
       // Eliminar también en la base de datos del servidor
       try {
-        const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
         await fetch(`/api/users/${encodeURIComponent(userToDel.username.toLowerCase())}`, {
           method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
+          headers
         });
       } catch (err) {
         console.warn("Error al eliminar usuario en el servidor:", err);

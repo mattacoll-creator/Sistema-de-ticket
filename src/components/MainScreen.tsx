@@ -23,8 +23,74 @@ interface MainScreenProps {
   initialChannel?: "general" | TicketPhase | "OR" | "OHV" | "RC_OTROS";
 }
 
+interface MainDigitalClockProps {
+  variant?: "light" | "dark" | "compact";
+  showSeconds?: boolean;
+  className?: string;
+}
+
+const MainDigitalClock = React.memo(function MainDigitalClock({ variant = "dark", showSeconds = false, className = "" }: MainDigitalClockProps) {
+  const [time, setTime] = useState(() => getServerTime());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      setTime(getServerTime());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const timeStr = time.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(showSeconds ? { second: "2-digit" } : {})
+  });
+  const dateStr = time.toLocaleDateString([], {
+    weekday: "short",
+    day: "numeric",
+    month: "short"
+  }).toUpperCase();
+
+  if (variant === "light") {
+    return (
+      <div className={`text-right pr-1 select-none text-slate-900 ${className}`}>
+        <p className="text-3.5xl font-sans font-semibold tracking-normal leading-none">
+          {timeStr}
+        </p>
+        <p className="text-[8px] text-sky-650 font-mono tracking-widest uppercase font-black mt-1.5">
+          {dateStr}
+        </p>
+      </div>
+    );
+  }
+
+  if (variant === "compact") {
+    return (
+      <div className={`text-right mr-2 ${className}`}>
+        <p className="text-2xl font-sans font-black leading-none">
+          {timeStr}
+        </p>
+        <p className="text-[9px] font-mono tracking-widest uppercase font-black mt-1 opacity-80">
+          {dateStr}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`text-right pr-1 select-none ${className}`}>
+      <p className="text-3xl font-sans font-semibold tracking-normal text-white/95 leading-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.35)]">
+        {timeStr}
+      </p>
+      <p className="text-[8px] text-sky-400 font-mono tracking-widest uppercase font-black mt-1.5">
+        {dateStr}
+      </p>
+    </div>
+  );
+});
+
 export default function MainScreen({ tickets, cubicles, activeCall, onClearActiveCall, onTestSpeaker, onRefresh, currentOfficeId = "OFF-1", gatewaySelection = "cedulacion", initialChannel }: MainScreenProps) {
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const [activeDateKey, setActiveDateKey] = useState(() => new Date().toDateString());
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [voiceCallRepeat, setVoiceCallRepeat] = useState<number>(() => {
     if (typeof window !== "undefined") {
@@ -109,10 +175,11 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       }
     });
 
-    // Fallback polling (backed off to 2000ms for high-speed responsiveness)
+    // Fallback polling de respaldo (10s) con respeto de visibilidad; SSE entrega los eventos en tiempo real al instante
     const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       onRefresh();
-    }, 2000); 
+    }, 10000); 
 
     return () => {
       clearInterval(interval);
@@ -243,23 +310,39 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       setLimitHistory(localStorage.getItem("limitar_historial_tv") !== "false");
     };
     window.addEventListener("storage", checkSettings);
-    const interval = setInterval(checkSettings, 1000);
+    const interval = setInterval(checkSettings, 15000);
     return () => {
       window.removeEventListener("storage", checkSettings);
       clearInterval(interval);
     };
   }, []);
 
-  // Maintain synchronized server clock
+  // Detección automática y precisa de cambio de día (medianoche) sin forzar re-renders por segundo
   useEffect(() => {
-    setCurrentTime(getServerTime());
-    const timer = setInterval(() => setCurrentTime(getServerTime()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+    const checkMidnight = () => {
+      const todayKey = new Date().toDateString();
+      if (todayKey !== activeDateKey) {
+        setActiveDateKey(todayKey);
+      }
+    };
+    const interval = setInterval(checkMidnight, 15000); // 15s es ultra-preciso sin degradar CPU
+    return () => clearInterval(interval);
+  }, [activeDateKey]);
 
-  // Isolate tickets strictly by system ecosystem (Cedulación vs Registro Civil)
+  // Marca de tiempo de inicio de hoy a las 00:00:00 para garantizar que la TV solo muestre turnos del día
+  const startOfTodayMs = React.useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }, [activeDateKey]);
+
+  // Isolate tickets strictly by system ecosystem (Cedulación vs Registro Civil) and current day
   const ecosystemTickets = React.useMemo(() => {
     return tickets.filter(t => {
+      // Regla estricta de TV: en el cambio de día nunca deben salir turnos ni citas de días anteriores
+      if (t.createdAt && t.createdAt < startOfTodayMs) {
+        return false;
+      }
       const isRc = t.serviceType === ServiceType.REGISTRO || t.serviceType === ServiceType.REG_CERTIFICATION;
       if (selectedChannel === "OR" || selectedChannel === "OHV" || selectedChannel === "RC_OTROS") {
         return isRc;
@@ -274,11 +357,11 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
       }
       return true;
     });
-  }, [tickets, gatewaySelection, selectedChannel]);
+  }, [tickets, gatewaySelection, selectedChannel, startOfTodayMs]);
 
-  // Fetch tickets currently waiting
+  // Fetch tickets currently waiting (excluding any already called/assigned to a cubicle)
   const waitingTickets = React.useMemo(() => {
-    return ecosystemTickets.filter(t => t.status === TicketStatus.WAITING);
+    return ecosystemTickets.filter(t => t.status === TicketStatus.WAITING && !t.assignedCubicleId);
   }, [ecosystemTickets]);
   
   // Sorted waiting queue (Priority and Appointments get moved to front)
@@ -467,16 +550,21 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
     }
   }, [primaryCallToDisplay]);
 
-  // Set timeout of 8s (for 1 call) or 13s (for 2 calls) to automatically hide the overlay
+  // Set timeout of 2.5s (for 1 call) or 4.5s (for 2 calls) to automatically hide the overlay quickly,
+  // preventing screen blocks during peak hours and keeping queue flow rapid and active!
   useEffect(() => {
     if (showCallOverlay) {
-      const duration = voiceCallRepeat === 1 ? 8000 : 13000;
+      const duration = voiceCallRepeat === 1 ? 2500 : 4500;
       const timer = setTimeout(() => {
         setShowCallOverlay(false);
+        // Clear active call state to allow immediate consecutive calls and prevent stale blocks
+        if (onClearActiveCall) {
+          onClearActiveCall();
+        }
       }, duration);
       return () => clearTimeout(timer);
     }
-  }, [showCallOverlay, primaryCallToDisplay, voiceCallRepeat]);
+  }, [showCallOverlay, primaryCallToDisplay, voiceCallRepeat, onClearActiveCall]);
 
   // Bulletproof live status check: if the currently displayed ticket is no longer in CALLING status in the live ecosystem (e.g. when agent clicks 'Iniciar Atención'), dismiss it immediately!
   useEffect(() => {
@@ -591,9 +679,9 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               ? ecosystemCubicles.filter(c => (c.supportedPhases?.includes(TicketPhase.TRIADA) || c.name.toLowerCase().startsWith("módulo") || c.name.toLowerCase().startsWith("modulo") || c.name.toLowerCase().includes("tríada") || c.name.toLowerCase().includes("triada")) && !c.name.toLowerCase().startsWith("caja"))
               : ecosystemCubicles.filter(c => c.supportedPhases?.includes(selectedChannel as TicketPhase));
 
-  // Recent completed or missed tickets strictly for active ecosystem
+  // Recent completed or missed tickets strictly for active ecosystem today
   const recentHistory = ecosystemTickets
-    .filter(t => t.status === TicketStatus.COMPLETED || t.status === TicketStatus.MISSED)
+    .filter(t => (t.status === TicketStatus.COMPLETED || t.status === TicketStatus.MISSED) && (t.completedAt ? t.completedAt >= startOfTodayMs : true))
     .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0))
     .slice(0, limitHistory ? 5 : 12);
 
@@ -938,14 +1026,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               </div>
 
               {/* Digital Clock Badge in Light Mode */}
-              <div className="text-right pr-1 select-none text-slate-900">
-                <p className="text-3.5xl font-sans font-semibold tracking-normal leading-none">
-                  {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </p>
-                <p className="text-[8px] text-sky-650 font-mono tracking-widest uppercase font-black mt-1.5">
-                  {currentTime.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }).toUpperCase()}
-                </p>
-              </div>
+              <MainDigitalClock variant="light" />
             </div>
           </div>
         ) : (
@@ -1059,14 +1140,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
               </div>
 
               {/* Smart Digital Clock Badge styled matching the Photo */}
-              <div className="text-right pr-1 select-none">
-                <p className="text-3xl font-sans font-semibold tracking-normal text-white/95 leading-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.35)]">
-                  {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </p>
-                <p className="text-[8px] text-sky-400 font-mono tracking-widest uppercase font-black mt-1.5">
-                  {currentTime.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }).toUpperCase()}
-                </p>
-              </div>
+              <MainDigitalClock variant="dark" />
             </div>
           </div>
         )}
@@ -1625,15 +1699,16 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                 {filteredCubicles.map((cubicle) => {
                   const currentTicket = ecosystemTickets.find(t => t.id === cubicle.currentTicketId);
                   const hasAgent = Boolean(cubicle.agentName && cubicle.agentName.trim() !== "" && !cubicle.agentName.includes("Sin Agente") && !cubicle.agentName.startsWith("Agente M"));
+                  const isBreak = cubicle.status === "BREAK" || (cubicle.status as any) === CubicleStatus.BREAK;
                   const isFree = cubicle.status === "ONLINE_AVAILABLE" && hasAgent;
-                  const isAttending = cubicle.status === "ATTENDING" && hasAgent;
-                  const isUnavailable = !isFree && !isAttending;
+                  const isAttending = cubicle.status === "ATTENDING" && hasAgent && !!currentTicket;
+                  const isUnavailable = !isFree && !isAttending && !isBreak;
 
                   // Extract desk digit (e.g. "Módulo 24" -> "24") precisely matching numbers in Photo
                   const cajaNumber = cubicle.name.replace(/\D/g, '') || cubicle.name;
 
                   // Text to display for Line 1: prioritized name, or code, or fallback
-                  let mainText = "DISPONIBLE";
+                  let mainText = "ESPERANDO QUE LO ASIGNEN";
                   let textStyle = isTriadaChannel ? "text-emerald-700 font-extrabold" : "text-[#00ffcc] font-extrabold";
 
                   if (isAttending && currentTicket) {
@@ -1641,8 +1716,14 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       ? currentTicket.name
                       : currentTicket.numberCode;
                     textStyle = isTriadaChannel ? "text-slate-900 font-black" : "text-white font-black";
+                  } else if (isBreak) {
+                    mainText = "EN RECESO";
+                    textStyle = isTriadaChannel ? "text-amber-700 font-black" : "text-amber-300 font-black";
+                  } else if (isFree) {
+                    mainText = "ESPERANDO QUE LO ASIGNEN";
+                    textStyle = isTriadaChannel ? "text-emerald-700 font-extrabold" : "text-[#00ffcc] font-extrabold";
                   } else if (isUnavailable) {
-                    mainText = "NO DISPONIBLE";
+                    mainText = "ESPERANDO QUE LO ASIGNEN";
                     textStyle = isTriadaChannel ? "text-slate-400 font-bold" : "text-slate-400/80 font-bold";
                   }
 
@@ -1653,14 +1734,18 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                         isTriadaChannel
                           ? isAttending
                             ? "scale-[1.01] ring-2 ring-[#003087]/30 bg-blue-50/40 border-2 border-slate-200 border-b-[5px] border-r-[4px] border-b-[#003087] border-r-[#0047ab] shadow-[0_4px_12px_rgba(0,0,0,0.06)]"
-                            : isFree
-                              ? "bg-white border-2 border-emerald-300 border-b-[5px] border-r-[4px] border-b-emerald-600 border-r-emerald-700 shadow-[0_4px_12px_rgba(0,0,0,0.06)] ring-1 ring-emerald-400/20"
-                              : "bg-slate-50/80 border border-slate-200 border-b-[4px] border-r-[3px] border-b-slate-300 border-r-slate-300 opacity-60"
+                            : isBreak
+                              ? "bg-amber-50/60 border-2 border-amber-300 border-b-[5px] border-r-[4px] border-b-amber-600 border-r-amber-700 shadow-[0_4px_12px_rgba(245,158,11,0.08)]"
+                              : isFree
+                                ? "bg-white border-2 border-emerald-300 border-b-[5px] border-r-[4px] border-b-emerald-600 border-r-emerald-700 shadow-[0_4px_12px_rgba(0,0,0,0.06)] ring-1 ring-emerald-400/20"
+                                : "bg-slate-50/80 border border-slate-200 border-b-[4px] border-r-[3px] border-b-slate-300 border-r-slate-300 opacity-60"
                           : isAttending 
                             ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9]" 
-                            : isFree
-                              ? "bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-emerald-500/30 border-b-[5px] border-r-[4px] border-b-emerald-400 border-r-cyan-400 shadow-[0_5px_15px_rgba(0,0,0,0.25)]"
-                              : "bg-[#021333]/80 border border-slate-800/60 border-b-[4px] border-r-[3px] border-b-slate-700 border-r-slate-800 opacity-55"
+                            : isBreak
+                              ? "bg-gradient-to-r from-[#031d4c] to-[#3a2005] border border-amber-500/40 border-b-[5px] border-r-[4px] border-b-amber-500 border-r-amber-600 shadow-[0_5px_15px_rgba(245,158,11,0.2)]"
+                              : isFree
+                                ? "bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-emerald-500/30 border-b-[5px] border-r-[4px] border-b-emerald-400 border-r-cyan-400 shadow-[0_5px_15px_rgba(0,0,0,0.25)]"
+                                : "bg-[#021333]/80 border border-slate-800/60 border-b-[4px] border-r-[3px] border-b-slate-700 border-r-slate-800 opacity-55"
                       }`}
                     >
                       {/* Bouncing call highlight backdrop */}
@@ -1673,7 +1758,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       {/* Line 1: Accent chevron and Main Text */}
                       <div className="flex items-center w-full truncate">
                         <span className={`text-base md:text-lg mr-2 leading-none select-none font-sans ${
-                          isTriadaChannel ? (isUnavailable ? "text-slate-400" : isFree ? "text-emerald-600" : "text-[#003087]") : (isUnavailable ? "text-slate-500" : isFree ? "text-emerald-400" : "text-[#00d0ff]")
+                          isTriadaChannel ? (isBreak ? "text-amber-600" : isUnavailable ? "text-slate-400" : isFree ? "text-emerald-600" : "text-[#003087]") : (isBreak ? "text-amber-400" : isUnavailable ? "text-slate-500" : isFree ? "text-emerald-400" : "text-[#00d0ff]")
                         }`}>
                           ▶
                         </span>
@@ -1692,6 +1777,14 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                         </div>
 
                         {/* Semantic indicators */}
+                        {isBreak && (
+                          <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-black flex items-center gap-1 ${
+                            isTriadaChannel ? "bg-amber-100 text-amber-900 border border-amber-300" : "bg-amber-950/80 text-amber-300 border border-amber-500/50 shadow-sm animate-pulse"
+                          }`}>
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                            EN RECESO ⏸
+                          </span>
+                        )}
                         {isFree && (
                           <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-black flex items-center gap-1 ${
                             isTriadaChannel ? "bg-emerald-100 text-emerald-800 border border-emerald-300" : "bg-emerald-950/80 text-emerald-300 border border-emerald-500/50 shadow-sm"
@@ -1710,10 +1803,10 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                         )}
                         {isUnavailable && (
                           <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-bold flex items-center gap-1 ${
-                            isTriadaChannel ? "bg-rose-50 text-rose-700 border border-rose-200" : "bg-rose-950/60 text-rose-300 border border-rose-500/40"
+                            isTriadaChannel ? "bg-slate-100 text-slate-700 border border-slate-250" : "bg-slate-900/80 text-slate-400 border border-slate-700/60"
                           }`}>
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                            NO DISPONIBLE
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                            ESPERANDO ASIGNACIÓN
                           </span>
                         )}
                       </div>
@@ -2148,12 +2241,13 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                     {filteredCubicles.map((cubicle) => {
                       const currentTicket = ecosystemTickets.find(t => t.id === cubicle.currentTicketId);
                       const hasAgent = Boolean(cubicle.agentName && cubicle.agentName.trim() !== "" && !cubicle.agentName.includes("Sin Agente") && !cubicle.agentName.startsWith("Agente M"));
+                      const isBreak = cubicle.status === "BREAK" || (cubicle.status as any) === CubicleStatus.BREAK;
                       const isFree = cubicle.status === "ONLINE_AVAILABLE" && hasAgent;
-                      const isAttending = cubicle.status === "ATTENDING" && hasAgent;
-                      const isUnavailable = !isFree && !isAttending;
+                      const isAttending = cubicle.status === "ATTENDING" && hasAgent && !!currentTicket;
+                      const isUnavailable = !isFree && !isAttending && !isBreak;
                       const cajaNumber = cubicle.name.replace(/\D/g, '') || cubicle.name;
 
-                      let mainText = "DISPONIBLE";
+                      let mainText = "ESPERANDO QUE LO ASIGNEN";
                       let textStyle = "text-[#00ffcc] font-extrabold";
 
                       if (isAttending && currentTicket) {
@@ -2161,8 +2255,14 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                           ? currentTicket.name
                           : currentTicket.numberCode;
                         textStyle = "text-white font-black";
+                      } else if (isBreak) {
+                        mainText = "EN RECESO";
+                        textStyle = "text-amber-300 font-black";
+                      } else if (isFree) {
+                        mainText = "ESPERANDO QUE LO ASIGNEN";
+                        textStyle = "text-[#00ffcc] font-extrabold";
                       } else if (isUnavailable) {
-                        mainText = "NO DISPONIBLE";
+                        mainText = "ESPERANDO QUE LO ASIGNEN";
                         textStyle = "text-slate-400/80 font-bold";
                       }
 
@@ -2172,16 +2272,18 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                           className={`relative p-4 rounded-xl border border-blue-950/20 border-b-[4px] border-r-[3px] border-b-[#00b0ff] border-r-[#0081f9] flex flex-col justify-center min-h-[78px] shadow-[0_4px_10px_rgba(0,0,0,0.2)] transition-all ${
                             isAttending
                               ? "scale-[1.01] brightness-110 shadow-[0_6px_20px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83]"
-                              : isFree
-                                ? "bg-gradient-to-r from-[#031d4c] to-[#0c316e] border-b-emerald-400 border-r-cyan-400"
-                                : "bg-[#021333]/80 border-b-slate-700 border-r-slate-800 opacity-55"
+                              : isBreak
+                                ? "bg-gradient-to-r from-[#031d4c] to-[#3a2005] border-b-amber-500 border-r-amber-600 shadow-[0_4px_12px_rgba(245,158,11,0.2)]"
+                                : isFree
+                                  ? "bg-gradient-to-r from-[#031d4c] to-[#0c316e] border-b-emerald-400 border-r-cyan-400"
+                                  : "bg-[#021333]/80 border-b-slate-700 border-r-slate-800 opacity-55"
                           }`}
                         >
                           {isAttending && (
                             <div className="absolute inset-0 bg-blue-400/5 animate-pulse rounded-xl" />
                           )}
                           <div className="flex items-center w-full truncate">
-                            <span className={`text-xs mr-1.5 select-none ${isUnavailable ? "text-slate-500" : isFree ? "text-emerald-400" : "text-[#00d0ff]"}`}>▶</span>
+                            <span className={`text-xs mr-1.5 select-none ${isBreak ? "text-amber-400" : isUnavailable ? "text-slate-500" : isFree ? "text-emerald-400" : "text-[#00d0ff]"}`}>▶</span>
                             <span className={`uppercase font-sans tracking-wide text-xs leading-tight truncate ${textStyle}`}>
                               {mainText}
                             </span>
@@ -2192,6 +2294,12 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                               <span className="text-[#aae3ff] text-[9px] leading-none select-none font-sans">▶</span>
                               <span>{cajaNumber}</span>
                             </div>
+                            {isBreak && (
+                              <span className="ml-2 px-2 py-0.5 rounded-full text-[8px] uppercase font-mono tracking-widest font-black bg-amber-950/80 text-amber-300 border border-amber-500/50 flex items-center gap-1 animate-pulse">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                EN RECESO ⏸
+                              </span>
+                            )}
                             {isFree && (
                               <span className="ml-2 px-2 py-0.5 rounded-full text-[8px] uppercase font-mono tracking-widest font-black bg-emerald-950/80 text-emerald-300 border border-emerald-500/50 flex items-center gap-1">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -2205,9 +2313,9 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                               </span>
                             )}
                             {isUnavailable && (
-                              <span className="ml-2 px-2 py-0.5 rounded-full text-[8px] uppercase font-mono tracking-widest font-bold bg-rose-950/60 text-rose-300 border border-rose-500/40 flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                                NO DISPONIBLE
+                              <span className="ml-2 px-2 py-0.5 rounded-full text-[8px] uppercase font-mono tracking-widest font-bold bg-slate-900/80 text-slate-400 border border-slate-700/60 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                                ESPERANDO ASIGNACIÓN
                               </span>
                             )}
                           </div>
@@ -2254,18 +2362,11 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                   
                   <div className="flex items-center gap-4 shrink-0 z-10">
                     {/* Clock */}
-                    <div className="text-right mr-2">
-                      <p className={`text-2xl font-sans font-black leading-none ${
-                        isTriadaChannel ? "text-slate-900" : "text-white/95"
-                      }`}>
-                        {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </p>
-                      <p className={`text-[9px] font-mono tracking-widest uppercase font-black mt-1 ${
-                        isTriadaChannel ? "text-slate-500" : "text-sky-405"
-                      }`}>
-                        {currentTime.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }).toUpperCase()}
-                      </p>
-                    </div>
+                    <MainDigitalClock 
+                      variant="compact" 
+                      showSeconds={true} 
+                      className={isTriadaChannel ? "text-slate-900" : "text-white/95"} 
+                    />
 
                     {/* Speaker Controls */}
                     <div className={`flex items-center gap-2 border px-3 py-1.5 rounded-xl font-mono text-[10px] shadow-sm ${
@@ -2365,12 +2466,13 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                       {filteredCubicles.map((cubicle) => {
                         const currentTicket = ecosystemTickets.find(t => t.id === cubicle.currentTicketId);
                         const hasAgent = Boolean(cubicle.agentName && cubicle.agentName.trim() !== "" && !cubicle.agentName.includes("Sin Agente") && !cubicle.agentName.startsWith("Agente M"));
+                        const isBreak = cubicle.status === "BREAK" || (cubicle.status as any) === CubicleStatus.BREAK;
                         const isFree = cubicle.status === "ONLINE_AVAILABLE" && hasAgent;
-                        const isAttending = cubicle.status === "ATTENDING" && hasAgent;
-                        const isUnavailable = !isFree && !isAttending;
+                        const isAttending = cubicle.status === "ATTENDING" && hasAgent && !!currentTicket;
+                        const isUnavailable = !isFree && !isAttending && !isBreak;
                         const cajaNumber = cubicle.name.replace(/\D/g, '') || cubicle.name;
 
-                        let mainText = "DISPONIBLE";
+                        let mainText = "ESPERANDO QUE LO ASIGNEN";
                         let textStyle = isTriadaChannel ? "text-emerald-700 font-extrabold" : "text-[#00ffcc] font-extrabold";
 
                         if (isAttending && currentTicket) {
@@ -2378,8 +2480,14 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                             ? currentTicket.name
                             : currentTicket.numberCode;
                           textStyle = isTriadaChannel ? "text-slate-900 font-black" : "text-white font-black";
+                        } else if (isBreak) {
+                          mainText = "EN RECESO";
+                          textStyle = isTriadaChannel ? "text-amber-700 font-black" : "text-amber-300 font-black";
+                        } else if (isFree) {
+                          mainText = "ESPERANDO QUE LO ASIGNEN";
+                          textStyle = isTriadaChannel ? "text-emerald-700 font-extrabold" : "text-[#00ffcc] font-extrabold";
                         } else if (isUnavailable) {
-                          mainText = "NO DISPONIBLE";
+                          mainText = "ESPERANDO QUE LO ASIGNEN";
                           textStyle = isTriadaChannel ? "text-slate-400 font-bold" : "text-slate-400/80 font-bold";
                         }
 
@@ -2390,14 +2498,18 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                               isTriadaChannel
                                 ? isAttending
                                   ? "scale-[1.01] ring-2 ring-[#003087]/30 bg-blue-50/40 border-2 border-slate-200 border-b-[5px] border-r-[4px] border-b-[#003087] border-r-[#0047ab] shadow-[0_4px_12px_rgba(0,0,0,0.06)]"
-                                  : isFree
-                                    ? "bg-white border-2 border-emerald-300 border-b-[5px] border-r-[4px] border-b-emerald-600 border-r-emerald-700 shadow-[0_4px_12px_rgba(0,0,0,0.06)] ring-1 ring-emerald-400/20"
-                                    : "bg-slate-50/80 border border-slate-200 border-b-[4px] border-r-[3px] border-b-slate-300 border-r-slate-300 opacity-60"
+                                  : isBreak
+                                    ? "bg-amber-50/60 border-2 border-amber-300 border-b-[5px] border-r-[4px] border-b-amber-600 border-r-amber-700 shadow-[0_4px_12px_rgba(245,158,11,0.08)]"
+                                    : isFree
+                                      ? "bg-white border-2 border-emerald-300 border-b-[5px] border-r-[4px] border-b-emerald-600 border-r-emerald-700 shadow-[0_4px_12px_rgba(0,0,0,0.06)] ring-1 ring-emerald-400/20"
+                                      : "bg-slate-50/80 border border-slate-200 border-b-[4px] border-r-[3px] border-b-slate-300 border-r-slate-300 opacity-60"
                                 : isAttending
                                   ? "scale-[1.01] brightness-110 shadow-[0_8px_25px_rgba(0,176,255,0.15)] bg-gradient-to-r from-[#04245d] to-[#0f3c83] border border-blue-950/20 border-b-[5px] border-r-[4px] border-b-[#00b0ff] border-r-[#0081f9]"
-                                  : isFree
-                                    ? "bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-emerald-500/30 border-b-[5px] border-r-[4px] border-b-emerald-400 border-r-cyan-400 shadow-[0_5px_15px_rgba(0,0,0,0.25)]"
-                                    : "bg-[#021333]/80 border border-slate-800/60 border-b-[4px] border-r-[3px] border-b-slate-700 border-r-slate-800 opacity-55"
+                                  : isBreak
+                                    ? "bg-gradient-to-r from-[#031d4c] to-[#3a2005] border border-amber-500/40 border-b-[5px] border-r-[4px] border-b-amber-500 border-r-amber-600 shadow-[0_5px_15px_rgba(245,158,11,0.2)]"
+                                    : isFree
+                                      ? "bg-gradient-to-r from-[#031d4c] to-[#0c316e] border border-emerald-500/30 border-b-[5px] border-r-[4px] border-b-emerald-400 border-r-cyan-400 shadow-[0_5px_15px_rgba(0,0,0,0.25)]"
+                                      : "bg-[#021333]/80 border border-slate-800/60 border-b-[4px] border-r-[3px] border-b-slate-700 border-r-slate-800 opacity-55"
                             }`}
                           >
                             {isAttending && (
@@ -2407,7 +2519,7 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                             )}
                             <div className="flex items-center w-full truncate">
                               <span className={`text-base mr-2 font-sans select-none ${
-                                isTriadaChannel ? (isUnavailable ? "text-slate-400" : isFree ? "text-emerald-600" : "text-[#003087]") : (isUnavailable ? "text-slate-500" : isFree ? "text-emerald-400" : "text-[#00d0ff]")
+                                isTriadaChannel ? (isBreak ? "text-amber-600" : isUnavailable ? "text-slate-400" : isFree ? "text-emerald-600" : "text-[#003087]") : (isBreak ? "text-amber-400" : isUnavailable ? "text-slate-500" : isFree ? "text-emerald-400" : "text-[#00d0ff]")
                               }`}>▶</span>
                               <span className={`uppercase font-sans tracking-wide text-sm md:text-base leading-tight truncate ${textStyle}`}>
                                 {mainText}
@@ -2421,6 +2533,14 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                                 <span className={`${isTriadaChannel ? "text-blue-200" : "text-[#aae3ff]"} text-[10px] leading-none select-none font-sans`}>▶</span>
                                 <span>{cajaNumber}</span>
                               </div>
+                              {isBreak && (
+                                <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-black flex items-center gap-1 ${
+                                  isTriadaChannel ? "bg-amber-100 text-amber-900 border border-amber-300" : "bg-amber-950/80 text-amber-300 border border-amber-500/50 shadow-sm animate-pulse"
+                                }`}>
+                                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                  EN RECESO ⏸
+                                </span>
+                              )}
                               {isFree && (
                                 <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-black flex items-center gap-1 ${
                                   isTriadaChannel ? "bg-emerald-100 text-emerald-800 border border-emerald-300" : "bg-emerald-950/80 text-emerald-300 border border-emerald-500/50 shadow-sm"
@@ -2439,10 +2559,10 @@ export default function MainScreen({ tickets, cubicles, activeCall, onClearActiv
                               )}
                               {isUnavailable && (
                                 <span className={`ml-2.5 px-2.5 py-0.5 rounded-full text-[9px] uppercase font-mono tracking-widest font-bold flex items-center gap-1 ${
-                                  isTriadaChannel ? "bg-rose-50 text-rose-700 border border-rose-200" : "bg-rose-950/60 text-rose-300 border border-rose-500/40"
+                                  isTriadaChannel ? "bg-slate-100 text-slate-700 border border-slate-250" : "bg-slate-900/80 text-slate-400 border border-slate-700/60"
                                 }`}>
-                                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                                  NO DISPONIBLE
+                                  <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                                  ESPERANDO ASIGNACIÓN
                                 </span>
                               )}
                             </div>

@@ -72,19 +72,41 @@ if (process.env.PGDATABASE && pgConnectionString) {
 const isPgConfigured = !!(pgConnectionString || process.env.PGHOST);
 
 let pgPool: pg.Pool | null = null;
-let activeDbTarget = "bdprueba";
+let activeDbTarget = "postgres";
 let isPgAvailable = false;
+
+function isGenericPlaceholderName(name: string | null | undefined): boolean {
+  if (!name || typeof name !== 'string') return true;
+  const clean = name.trim().toUpperCase();
+  if (!clean) return true;
+  if (['N/D', 'N/A', 'SIN NOMBRE', 'CIUDADANO N/D', 'CIUDADANO SIN NOMBRE', 'NULL', 'UNDEFINED', 'NO APLICA'].includes(clean)) {
+    return true;
+  }
+  if (clean === 'CIUDADANO' || clean === 'CIUDADANO EXTRANJERO' || clean === 'CIUDADANO CITA' || clean.startsWith('CIUDADANO DE ')) {
+    return true;
+  }
+  if (/^CIUDADANO\s*\(.*\)$/i.test(clean)) {
+    return true;
+  }
+  if (/^CIUDADANO\s+EXTRANJERO\s*\(.*\)$/i.test(clean)) {
+    return true;
+  }
+  if (/^CIUDADANO\s+\d+$/i.test(clean)) {
+    return true;
+  }
+  return false;
+}
 
 if (isPgConfigured) {
   if (pgConnectionString) {
     try {
       const parsed = new URL(pgConnectionString);
-      activeDbTarget = parsed.pathname.replace(/^\//, "") || process.env.PGDATABASE || "bdprueba";
+      activeDbTarget = parsed.pathname.replace(/^\//, "") || process.env.PGDATABASE || "postgres";
     } catch {
-      activeDbTarget = process.env.PGDATABASE || "bdprueba";
+      activeDbTarget = process.env.PGDATABASE || "postgres";
     }
   } else {
-    activeDbTarget = process.env.PGDATABASE || "bdprueba";
+    activeDbTarget = process.env.PGDATABASE || "postgres";
   }
 
   const pgConfig: pg.PoolConfig = pgConnectionString
@@ -118,10 +140,22 @@ if (isPgConfigured) {
 }
 
 function getSafeErrorMessage(e: any, defaultMsg: string = "Ocurrió un error interno en el servidor"): string {
-  if (process.env.NODE_ENV === "production") {
+  if (!e) return defaultMsg;
+  const msg = String(e?.message || e);
+  if (
+    process.env.NODE_ENV === "production" ||
+    msg.includes("SELECT") ||
+    msg.includes("UPDATE") ||
+    msg.includes("DELETE") ||
+    msg.includes("INSERT") ||
+    msg.includes("PostgreSQL") ||
+    msg.includes("ENOENT") ||
+    msg.includes("/app/") ||
+    msg.includes("C:\\")
+  ) {
     return defaultMsg;
   }
-  return e?.message || defaultMsg;
+  return msg;
 }
 
 async function safePgQuery(text: string, params?: any[]): Promise<pg.QueryResult<any> | null> {
@@ -209,7 +243,17 @@ async function initPostgresSchema() {
         ALTER TABLE appointments ADD COLUMN IF NOT EXISTS resolucion VARCHAR(255);
         ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sub_tramite VARCHAR(255);
         ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sucursal_nombre VARCHAR(255);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS primer_nombre VARCHAR(100);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS segundo_nombre VARCHAR(100);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS primer_apellido VARCHAR(100);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS segundo_apellido VARCHAR(100);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS pasaporte VARCHAR(100);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS nacionalidad VARCHAR(100);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS numero_resolucion VARCHAR(100);
+        ALTER TABLE appointments ADD COLUMN IF NOT EXISTS fecha_resolucion VARCHAR(50);
         CREATE INDEX IF NOT EXISTS idx_appts_codigo_transaccion ON appointments (codigo_transaccion);
+        CREATE INDEX IF NOT EXISTS idx_appts_pasaporte ON appointments (pasaporte);
+        CREATE INDEX IF NOT EXISTS idx_appts_nombres ON appointments (primer_nombre, primer_apellido);
       `);
 
       // 3. TICKETS DE TURNO (KIOSKO Y SALA DE ESPERA - ACTIVOS)
@@ -503,24 +547,57 @@ const TARDIA_DB_PATH = path.join(process.cwd(), "tardia-db.json");
 const USERS_DB_PATH = path.join(process.cwd(), "users-db.json");
 const CMS_CONFIG_PATH = path.join(process.cwd(), "cms-config.json");
 
-// Force purge local json database files if they contain old demo records
+// Force purge known demo records from local json database files if present
 try {
   if (fs.existsSync(DB_PATH)) {
     const raw = fs.readFileSync(DB_PATH, "utf8");
-    if (raw.includes("Jean Dupont")) {
-      fs.writeFileSync(DB_PATH, JSON.stringify([], null, 2), "utf8");
+    if (raw.includes("Jean Dupont") || raw.includes("EXT-20260907-001") || raw.includes("Jovanna Olivares") || raw.includes("EXT-20260908-101")) {
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          const demoIds = new Set(['EXT-20260907-001', 'EXT-20260907-002', 'EXT-20260908-001', 'EXT-20260908-101', 'EXT-ESP-TEST1', 'PA-20260908-002', 'PA-20260907-003']);
+          const filtered = arr.filter((x: any) => !demoIds.has(String(x.id)) && !String(x.nombre || "").includes("Jean Dupont") && !String(x.nombre || "").includes("Jovanna Olivares"));
+          fs.writeFileSync(DB_PATH, JSON.stringify(filtered, null, 2), "utf8");
+        }
+      } catch {}
     }
   }
   if (fs.existsSync(EXTRANJERIA_DB_PATH)) {
     const raw = fs.readFileSync(EXTRANJERIA_DB_PATH, "utf8");
     if (raw.includes("John Smith") || raw.includes("PA123456")) {
-      fs.writeFileSync(EXTRANJERIA_DB_PATH, JSON.stringify([], null, 2), "utf8");
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          const filtered = arr.filter((x: any) => x.pasaporte !== "PA123456" && !String(x.nombre || "").includes("John Smith"));
+          fs.writeFileSync(EXTRANJERIA_DB_PATH, JSON.stringify(filtered, null, 2), "utf8");
+        }
+      } catch {}
     }
   }
   if (fs.existsSync(TARDIA_DB_PATH)) {
     const raw = fs.readFileSync(TARDIA_DB_PATH, "utf8");
     if (raw.includes("Esteban Caballero") || raw.includes("VID-26-000-111")) {
-      fs.writeFileSync(TARDIA_DB_PATH, JSON.stringify([], null, 2), "utf8");
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          const filtered = arr.filter((x: any) => x.id !== "VID-26-000-111" && !String(x.nombre || "").includes("Esteban Caballero"));
+          fs.writeFileSync(TARDIA_DB_PATH, JSON.stringify(filtered, null, 2), "utf8");
+        }
+      } catch {}
+    }
+  }
+  if (fs.existsSync(USERS_DB_PATH)) {
+    const raw = fs.readFileSync(USERS_DB_PATH, "utf8");
+    const purgeKeys = ["login", "oscargave3003", "adminmini", "rsanchez", "amora", "mcruz", "jgutierrez", "frios", "spadilla", "supertriada", "supercaja"];
+    if (purgeKeys.some(k => raw.includes(k))) {
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          const testUsernames = new Set(["login", "oscargave3003", "oscargave3003@gmail.com", "adminmini", "rsanchez", "amora", "mcruz", "jgutierrez", "frios", "spadilla", "supertriada", "supercaja"]);
+          const filtered = arr.filter((x: any) => !testUsernames.has(String(x.username || "").toLowerCase()));
+          fs.writeFileSync(USERS_DB_PATH, JSON.stringify(filtered, null, 2), "utf8");
+        }
+      } catch {}
     }
   }
 } catch (e) {
@@ -594,25 +671,73 @@ async function getAppConfigsTableName(): Promise<string> { return "app_configs";
 async function getAuditLogsTableName(): Promise<string> { return "logs_auditoria"; }
 
 // ==========================================
-// SECURE PASSWORD HASHING (SHA-256 with static system salt)
+// SECURE PASSWORD HASHING (PBKDF2 with unique salts per password + Legacy HMAC SHA-256 support)
 // ==========================================
-function hashPassword(password: string): string {
+function hashPasswordSecure(password: string): string {
+  if (!password) return "";
+  const salt = crypto.randomBytes(16).toString("hex");
+  const iterations = 100000;
+  const hash = crypto.pbkdf2Sync(String(password).trim(), salt, iterations, 64, "sha512").toString("hex");
+  return `pbkdf2$${iterations}$${salt}$${hash}`;
+}
+
+function hashPasswordLegacy(password: string): string {
   if (!password) return "";
   return crypto.createHmac("sha256", "te_security_salt_2026").update(String(password).trim()).digest("hex");
 }
 
-function isHash(password: string): boolean {
+function isHashSecure(password: string): boolean {
+  if (!password) return false;
+  return String(password).trim().startsWith("pbkdf2$");
+}
+
+function isHashLegacy(password: string): boolean {
   if (!password) return false;
   return /^[a-f0-9]{64}$/i.test(String(password).trim());
 }
 
+function isHash(password: string): boolean {
+  if (!password) return false;
+  return isHashSecure(password) || isHashLegacy(password);
+}
+
+function hashPassword(password: string): string {
+  return hashPasswordSecure(password);
+}
+
+function constantTimeCompare(a: string, b: string): boolean {
+  try {
+    const bufA = Buffer.from(String(a || ""), "utf8");
+    const bufB = Buffer.from(String(b || ""), "utf8");
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+  } catch {
+    return false;
+  }
+}
+
 function verifyPassword(password: string, storedHash: string): boolean {
   if (!password || !storedHash) return false;
-  // If stored password isn't a hash yet (during initial migration), compare in plaintext
-  if (!isHash(storedHash)) {
-    return String(password).trim() === String(storedHash).trim();
+  const cleanPass = String(password).trim();
+  const cleanStored = String(storedHash).trim();
+  
+  if (isHashSecure(cleanStored)) {
+    const parts = cleanStored.split("$");
+    if (parts.length !== 4) return false;
+    const iterations = parseInt(parts[1], 10);
+    const salt = parts[2];
+    const hash = parts[3];
+    const computedHash = crypto.pbkdf2Sync(cleanPass, salt, iterations, 64, "sha512").toString("hex");
+    return constantTimeCompare(computedHash, hash);
   }
-  return hashPassword(password) === storedHash;
+  
+  if (isHashLegacy(cleanStored)) {
+    const legacy = hashPasswordLegacy(cleanPass);
+    return constantTimeCompare(legacy, cleanStored);
+  }
+  
+  // plaintext check
+  return constantTimeCompare(cleanPass, cleanStored);
 }
 
 interface ServerUser {
@@ -627,90 +752,12 @@ interface ServerUser {
 
 const DEFAULT_USERS: ServerUser[] = [
   {
-    username: "login",
-    password: "login",
-    role: "super",
-    nombre: "Usuario Inicial (Cambio Requerido)",
-    sucursalId: "OFF-1",
-    fechaCreacion: "2026-08-07T08:00:00Z",
-    mustChangePassword: true
-  },
-  {
     username: "superadmin",
     password: "superadmin",
     role: "super",
     nombre: "Administrador Central",
     sucursalId: "OFF-1",
     fechaCreacion: "2026-08-01T08:00:00Z"
-  },
-  {
-    username: "rsanchez",
-    password: "rsanchez",
-    role: "super",
-    nombre: "Ricardo Sánchez (Supervisor Sede Ancón)",
-    sucursalId: "OFF-1",
-    fechaCreacion: "2026-08-01T08:00:00Z"
-  },
-  {
-    username: "amora",
-    password: "amora",
-    role: "super",
-    nombre: "Ana María Mora (Supervisor Regional Bocas)",
-    sucursalId: "OFF-2",
-    fechaCreacion: "2026-08-01T08:00:00Z"
-  },
-  {
-    username: "mcruz",
-    password: "mcruz",
-    role: "agent_caja",
-    nombre: "Mateo Cruz (Cajero Sede Ancón)",
-    sucursalId: "OFF-1",
-    fechaCreacion: "2026-08-01T08:00:00Z"
-  },
-  {
-    username: "jgutierrez",
-    password: "jgutierrez",
-    role: "agent_triada",
-    nombre: "Julia Gutiérrez (Tríada Sede Ancón)",
-    sucursalId: "OFF-1",
-    fechaCreacion: "2026-08-01T08:00:00Z"
-  },
-  {
-    username: "frios",
-    password: "frios",
-    role: "agent_caja",
-    nombre: "Felipe Ríos (Cajero Bocas del Toro)",
-    sucursalId: "OFF-2",
-    fechaCreacion: "2026-08-01T08:00:00Z"
-  },
-  {
-    username: "spadilla",
-    password: "spadilla",
-    role: "agent_triada",
-    nombre: "Silvia Padilla (Tríada Bocas del Toro)",
-    sucursalId: "OFF-2",
-    fechaCreacion: "2026-08-01T08:00:00Z"
-  },
-  {
-    username: "oscargave3003",
-    password: "Value1234",
-    role: "super",
-    nombre: "Oscar Super Admin",
-    fechaCreacion: "2026-06-05T18:11:00Z"
-  },
-  {
-    username: "oscargave3003@gmail.com",
-    password: "Value1234",
-    role: "super",
-    nombre: "Oscar Super Admin (Email)",
-    fechaCreacion: "2026-06-05T18:11:00Z"
-  },
-  {
-    username: "adminmini",
-    password: "admin1234",
-    role: "sencillo",
-    nombre: "Administrador Sencillo",
-    fechaCreacion: "2026-05-26T15:18:27Z"
   },
   {
     username: "adminte",
@@ -759,20 +806,6 @@ const DEFAULT_USERS: ServerUser[] = [
     "password": "1234",
     "role": "extranjeria_cubiculo",
     "nombre": "Cubículo Ticket Extranjería",
-    "fechaCreacion": "2026-05-28T18:13:00Z"
-  },
-  {
-    "username": "supertriada",
-    "password": "1234",
-    "role": "triada_supervisor",
-    "nombre": "Supervisor de Tríada y Foto",
-    "fechaCreacion": "2026-05-28T18:13:00Z"
-  },
-  {
-    "username": "supercaja",
-    "password": "1234",
-    "role": "caja_supervisor",
-    "nombre": "Supervisor de Caja y Pagos",
     "fechaCreacion": "2026-05-28T18:13:00Z"
   }
 ];
@@ -1161,17 +1194,37 @@ interface ServerCita {
   motivoEspecial?: string;
   numeroCitaDia?: number;
   resolucion?: string;
+  primerNombre?: string;
+  segundoNombre?: string;
+  primerApellido?: string;
+  segundoApellido?: string;
+  pasaporte?: string;
+  nacionalidad?: string;
+  numeroResolucion?: string;
+  fechaResolucion?: string;
 }
 
 const DEFAULT_APPOINTMENTS: ServerCita[] = [];
 
+let cachedAppointments: ServerCita[] = [];
+let cachedAppointmentsMtime = 0;
+
 function getAppointments(): ServerCita[] {
   try {
     if (fs.existsSync(DB_PATH)) {
+      const stat = fs.statSync(DB_PATH);
+      if (cachedAppointments.length > 0 && stat.mtimeMs === cachedAppointmentsMtime) {
+        return cachedAppointments;
+      }
       const data = fs.readFileSync(DB_PATH, "utf8");
       let list = JSON.parse(data);
       if (Array.isArray(list)) {
         let upgraded = false;
+        list = list.filter((a: any) => {
+          const id = String(a?.id || '');
+          const nom = String(a?.nombre || a?.datosPersonales?.nombreCompleto || '').toUpperCase();
+          return !id.includes('20260908-101') && !id.includes('ESP-TEST') && !nom.includes('JOVANNA OLIVARES') && !nom.includes('JEAN DUPONT') && !nom.includes('JOHN SMITH');
+        });
         list = list.map((appt: any) => {
           if (appt.id === "TE-EXT-20260907-001") { appt.id = "EXT-20260907-001"; appt.codigoTransaccion = "EXT-A7B8C"; upgraded = true; }
           if (appt.id === "TE-EXT-20260907-002") { appt.id = "EXT-20260907-002"; appt.codigoTransaccion = "EXT-D4E5F"; upgraded = true; }
@@ -1227,7 +1280,15 @@ function getAppointments(): ServerCita[] {
             }
           }
 
-          const dp = appt.datosPersonales;
+          let dp = appt.datosPersonales;
+          if (dp && typeof dp === 'string') {
+            try {
+              dp = JSON.parse(dp);
+            } catch (e) {}
+          }
+          if (!dp && (appt.primerNombre || appt.primer_nombre || appt.nombreCompleto || appt.nombre_completo)) {
+            dp = appt;
+          }
           
           // Helper to check if a name is a generic placeholder
           const isGenericPlaceholder = (str: any): boolean => {
@@ -1247,38 +1308,29 @@ function getAppointments(): ServerCita[] {
 
           // Helper to extract human name from email
           const nameFromEmail = (email: string): string => {
-            if (!email || !email.includes('@')) return '';
-            const local = email.split('@')[0].trim().toLowerCase();
-            if (
-              local.startsWith('admin') || 
-              local.startsWith('soporte') || 
-              local.startsWith('extranjeria') ||
-              local.startsWith('info') ||
-              local.startsWith('contacto') ||
-              local.startsWith('noreply')
-            ) return '';
+            if (!email || typeof email !== 'string' || !email.includes('@')) return '';
+            const cleanEmail = email.trim().toLowerCase();
+            const username = cleanEmail.split('@')[0];
+            if (!username) return '';
+
+            // Clean numbers, dots, dashes, underscores
+            let cleaned = username.replace(/[0-9]+/g, '').replace(/[._\-]+/g, ' ').trim();
+            if (!cleaned) return '';
+
+            // Capitalize words
+            const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
             
-            let cleaned = local.replace(/[\._\-\+]/g, ' ');
-            cleaned = cleaned.replace(/[0-9]/g, ' ').replace(/\s+/g, ' ').trim();
-            const words = cleaned.split(' ').filter(Boolean);
-            if (words.length >= 2) {
-              return words.map(w => w.length === 1 ? w.toUpperCase() + '.' : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-            }
-            if (words.length === 1) {
-              const single = words[0];
-              for (const fn of COMMON_FIRST_NAMES_SERVER) {
-                if (single.startsWith(fn) && single.length > fn.length) {
-                  const first = fn.charAt(0).toUpperCase() + fn.slice(1);
-                  const rest = single.slice(fn.length);
-                  const restCap = rest.length === 1 ? rest.toUpperCase() + '.' : rest.charAt(0).toUpperCase() + rest.slice(1);
-                  return `${first} ${restCap}`.trim();
-                }
-              }
-              if (single.length >= 3) {
-                return single.charAt(0).toUpperCase() + single.slice(1);
+            // Try to find if it starts with a common first name
+            for (const name of COMMON_FIRST_NAMES_SERVER) {
+              if (cleaned.startsWith(name) && cleaned.length > name.length) {
+                // e.g. "jovannaolivares" -> "jovanna olivares"
+                const rest = cleaned.substring(name.length).trim();
+                return `${capitalize(name)} ${capitalize(rest)}`;
               }
             }
-            return '';
+
+            // Otherwise, just format the cleaned string
+            return cleaned.split(' ').map(word => capitalize(word)).join(' ');
           };
 
           let validName = '';
@@ -1333,11 +1385,29 @@ function getAppointments(): ServerCita[] {
               upgraded = true;
             }
           }
+
+          if (dp) {
+            if (dp.primerNombre && !appt.primerNombre) { appt.primerNombre = dp.primerNombre; upgraded = true; }
+            if (dp.segundoNombre && !appt.segundoNombre) { appt.segundoNombre = dp.segundoNombre; upgraded = true; }
+            if (dp.primerApellido && !appt.primerApellido) { appt.primerApellido = dp.primerApellido; upgraded = true; }
+            if (dp.segundoApellido && !appt.segundoApellido) { appt.segundoApellido = dp.segundoApellido; upgraded = true; }
+            if (dp.pasaporte && !appt.pasaporte) { appt.pasaporte = dp.pasaporte; upgraded = true; }
+            if (dp.nacionalidad && !appt.nacionalidad) { appt.nacionalidad = dp.nacionalidad; upgraded = true; }
+            if (dp.numeroResolucion && !appt.numeroResolucion) { appt.numeroResolucion = dp.numeroResolucion; upgraded = true; }
+            if (dp.fechaResolucion && !appt.fechaResolucion) { appt.fechaResolucion = dp.fechaResolucion; upgraded = true; }
+
+            if (appt.primerNombre && !dp.primerNombre) { dp.primerNombre = appt.primerNombre; upgraded = true; }
+            if (appt.segundoNombre && !dp.segundoNombre) { dp.segundoNombre = appt.segundoNombre; upgraded = true; }
+            if (appt.primerApellido && !dp.primerApellido) { dp.primerApellido = appt.primerApellido; upgraded = true; }
+            if (appt.segundoApellido && !dp.segundoApellido) { dp.segundoApellido = appt.segundoApellido; upgraded = true; }
+          }
           return appt;
         });
         if (upgraded) {
           saveAppointments(list);
         }
+        cachedAppointments = list;
+        cachedAppointmentsMtime = stat.mtimeMs;
         return list;
       }
     }
@@ -1346,7 +1416,7 @@ function getAppointments(): ServerCita[] {
     return [];
   } catch (error) {
     console.error("Error reading appointments DB:", error);
-    return [];
+    return cachedAppointments.length > 0 ? cachedAppointments : [];
   }
 }
 
@@ -1388,6 +1458,8 @@ function saveAppointments(appointments: ServerCita[]): void {
       fecha: standardizeServerDate(a.fecha) || a.fecha
     }));
     fs.writeFileSync(DB_PATH, JSON.stringify(normalized, null, 2), "utf8");
+    cachedAppointments = normalized;
+    cachedAppointmentsMtime = Date.now();
   } catch (error) {
     console.error("Error writing appointments DB:", error);
   }
@@ -1399,50 +1471,141 @@ getAppointments();
 async function safeUpsertAppointment(row: any) {
   // Always update local database
   const appointments = getAppointments();
-  const apptId = row.identificacion || row.id || row.codigo_transaccion;
+  const apptId = row.id || (row.identificacion && (String(row.identificacion).startsWith('EXT-') || String(row.identificacion).startsWith('TE-') || String(row.identificacion).startsWith('PA-')) ? row.identificacion : undefined) || row.codigo_transaccion || row.identificacion;
   const existingIdx = appointments.findIndex(a => a.id === apptId || a.codigoTransaccion === apptId);
-    const dp = row.datos_personales || row.datosPersonales || undefined;
-    const dpParts = dp ? [
-      dp.primerNombre || '',
-      dp.segundoNombre || '',
-      dp.primerApellido || '',
-      dp.segundoApellido || ''
-    ].map((s: any) => String(s || '').trim()).filter(Boolean) : [];
-    const dpPartsName = dpParts.length > 0 ? dpParts.join(' ') : '';
-    const resolvedName = row.nombre_completo || row.ciudadano_nombre || row.nombre || (dp ? dp.nombreCompleto : '') || dpPartsName || (dp?.pasaporte ? `Ciudadano (${dp.pasaporte})` : '') || "";
+  const existing = existingIdx >= 0 ? appointments[existingIdx] : null;
 
-    if (dp && !dp.nombreCompleto && resolvedName) {
-      dp.nombreCompleto = resolvedName;
+  let dp = row.datos_personales || row.datosPersonales || undefined;
+  if (typeof dp === 'string' && dp.trim()) {
+    try {
+      dp = JSON.parse(dp);
+    } catch {}
+  }
+
+  // Preserve existing structured personal data if incoming object lacks them
+  if (existing?.datosPersonales) {
+    const prevDp = existing.datosPersonales;
+    dp = {
+      ...prevDp,
+      ...(dp || {}),
+      primerNombre: dp?.primerNombre || dp?.primer_nombre || prevDp.primerNombre || prevDp.primer_nombre,
+      segundoNombre: dp?.segundoNombre || dp?.segundo_nombre || prevDp.segundoNombre || prevDp.segundo_nombre,
+      primerApellido: dp?.primerApellido || dp?.primer_apellido || prevDp.primerApellido || prevDp.primer_apellido,
+      segundoApellido: dp?.segundoApellido || dp?.segundo_apellido || prevDp.segundoApellido || prevDp.segundo_apellido,
+      pasaporte: dp?.pasaporte || prevDp.pasaporte,
+      nacionalidad: dp?.nacionalidad || prevDp.nacionalidad,
+      numeroResolucion: dp?.numeroResolucion || prevDp.numeroResolucion,
+      fechaResolucion: dp?.fechaResolucion || prevDp.fechaResolucion,
+    };
+  }
+
+  const rawPrimerNombre = dp?.primerNombre || dp?.primer_nombre || row.primer_nombre || row.primerNombre || existing?.primerNombre || existing?.datosPersonales?.primerNombre || '';
+  const rawSegundoNombre = dp?.segundoNombre || dp?.segundo_nombre || row.segundo_nombre || row.segundoNombre || existing?.segundoNombre || existing?.datosPersonales?.segundoNombre || '';
+  const rawPrimerApellido = dp?.primerApellido || dp?.primer_apellido || row.primer_apellido || row.primerApellido || existing?.primerApellido || existing?.datosPersonales?.primerApellido || '';
+  const rawSegundoApellido = dp?.segundoApellido || dp?.segundo_apellido || row.segundo_apellido || row.segundoApellido || existing?.segundoApellido || existing?.datosPersonales?.segundoApellido || '';
+
+  let pNombre = String(rawPrimerNombre || '').trim();
+  let sNombre = String(rawSegundoNombre || '').trim();
+  let pApellido = String(rawPrimerApellido || '').trim();
+  let sApellido = String(rawSegundoApellido || '').trim();
+
+  // If individual parts are missing, decompose from valid full name intelligently
+  if (!pNombre && !pApellido) {
+    const candidateFullName = (dp?.nombreCompleto || row.nombre_completo || row.nombre || existing?.nombre || '').trim();
+    if (candidateFullName && !isGenericPlaceholderName(candidateFullName)) {
+      const parts = candidateFullName.split(/\s+/).filter(Boolean);
+      if (parts.length >= 4) {
+        pNombre = parts[0];
+        sNombre = parts[1];
+        pApellido = parts[2];
+        sApellido = parts.slice(3).join(' ');
+      } else if (parts.length === 3) {
+        pNombre = parts[0];
+        pApellido = parts[1];
+        sApellido = parts[2];
+      } else if (parts.length === 2) {
+        pNombre = parts[0];
+        pApellido = parts[1];
+      } else if (parts.length === 1) {
+        pNombre = parts[0];
+      }
     }
+  }
 
-    const serverCita: ServerCita = {
+  const dpParts = [pNombre, sNombre, pApellido, sApellido].filter(Boolean);
+  const dpPartsName = dpParts.length > 0 ? dpParts.join(' ') : '';
+
+  let resolvedName = '';
+  if (dpPartsName && !isGenericPlaceholderName(dpPartsName)) {
+    resolvedName = dpPartsName;
+  } else if (dp?.nombreCompleto && !isGenericPlaceholderName(dp.nombreCompleto)) {
+    resolvedName = dp.nombreCompleto.trim();
+  } else if (row.nombre_completo && !isGenericPlaceholderName(row.nombre_completo)) {
+    resolvedName = row.nombre_completo.trim();
+  } else if (row.ciudadano_nombre && !isGenericPlaceholderName(row.ciudadano_nombre)) {
+    resolvedName = row.ciudadano_nombre.trim();
+  } else if (row.nombre && !isGenericPlaceholderName(row.nombre)) {
+    resolvedName = row.nombre.trim();
+  } else if (existing?.nombre && !isGenericPlaceholderName(existing.nombre)) {
+    resolvedName = existing.nombre.trim();
+  } else if (existing?.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(existing.datosPersonales.nombreCompleto)) {
+    resolvedName = existing.datosPersonales.nombreCompleto.trim();
+  } else if (dp?.pasaporte) {
+    resolvedName = `Ciudadano (${dp.pasaporte})`;
+  } else if (row.ciudadano_identificacion || row.identificacion) {
+    resolvedName = `Ciudadano (${row.ciudadano_identificacion || row.identificacion})`;
+  } else {
+    resolvedName = 'Ciudadano';
+  }
+
+  if (dp) {
+    dp.nombreCompleto = resolvedName;
+    if (pNombre) dp.primerNombre = pNombre;
+    if (sNombre) dp.segundoNombre = sNombre;
+    if (pApellido) dp.primerApellido = pApellido;
+    if (sApellido) dp.segundoApellido = sApellido;
+    if (row.pasaporte && !dp.pasaporte) dp.pasaporte = row.pasaporte;
+    if (row.nacionalidad && !dp.nacionalidad) dp.nacionalidad = row.nacionalidad;
+    if (row.numero_resolucion && !dp.numeroResolucion) dp.numeroResolucion = row.numero_resolucion;
+    if (row.fecha_resolucion && !dp.fechaResolucion) dp.fechaResolucion = row.fecha_resolucion;
+  }
+
+  const serverCita: ServerCita = {
     id: apptId,
-    correo: row.correo || row.ciudadano_correo || "",
+    correo: row.correo || row.ciudadano_correo || (existing?.correo) || "",
     codigoTransaccion: row.codigo_transaccion || apptId,
-    categoriaNombre: row.categoria_nombre || "Trámites",
-    subServicioNombre: row.sub_servicio_nombre || row.sub_tramite || "",
-    subServicioId: row.sub_servicio_id,
-    servicioCategoria: row.servicioCategoria || row.servicio_categoria || row.tipo_servicio || row.tipo || "",
-    fecha: row.fecha || row.fecha_cita || "",
-    hora: row.tiempo || row.hora || row.hora_cita || "",
-    sucursalNombre: row.sucursal_nombre || "Sucursal",
-    sucursalDireccion: row.sucursal_direccion || "",
-    identificacion: row.ciudadano_identificacion || row.identificacion || "",
-    telefono: row.telefono || row.ciudadano_telefono || "",
-    requisitos: Array.isArray(row.requisitos) ? row.requisitos : [],
-    estado: row.estado || row.estado_cita || 'confirmada',
-    fechaCreacion: row.fecha_creacion || new Date().toISOString(),
-    numeroSeguimiento: row.numero_seguimiento || undefined,
+    categoriaNombre: row.categoria_nombre || (existing?.categoriaNombre) || "Trámites",
+    subServicioNombre: row.sub_servicio_nombre || row.sub_tramite || (existing?.subServicioNombre) || "",
+    subServicioId: row.sub_servicio_id || (existing?.subServicioId),
+    servicioCategoria: row.servicioCategoria || row.servicio_categoria || row.tipo_servicio || row.tipo || (existing?.servicioCategoria) || "",
+    fecha: row.fecha || row.fecha_cita || (existing?.fecha) || "",
+    hora: row.tiempo || row.hora || row.hora_cita || (existing?.hora) || "",
+    sucursalNombre: row.sucursal_nombre || (existing?.sucursalNombre) || "Sucursal",
+    sucursalDireccion: row.sucursal_direccion || (existing?.sucursalDireccion) || "",
+    identificacion: row.ciudadano_identificacion || row.identificacion || (existing?.identificacion) || "",
+    telefono: row.telefono || row.ciudadano_telefono || (existing?.telefono) || "",
+    requisitos: Array.isArray(row.requisitos) ? row.requisitos : (existing?.requisitos || []),
+    estado: row.estado || row.estado_cita || (existing?.estado) || 'confirmada',
+    fechaCreacion: row.fecha_creacion || (existing?.fechaCreacion) || new Date().toISOString(),
+    numeroSeguimiento: row.numero_seguimiento || (existing?.numeroSeguimiento) || undefined,
     datosPersonales: dp,
     nombre: resolvedName,
-    creadoPor: row.creadoPor || (row.data ? row.data.creadoPor : undefined),
-    creadaPorSupervisor: row.creadaPorSupervisor !== undefined ? row.creadaPorSupervisor : (row.data ? row.data.creadaPorSupervisor : undefined),
-    esEspecial: row.esEspecial !== undefined ? row.esEspecial : (row.data ? row.data.esEspecial : undefined),
-    citaEspecial: row.citaEspecial !== undefined ? row.citaEspecial : (row.data ? row.data.citaEspecial : undefined),
-    esCupoAdicional: row.esCupoAdicional !== undefined ? row.esCupoAdicional : (row.data ? row.data.esCupoAdicional : undefined),
-    motivoEspecial: row.motivoEspecial || (row.data ? row.data.motivoEspecial : undefined),
-    numeroCitaDia: row.numeroCitaDia || row.numero_cita_dia || (row.data ? row.data.numeroCitaDia : undefined),
-    resolucion: row.resolucion || (row.data ? row.data.resolucion : undefined)
+    primerNombre: pNombre || undefined,
+    segundoNombre: sNombre || undefined,
+    primerApellido: pApellido || undefined,
+    segundoApellido: sApellido || undefined,
+    pasaporte: dp?.pasaporte || row.pasaporte || undefined,
+    nacionalidad: dp?.nacionalidad || row.nacionalidad || undefined,
+    numeroResolucion: dp?.numeroResolucion || row.numero_resolucion || undefined,
+    fechaResolucion: dp?.fechaResolucion || row.fecha_resolucion || undefined,
+    creadoPor: row.creadoPor || (row.data ? row.data.creadoPor : existing?.creadoPor),
+    creadaPorSupervisor: row.creadaPorSupervisor !== undefined ? row.creadaPorSupervisor : (row.data ? row.data.creadaPorSupervisor : existing?.creadaPorSupervisor),
+    esEspecial: row.esEspecial !== undefined ? row.esEspecial : (row.data ? row.data.esEspecial : existing?.esEspecial),
+    citaEspecial: row.citaEspecial !== undefined ? row.citaEspecial : (row.data ? row.data.citaEspecial : existing?.citaEspecial),
+    esCupoAdicional: row.esCupoAdicional !== undefined ? row.esCupoAdicional : (row.data ? row.data.esCupoAdicional : existing?.esCupoAdicional),
+    motivoEspecial: row.motivoEspecial || (row.data ? row.data.motivoEspecial : existing?.motivoEspecial),
+    numeroCitaDia: row.numeroCitaDia || row.numero_cita_dia || (row.data ? row.data.numeroCitaDia : existing?.numeroCitaDia),
+    resolucion: row.resolucion || (row.data ? row.data.resolucion : existing?.resolucion)
   };
 
   if (existingIdx >= 0) {
@@ -1462,11 +1625,33 @@ async function safeUpsertAppointment(row: any) {
         await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS resolucion VARCHAR(255);`);
         await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sub_tramite VARCHAR(255);`);
         await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sucursal_nombre VARCHAR(255);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS primer_nombre VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS segundo_nombre VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS primer_apellido VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS segundo_apellido VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS pasaporte VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS nacionalidad VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS numero_resolucion VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS fecha_resolucion VARCHAR(50);`);
       } catch (_) {}
 
       await pgPool.query(
-        `INSERT INTO appointments (id, codigo_transaccion, tipo, tramite, sub_tramite, identificacion, nombre, correo, telefono, provincia, distrito, sucursal_id, sucursal_nombre, fecha, hora, estado, data, datos_personales, numero_cita_dia, resolucion)
-         VALUES ($1, $17, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $18, $19, $20)
+        `INSERT INTO appointments (
+           id, codigo_transaccion, tipo, tramite, sub_tramite, 
+           identificacion, nombre, correo, telefono, provincia, distrito, 
+           sucursal_id, sucursal_nombre, fecha, hora, estado, 
+           data, datos_personales, numero_cita_dia, resolucion,
+           primer_nombre, segundo_nombre, primer_apellido, segundo_apellido,
+           pasaporte, nacionalidad, numero_resolucion, fecha_resolucion
+         )
+         VALUES (
+           $1, $17, $2, $3, $4, 
+           $5, $6, $7, $8, $9, $10, 
+           $11, $12, $13, $14, $15, 
+           $16, $18, $19, $20,
+           $21, $22, $23, $24,
+           $25, $26, $27, $28
+         )
          ON CONFLICT (id) DO UPDATE SET
            codigo_transaccion = EXCLUDED.codigo_transaccion,
            tipo = EXCLUDED.tipo, tramite = EXCLUDED.tramite, sub_tramite = EXCLUDED.sub_tramite,
@@ -1474,28 +1659,40 @@ async function safeUpsertAppointment(row: any) {
            telefono = EXCLUDED.telefono, provincia = EXCLUDED.provincia, distrito = EXCLUDED.distrito,
            sucursal_id = EXCLUDED.sucursal_id, sucursal_nombre = EXCLUDED.sucursal_nombre,
            fecha = EXCLUDED.fecha, hora = EXCLUDED.hora, estado = EXCLUDED.estado, data = EXCLUDED.data,
-           datos_personales = EXCLUDED.datos_personales, numero_cita_dia = EXCLUDED.numero_cita_dia, resolucion = EXCLUDED.resolucion`,
+           datos_personales = EXCLUDED.datos_personales, numero_cita_dia = EXCLUDED.numero_cita_dia, resolucion = EXCLUDED.resolucion,
+           primer_nombre = EXCLUDED.primer_nombre, segundo_nombre = EXCLUDED.segundo_nombre,
+           primer_apellido = EXCLUDED.primer_apellido, segundo_apellido = EXCLUDED.segundo_apellido,
+           pasaporte = EXCLUDED.pasaporte, nacionalidad = EXCLUDED.nacionalidad,
+           numero_resolucion = EXCLUDED.numero_resolucion, fecha_resolucion = EXCLUDED.fecha_resolucion`,
         [
           apptId,
-          row.tipo_servicio || row.tipo || '',
-          row.categoria_nombre || row.tramite || '',
-          row.sub_servicio_nombre || row.sub_tramite || '',
-          row.ciudadano_identificacion || row.identificacion || '',
-          row.nombre_completo || row.ciudadano_nombre || row.nombre || '',
-          row.ciudadano_correo || row.correo || '',
-          row.ciudadano_telefono || row.telefono || '',
+          row.tipo_servicio || row.tipo || serverCita.servicioCategoria || '',
+          row.categoria_nombre || row.tramite || serverCita.categoriaNombre || '',
+          row.sub_servicio_nombre || row.sub_tramite || serverCita.subServicioNombre || '',
+          row.ciudadano_identificacion || row.identificacion || serverCita.identificacion || '',
+          resolvedName,
+          row.ciudadano_correo || row.correo || serverCita.correo || '',
+          row.ciudadano_telefono || row.telefono || serverCita.telefono || '',
           row.provincia || '',
           row.distrito || '',
-          row.sucursal_id || '',
-          row.sucursal_nombre || '',
-          row.fecha_cita || row.fecha || '',
-          row.hora_cita || row.hora || '',
-          row.estado_cita || row.estado || 'CONFIRMADA',
-          JSON.stringify(row),
+          row.sucursal_id || serverCita.sucursalId || '',
+          row.sucursal_nombre || serverCita.sucursalNombre || '',
+          row.fecha_cita || row.fecha || serverCita.fecha || '',
+          row.hora_cita || row.hora || serverCita.hora || '',
+          row.estado_cita || row.estado || serverCita.estado || 'CONFIRMADA',
+          JSON.stringify(serverCita),
           row.codigo_transaccion || row.codigoTransaccion || apptId,
-          JSON.stringify(row.datosPersonales || row.datos_personales || {}),
-          row.numero_cita_dia || row.numeroCitaDia || null,
-          row.resolucion || ''
+          JSON.stringify(dp || {}),
+          row.numero_cita_dia || row.numeroCitaDia || serverCita.numeroCitaDia || null,
+          row.resolucion || serverCita.resolucion || '',
+          pNombre || null,
+          sNombre || null,
+          pApellido || null,
+          sApellido || null,
+          dp?.pasaporte || row.pasaporte || null,
+          dp?.nacionalidad || row.nacionalidad || null,
+          dp?.numeroResolucion || row.numero_resolucion || null,
+          dp?.fechaResolucion || row.fecha_resolucion || null
         ]
       );
     } catch (e: any) {
@@ -1507,9 +1704,31 @@ async function safeUpsertAppointment(row: any) {
         await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS resolucion VARCHAR(255);`);
         await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sub_tramite VARCHAR(255);`);
         await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS sucursal_nombre VARCHAR(255);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS primer_nombre VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS segundo_nombre VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS primer_apellido VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS segundo_apellido VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS pasaporte VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS nacionalidad VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS numero_resolucion VARCHAR(100);`);
+        await pgPool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS fecha_resolucion VARCHAR(50);`);
         await pgPool.query(
-          `INSERT INTO appointments (id, codigo_transaccion, tipo, tramite, sub_tramite, identificacion, nombre, correo, telefono, provincia, distrito, sucursal_id, sucursal_nombre, fecha, hora, estado, data, datos_personales, numero_cita_dia, resolucion)
-           VALUES ($1, $17, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $18, $19, $20)
+          `INSERT INTO appointments (
+             id, codigo_transaccion, tipo, tramite, sub_tramite, 
+             identificacion, nombre, correo, telefono, provincia, distrito, 
+             sucursal_id, sucursal_nombre, fecha, hora, estado, 
+             data, datos_personales, numero_cita_dia, resolucion,
+             primer_nombre, segundo_nombre, primer_apellido, segundo_apellido,
+             pasaporte, nacionalidad, numero_resolucion, fecha_resolucion
+           )
+           VALUES (
+             $1, $17, $2, $3, $4, 
+             $5, $6, $7, $8, $9, $10, 
+             $11, $12, $13, $14, $15, 
+             $16, $18, $19, $20,
+             $21, $22, $23, $24,
+             $25, $26, $27, $28
+           )
            ON CONFLICT (id) DO UPDATE SET
              codigo_transaccion = EXCLUDED.codigo_transaccion,
              tipo = EXCLUDED.tipo, tramite = EXCLUDED.tramite, sub_tramite = EXCLUDED.sub_tramite,
@@ -1517,28 +1736,40 @@ async function safeUpsertAppointment(row: any) {
              telefono = EXCLUDED.telefono, provincia = EXCLUDED.provincia, distrito = EXCLUDED.distrito,
              sucursal_id = EXCLUDED.sucursal_id, sucursal_nombre = EXCLUDED.sucursal_nombre,
              fecha = EXCLUDED.fecha, hora = EXCLUDED.hora, estado = EXCLUDED.estado, data = EXCLUDED.data,
-             datos_personales = EXCLUDED.datos_personales, numero_cita_dia = EXCLUDED.numero_cita_dia, resolucion = EXCLUDED.resolucion`,
+             datos_personales = EXCLUDED.datos_personales, numero_cita_dia = EXCLUDED.numero_cita_dia, resolucion = EXCLUDED.resolucion,
+             primer_nombre = EXCLUDED.primer_nombre, segundo_nombre = EXCLUDED.segundo_nombre,
+             primer_apellido = EXCLUDED.primer_apellido, segundo_apellido = EXCLUDED.segundo_apellido,
+             pasaporte = EXCLUDED.pasaporte, nacionalidad = EXCLUDED.nacionalidad,
+             numero_resolucion = EXCLUDED.numero_resolucion, fecha_resolucion = EXCLUDED.fecha_resolucion`,
           [
             apptId,
-            row.tipo_servicio || row.tipo || '',
-            row.categoria_nombre || row.tramite || '',
-            row.sub_servicio_nombre || row.sub_tramite || '',
-            row.ciudadano_identificacion || row.identificacion || '',
-            row.nombre_completo || row.ciudadano_nombre || row.nombre || '',
-            row.ciudadano_correo || row.correo || '',
-            row.ciudadano_telefono || row.telefono || '',
+            row.tipo_servicio || row.tipo || serverCita.servicioCategoria || '',
+            row.categoria_nombre || row.tramite || serverCita.categoriaNombre || '',
+            row.sub_servicio_nombre || row.sub_tramite || serverCita.subServicioNombre || '',
+            row.ciudadano_identificacion || row.identificacion || serverCita.identificacion || '',
+            resolvedName,
+            row.ciudadano_correo || row.correo || serverCita.correo || '',
+            row.ciudadano_telefono || row.telefono || serverCita.telefono || '',
             row.provincia || '',
             row.distrito || '',
-            row.sucursal_id || '',
-            row.sucursal_nombre || '',
-            row.fecha_cita || row.fecha || '',
-            row.hora_cita || row.hora || '',
-            row.estado_cita || row.estado || 'CONFIRMADA',
-            JSON.stringify(row),
+            row.sucursal_id || serverCita.sucursalId || '',
+            row.sucursal_nombre || serverCita.sucursalNombre || '',
+            row.fecha_cita || row.fecha || serverCita.fecha || '',
+            row.hora_cita || row.hora || serverCita.hora || '',
+            row.estado_cita || row.estado || serverCita.estado || 'CONFIRMADA',
+            JSON.stringify(serverCita),
             row.codigo_transaccion || row.codigoTransaccion || apptId,
-            JSON.stringify(row.datosPersonales || row.datos_personales || {}),
-            row.numero_cita_dia || row.numeroCitaDia || null,
-            row.resolucion || ''
+            JSON.stringify(dp || {}),
+            row.numero_cita_dia || row.numeroCitaDia || serverCita.numeroCitaDia || null,
+            row.resolucion || serverCita.resolucion || '',
+            pNombre || null,
+            sNombre || null,
+            pApellido || null,
+            sApellido || null,
+            dp?.pasaporte || row.pasaporte || null,
+            dp?.nacionalidad || row.nacionalidad || null,
+            dp?.numeroResolucion || row.numero_resolucion || null,
+            dp?.fechaResolucion || row.fecha_resolucion || null
           ]
         );
       } catch (retryErr: any) {
@@ -1634,6 +1865,57 @@ async function getDBAppointments(): Promise<ServerCita[]> {
           if (row.data) {
             parsed = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
           }
+          let dpObj = parsed.datosPersonales || parsed.datos_personales || row.datos_personales;
+          if (typeof dpObj === 'string' && dpObj.trim()) {
+            try {
+              dpObj = JSON.parse(dpObj);
+            } catch {}
+          }
+          dpObj = dpObj || {};
+
+          const primerNombre = dpObj.primerNombre || dpObj.primer_nombre || row.primer_nombre || '';
+          const segundoNombre = dpObj.segundoNombre || dpObj.segundo_nombre || row.segundo_nombre || '';
+          const primerApellido = dpObj.primerApellido || dpObj.primer_apellido || row.primer_apellido || '';
+          const segundoApellido = dpObj.segundoApellido || dpObj.segundo_apellido || row.segundo_apellido || '';
+          const pasaporte = dpObj.pasaporte || row.pasaporte || '';
+          const nacionalidad = dpObj.nacionalidad || row.nacionalidad || '';
+          const numeroResolucion = dpObj.numeroResolucion || row.numero_resolucion || '';
+          const fechaResolucion = dpObj.fechaResolucion || row.fecha_resolucion || '';
+
+          // Extract real human name parts from datosPersonales
+          const parts = [
+            primerNombre,
+            segundoNombre,
+            primerApellido,
+            segundoApellido
+          ].map((s: any) => String(s || '').trim()).filter(Boolean);
+          const partsName = parts.length > 0 ? parts.join(' ') : '';
+
+          let realName = '';
+          if (partsName && !isGenericPlaceholderName(partsName)) {
+            realName = partsName;
+          } else if (dpObj.nombreCompleto && !isGenericPlaceholderName(dpObj.nombreCompleto)) {
+            realName = dpObj.nombreCompleto.trim();
+          } else if (row.nombre && !isGenericPlaceholderName(row.nombre)) {
+            realName = row.nombre.trim();
+          } else if (parsed.nombre && !isGenericPlaceholderName(parsed.nombre)) {
+            realName = parsed.nombre.trim();
+          } else {
+            realName = row.nombre || parsed.nombre || (pasaporte ? `Ciudadano (${pasaporte})` : 'Ciudadano');
+          }
+
+          if (dpObj) {
+            dpObj.nombreCompleto = realName;
+            dpObj.primerNombre = primerNombre;
+            dpObj.segundoNombre = segundoNombre;
+            dpObj.primerApellido = primerApellido;
+            dpObj.segundoApellido = segundoApellido;
+            if (pasaporte) dpObj.pasaporte = pasaporte;
+            if (nacionalidad) dpObj.nacionalidad = nacionalidad;
+            if (numeroResolucion) dpObj.numeroResolucion = numeroResolucion;
+            if (fechaResolucion) dpObj.fechaResolucion = fechaResolucion;
+          }
+
           return {
             ...parsed,
             id: row.id || parsed.id,
@@ -1643,7 +1925,15 @@ async function getDBAppointments(): Promise<ServerCita[]> {
             tramite: row.tramite || parsed.tramite,
             subTramite: row.sub_tramite || parsed.subTramite,
             identificacion: row.identificacion || parsed.identificacion,
-            nombre: row.nombre || parsed.nombre,
+            nombre: realName,
+            primerNombre,
+            segundoNombre,
+            primerApellido,
+            segundoApellido,
+            pasaporte,
+            nacionalidad,
+            numeroResolucion,
+            fechaResolucion,
             correo: row.correo || parsed.correo,
             telefono: row.telefono || parsed.telefono,
             provincia: row.provincia || parsed.provincia,
@@ -1653,7 +1943,7 @@ async function getDBAppointments(): Promise<ServerCita[]> {
             fecha: row.fecha || parsed.fecha,
             hora: row.hora || parsed.hora,
             estado: row.estado || parsed.estado,
-            datosPersonales: parsed.datosPersonales || parsed.datos_personales || row.datos_personales
+            datosPersonales: dpObj
           };
         });
       }
@@ -1886,6 +2176,11 @@ interface ActiveSession {
 
 const activeSessions: Record<string, ActiveSession> = {};
 
+function generateSecureSessionToken(): string {
+  // 32 bytes (256 bits) of cryptographically secure random entropy
+  return "sess_" + crypto.randomBytes(32).toString("hex");
+}
+
 async function verifySession(req: any): Promise<boolean> {
   try {
     const authHeader = req.headers.authorization;
@@ -1895,24 +2190,15 @@ async function verifySession(req: any): Promise<boolean> {
     const token = authHeader.substring(7).trim();
     if (!token) return false;
     
-    // Master tokens / direct administration access
-    const allowedMasterTokens = new Set<string>();
-    
+    // Master tokens only permitted if explicitly set in environment with sufficient entropy (min 32 chars)
     if (process.env.ADMIN_MASTER_TOKEN) {
-      // If a custom ADMIN_MASTER_TOKEN is configured (highly recommended in production),
-      // we only accept tokens defined there to secure the applet.
+      const allowedMasterTokens = new Set<string>();
       process.env.ADMIN_MASTER_TOKEN.split(",").map(t => t.trim()).forEach(t => {
-        if (t) allowedMasterTokens.add(t);
+        if (t && t.length >= 32) allowedMasterTokens.add(t);
       });
-    } else {
-      // Fallback for local development or default setups
-      allowedMasterTokens.add("te_admin_master");
-      allowedMasterTokens.add("superadmin_token");
-      allowedMasterTokens.add("admin_token");
-    }
-
-    if (allowedMasterTokens.has(token)) {
-      return true;
+      if (allowedMasterTokens.has(token)) {
+        return true;
+      }
     }
 
     const session = activeSessions[token];
@@ -1939,25 +2225,37 @@ async function verifyAdminSession(req: any, res: any, next: any) {
   next();
 }
 
-const rateLimitStore: Record<string, { count: number; resetTime: number }> = {};
+const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
+
+// Periodic garbage collection every 5 minutes to prevent memory exhaustion / DoS
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of rateLimitStore.entries()) {
+    if (now > record.resetTime) {
+      rateLimitStore.delete(key);
+    }
+  }
+}, 5 * 60 * 1000).unref();
 
 function rateLimiter(maxRequests: number, windowMs: number) {
   return (req: any, res: any, next: any) => {
-    const rawIp = req.ip || req.headers["x-forwarded-for"] || "unknown";
-    const ip = Array.isArray(rawIp) ? rawIp[0] : String(rawIp).split(",")[0].trim();
+    const rawIp = req.ip || (req.headers["x-forwarded-for"] ? String(req.headers["x-forwarded-for"]).split(",")[0].trim() : "127.0.0.1");
+    const ip = String(rawIp || "127.0.0.1").trim();
     const now = Date.now();
     
-    if (!rateLimitStore[ip] || now > rateLimitStore[ip].resetTime) {
-      rateLimitStore[ip] = {
+    const record = rateLimitStore.get(ip);
+    if (!record || now > record.resetTime) {
+      rateLimitStore.set(ip, {
         count: 1,
         resetTime: now + windowMs
-      };
+      });
       return next();
     }
     
-    rateLimitStore[ip].count += 1;
+    record.count += 1;
     
-    if (rateLimitStore[ip].count > maxRequests) {
+    if (record.count > maxRequests) {
+      res.setHeader("Retry-After", Math.ceil((record.resetTime - now) / 1000));
       return res.status(429).json({
         success: false,
         error: "Demasiadas peticiones desde esta dirección IP. Por favor intente más tarde."
@@ -1987,7 +2285,7 @@ async function startServer() {
     }
   }
 
-  const PORT = process.env.PORT || process.env.APP_PORT || process.env.SERVER_PORT || process.env.HTTP_PORT || cliPort || "8080";
+  const PORT = process.env.PORT || process.env.APP_PORT || process.env.SERVER_PORT || process.env.HTTP_PORT || cliPort || "3000";
 
   // Configuración de Helmet para inyectar cabeceras de seguridad estándar de forma automática (CSP, XSS, etc.)
   app.use(
@@ -1995,7 +2293,7 @@ async function startServer() {
       contentSecurityPolicy: {
         directives: {
           ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-          "frame-ancestors": ["'self'", "https://*.google.com", "https://*.run.app", "https://ai.studio", "https://aistudio.google", "*"],
+          "frame-ancestors": ["'self'", "https://*.google.com", "https://*.run.app", "https://ai.studio", "https://aistudio.google"],
           "script-src": ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
           "connect-src": ["'self'", "https://*", "http://*", "ws://*", "wss://*"],
           "img-src": ["'self'", "data:", "https://*", "http://*"],
@@ -2217,7 +2515,27 @@ async function startServer() {
       });
       
       if (foundUser) {
-        const token = "session_" + Math.random().toString(36).substring(2) + Date.now().toString(36);
+        // Automatically upgrade password to secure PBKDF2 format if it is still legacy/plaintext
+        if (foundUser.password && !isHashSecure(foundUser.password)) {
+          const secureHash = hashPasswordSecure(password);
+          foundUser.password = secureHash;
+          
+          saveUsers(users);
+          
+          if (isPgConfigured && pgPool && isPgAvailable) {
+            try {
+              await pgPool.query(
+                `UPDATE usuarios SET password = $1 WHERE LOWER(username) = $2`,
+                [secureHash, foundUser.username.toLowerCase()]
+              );
+              console.log(`[Security Upgrade] Successfully upgraded password for ${foundUser.username} to cryptographically secure PBKDF2.`);
+            } catch (pgErr: any) {
+              console.error(`[Security Upgrade Error] Failed to update PostgreSQL password for ${foundUser.username}:`, pgErr.message);
+            }
+          }
+        }
+
+        const token = generateSecureSessionToken();
         activeSessions[token] = {
           username: foundUser.username,
           role: foundUser.role,
@@ -2237,19 +2555,9 @@ async function startServer() {
       }
 
       // Hardcoded fallback accounts for backward-compatibility in case table/seeding isn't fully operational
-      const fallbackAdmins = [
-        { u: "login", p: "login", r: "super", n: "Usuario Inicial", s: "OFF-1", mcp: true },
+      const fallbackAdmins: { u: string; p: string; r: string; n: string; s: string; mcp?: boolean }[] = [
         { u: "superadmin", p: "superadmin", r: "super", n: "Administrador Central", s: "OFF-1" },
-        { u: "rsanchez", p: "rsanchez", r: "super", n: "Ricardo Sánchez (Supervisor Sede Ancón)", s: "OFF-1" },
-        { u: "amora", p: "amora", r: "super", n: "Ana María Mora (Supervisor Regional Bocas)", s: "OFF-2" },
-        { u: "mcruz", p: "mcruz", r: "agent_caja", n: "Mateo Cruz (Cajero Sede Ancón)", s: "OFF-1" },
-        { u: "jgutierrez", p: "jgutierrez", r: "agent_triada", n: "Julia Gutiérrez (Tríada Sede Ancón)", s: "OFF-1" },
-        { u: "frios", p: "frios", r: "agent_caja", n: "Felipe Ríos (Cajero Bocas del Toro)", s: "OFF-2" },
-        { u: "spadilla", p: "spadilla", r: "agent_triada", n: "Silvia Padilla (Tríada Bocas del Toro)", s: "OFF-2" },
-        { u: "adminmini", p: "admin1234", r: "sencillo", n: "Administrador Mini", s: "OFF-1" },
         { u: "adminte", p: "Value1234", r: "super", n: "Super Admin Tribal", s: "OFF-1" },
-        { u: "oscargave3003", p: "Value1234", r: "super", n: "Oscar Super Admin", s: "OFF-1" },
-        { u: "oscargave3003@gmail.com", p: "Value1234", r: "super", n: "Oscar Super Admin Email", s: "OFF-1" },
         { u: "migra26", p: "12345678", r: "extranjeria", n: "Inmigración / Extranjería", s: "OFF-1" },
         { u: "adminpedad", p: "PasaDodeEdad2026", r: "pasado_edad", n: "Administrador VID", s: "OFF-1" },
         { u: "adminpe_sup", p: "1234", r: "pasado_edad_supervisor", n: "Supervisor VID", s: "OFF-1" },
@@ -2257,8 +2565,6 @@ async function startServer() {
         { u: "supermigra", p: "1234", r: "extranjeria_supervisor", n: "Supervisor de Extranjería", s: "OFF-1" },
         { u: "atencionmigra", p: "1234", r: "extranjeria_atencion", n: "Atendimiento Entrada Extranjería", s: "OFF-1" },
         { u: "cubiculomigra", p: "1234", r: "extranjeria_cubiculo", n: "Cubículo Ticket Extranjería", s: "OFF-1" },
-        { u: "supertriada", p: "1234", r: "triada_supervisor", n: "Supervisor de Tríada y Foto", s: "OFF-1" },
-        { u: "supercaja", p: "1234", r: "caja_supervisor", n: "Supervisor de Caja y Pagos", s: "OFF-1" },
         { u: "superit", p: "1234", r: "pasado_edad", n: "SuperIT - Supervisor Inscripción Tardía", s: "OFF-1" }
       ];
 
@@ -2267,7 +2573,7 @@ async function startServer() {
         verifyPassword(password, f.p)
       );
       if (fallbackMatch) {
-        const token = "session_" + Math.random().toString(36).substring(2) + Date.now().toString(36);
+        const token = generateSecureSessionToken();
         activeSessions[token] = {
           username: fallbackMatch.u,
           role: fallbackMatch.r,
@@ -2290,6 +2596,24 @@ async function startServer() {
     } catch (e: any) {
       console.error("Error during /api/login:", e);
       return res.status(500).json({ success: false, error: "Ocurrió un error interno en el servidor" });
+    }
+  });
+
+  // Endpoint to invalidate session tokens on logout
+  app.post("/api/logout", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        const token = authHeader.substring(7).trim();
+        if (token && activeSessions[token]) {
+          delete activeSessions[token];
+          console.log(`[Security] Session token successfully invalidated on server.`);
+        }
+      }
+      return res.json({ success: true, message: "Sesión cerrada correctamente." });
+    } catch (e: any) {
+      console.error("Error during /api/logout:", e);
+      return res.status(500).json({ success: false, error: e.message });
     }
   });
 
@@ -2322,26 +2646,55 @@ async function startServer() {
       if (codigoTransaccion) {
         const appointments = await getDBAppointments();
         const existingIdx = appointments.findIndex(a => a.id === id || a.codigoTransaccion === codigoTransaccion);
+        const existing = existingIdx >= 0 ? appointments[existingIdx] : null;
+
+        const dp = req.body.datosPersonales || existing?.datosPersonales || undefined;
+        const dpParts = dp ? [
+          dp.primerNombre || '',
+          dp.segundoNombre || '',
+          dp.primerApellido || '',
+          dp.segundoApellido || ''
+        ].map((s: any) => String(s || '').trim()).filter(Boolean) : [];
+        const dpPartsName = dpParts.length > 0 ? dpParts.join(' ') : '';
+
+        let resolvedCitizenName = '';
+        if (dpPartsName && !isGenericPlaceholderName(dpPartsName)) {
+          resolvedCitizenName = dpPartsName;
+        } else if (dp?.nombreCompleto && !isGenericPlaceholderName(dp.nombreCompleto)) {
+          resolvedCitizenName = dp.nombreCompleto.trim();
+        } else if (req.body.nombre && !isGenericPlaceholderName(req.body.nombre)) {
+          resolvedCitizenName = req.body.nombre.trim();
+        } else if (existing?.nombre && !isGenericPlaceholderName(existing.nombre)) {
+          resolvedCitizenName = existing.nombre.trim();
+        } else if (dp?.pasaporte) {
+          resolvedCitizenName = `Ciudadano (${dp.pasaporte})`;
+        } else {
+          resolvedCitizenName = 'Ciudadano';
+        }
+
+        if (dp) {
+          dp.nombreCompleto = resolvedCitizenName;
+        }
         
         const serverCita: ServerCita = {
-          id: id || `TE-${Date.now()}`,
-          correo: email || "",
-          codigoTransaccion: codigoTransaccion,
-          categoriaNombre: categoriaNombre || "",
-          subServicioNombre: subServicioNombre || "",
-          subServicioId: req.body.subServicioId || undefined,
-          fecha: fecha || new Date().toISOString().split('T')[0],
-          hora: hora || "",
-          sucursalNombre: sucursalNombre || "",
-          sucursalDireccion: sucursalDireccion || "",
-          identificacion: identificacion || "",
-          telefono: telefono || "",
-          requisitos: requisitos || [],
+          id: id || existing?.id || `TE-${Date.now()}`,
+          correo: email || existing?.correo || "",
+          codigoTransaccion: codigoTransaccion || existing?.codigoTransaccion,
+          categoriaNombre: categoriaNombre || existing?.categoriaNombre || "",
+          subServicioNombre: subServicioNombre || existing?.subServicioNombre || "",
+          subServicioId: req.body.subServicioId || existing?.subServicioId || undefined,
+          fecha: fecha || existing?.fecha || new Date().toISOString().split('T')[0],
+          hora: hora || existing?.hora || "",
+          sucursalNombre: sucursalNombre || existing?.sucursalNombre || "",
+          sucursalDireccion: sucursalDireccion || existing?.sucursalDireccion || "",
+          identificacion: identificacion || existing?.identificacion || "",
+          telefono: telefono || existing?.telefono || "",
+          requisitos: (requisitos && requisitos.length > 0) ? requisitos : (existing?.requisitos || []),
           estado: existingIdx >= 0 ? appointments[existingIdx].estado : 'confirmada',
           fechaCreacion: existingIdx >= 0 ? appointments[existingIdx].fechaCreacion : new Date().toISOString(),
-          numeroSeguimiento: numeroSeguimiento || undefined,
-          datosPersonales: req.body.datosPersonales || undefined,
-          nombre: req.body.nombre || (req.body.datosPersonales?.nombreCompleto) || ""
+          numeroSeguimiento: numeroSeguimiento || existing?.numeroSeguimiento || undefined,
+          datosPersonales: dp,
+          nombre: resolvedCitizenName
         };
 
         await safeUpsertAppointment({
@@ -3000,29 +3353,32 @@ async function startServer() {
   // Extranjería Workflow Metadata (documents verified, supervisor passed, cubicle assigned, ticket state)
   const EXTRANJERIA_METADATA_FILE = path.join(process.cwd(), "extranjeria-metadata.json");
 
+  let cachedExtranjeriaMeta: Record<string, any> | null = null;
+  let cachedExtranjeriaMetaMtime = 0;
+
   function getExtranjeriaWorkflowMetadata(): Record<string, any> {
     try {
       if (fs.existsSync(EXTRANJERIA_METADATA_FILE)) {
+        const stat = fs.statSync(EXTRANJERIA_METADATA_FILE);
+        if (cachedExtranjeriaMeta && stat.mtimeMs === cachedExtranjeriaMetaMtime) {
+          return cachedExtranjeriaMeta;
+        }
         const raw = fs.readFileSync(EXTRANJERIA_METADATA_FILE, "utf-8");
-        return JSON.parse(raw);
+        cachedExtranjeriaMeta = JSON.parse(raw);
+        cachedExtranjeriaMetaMtime = stat.mtimeMs;
+        return cachedExtranjeriaMeta;
       }
     } catch (e) {
       console.warn("Could not read extranjeria metadata file:", e);
     }
-    return {
-      "EXT-20260908-101": {
-        hasDocuments: true,
-        checkedDocs: ["req_precio", "req_cita", "req_nota_migracion", "req_carne_migracion", "req_pasaporte_generales"],
-        passedToSupervisor: true,
-        assignedCubiculo: null,
-        estadoTicket: "ninguno"
-      }
-    };
+    return cachedExtranjeriaMeta || {};
   }
 
   function saveExtranjeriaWorkflowMetadata(data: Record<string, any>): void {
     try {
       fs.writeFileSync(EXTRANJERIA_METADATA_FILE, JSON.stringify(data, null, 2), "utf-8");
+      cachedExtranjeriaMeta = data;
+      cachedExtranjeriaMetaMtime = Date.now();
     } catch (e) {
       console.error("Could not write extranjeria metadata file:", e);
     }
@@ -3037,7 +3393,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/extranjeria/metadata", (req, res) => {
+  app.post("/api/extranjeria/metadata", verifyAdminSession, (req, res) => {
     try {
       const incoming = req.body.metadata || req.body;
       if (!incoming || typeof incoming !== "object") {
@@ -3047,6 +3403,46 @@ async function startServer() {
       const updated = { ...existing, ...incoming };
       saveExtranjeriaWorkflowMetadata(updated);
       return res.json({ success: true, metadata: updated });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: getSafeErrorMessage(e) });
+    }
+  });
+
+  // Public endpoint for Extranjería waiting room and TV screens to get appointments with real citizen names
+  app.get("/api/extranjeria/appointments", async (req, res) => {
+    try {
+      const all = await getDBAppointments();
+      const targetDateQuery = req.query.date ? String(req.query.date).trim() : null;
+
+      const filtered = all.filter(a => {
+        const cat = (a.servicioCategoria || "").toLowerCase();
+        const id = String(a.id || "").toUpperCase();
+        const tx = String(a.codigoTransaccion || "").toUpperCase();
+        const sub = String(a.subServicioNombre || "").toLowerCase();
+        const creado = String(a.creadoPor || "").toLowerCase();
+        const isExt = (
+          cat === "extranjeria" ||
+          id.startsWith("EXT-") ||
+          tx.startsWith("EXT-") ||
+          sub.includes("extranj") ||
+          creado.includes("extranjer")
+        );
+        if (!isExt) return false;
+
+        if (targetDateQuery) {
+          const appDate = standardizeServerDate(a.fecha || "");
+          if (targetDateQuery.toLowerCase() === "today") {
+            const now = new Date();
+            const panamaLocal = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+            const todayPanama = panamaLocal.toISOString().substring(0, 10);
+            return appDate === todayPanama;
+          }
+          return appDate === standardizeServerDate(targetDateQuery);
+        }
+
+        return true;
+      });
+      return res.json({ success: true, appointments: filtered });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: getSafeErrorMessage(e) });
     }
@@ -3095,7 +3491,7 @@ async function startServer() {
     try {
       const statusResponse: any = {
         isAzurePostgresConfigured: isPgConfigured,
-        azurePostgresDatabase: activeDbTarget || process.env.PGDATABASE || "bdprueba",
+        azurePostgresDatabase: activeDbTarget || process.env.PGDATABASE || "postgres",
         azurePostgresUser: process.env.PGUSER || (pgConnectionString ? "usuario_admin" : ""),
         azurePostgresHost: process.env.PGHOST || (pgConnectionString ? "postgresql-flexible-server.postgres.database.azure.com" : ""),
         storage: "Azure PostgreSQL / Local Storage JSON"
@@ -3304,18 +3700,24 @@ async function startServer() {
       const isSupervisorAuth = await verifySession(req);
       const isSupervisorSpecial = hasSupervisorSpecialFlags && isSupervisorAuth;
 
-      // Enforce capacity check for Extranjeria appointments (unless it's an authorized supervisor special appointment)
-      const isExtranjeria = servicioCategoria === 'extranjeria' || 
-        (subServicioId && (subServicioId.includes('extranjero') || subServicioId.startsWith('ext_')));
+      // Enforce capacity check for Extranjeria Primera Vez appointments (unless it's an authorized supervisor special appointment)
+      // Duplicate and Renewal are treated as general/standard appointments
+      const isExtranjeriaPrimeraVez = subServicioId === 'ext_primera_vez' || 
+        req.body.sub_servicio_id === 'ext_primera_vez' ||
+        (String(categoriaNombre || servicioCategoria || '').toLowerCase().includes('extranjeria') && 
+         String(subServicioNombre || '').toLowerCase().includes('primera vez'));
       
-      if (isExtranjeria && !isSupervisorSpecial) {
+      // Extranjería capacity enforcement:
+      // Regular web bookings: strictly 56 appointments max per day, within 07:00 AM - 01:45 PM
+      // Supervisor appointments: up to 15 additional extra appointments (total daily capacity: 71), permitted in ANY schedule
+      if (isExtranjeriaPrimeraVez && !isSupervisorSpecial) {
         const config = getExtranjeriaConfig();
         const isNewBooking = appointments.findIndex(a => a.id === id) < 0;
 
         // 1. Strict daily capacity: Regular web bookings cannot exceed 56 appointments per day
         const activeDailyCitas = appointments.filter(a =>
           a.fecha === fecha &&
-          (a.categoriaNombre === 'extranjeria' || (a.subServicioNombre && (a.subServicioNombre.includes('extranjero') || a.subServicioNombre.toLowerCase().includes('extranjeria')))) &&
+          (a.subServicioId === 'ext_primera_vez' || (a.subServicioNombre && a.subServicioNombre.toLowerCase().includes('primera vez'))) &&
           a.estado !== 'cancelada' &&
           !a.esEspecial &&
           !a.citaEspecial &&
@@ -3342,22 +3744,33 @@ async function startServer() {
         }
       }
 
-      // Enforce 30 maximum special appointments per day for Extranjeria supervisor creations
-      if (isExtranjeria && isSupervisorSpecial) {
-        const isNewBooking = appointments.findIndex(a => a.id === id) < 0;
-        const activeSpecialCitas = appointments.filter(a =>
-          a.fecha === fecha &&
-          (a.categoriaNombre === 'extranjeria' || (a.subServicioNombre && (a.subServicioNombre.includes('extranjero') || a.subServicioNombre.toLowerCase().includes('extranjeria')))) &&
-          a.estado !== 'cancelada' &&
-          (a.esEspecial || a.citaEspecial || a.esCupoAdicional || a.creadaPorSupervisor)
-        );
+      // Enforce 15 maximum special appointments per day for Extranjeria supervisor creations (total 71 daily appointments: 56 web + 15 supervisor)
+      const isExtranjeriaAppt = servicioCategoria === 'extranjeria' || 
+        String(categoriaNombre || '').toLowerCase().includes('extranj') || 
+        String(subServicioId || '').startsWith('ext_') || 
+        String(subServicioNombre || '').toLowerCase().includes('extranj') ||
+        String(subServicioNombre || '').toLowerCase().includes('residente');
 
-        if (isNewBooking && activeSpecialCitas.length >= 30) {
+      if (isExtranjeriaAppt && isSupervisorSpecial) {
+        const isNewBooking = appointments.findIndex(a => a.id === id) < 0;
+        // Total count of special appointments on that date across ALL supervisors
+        const activeSpecialCitas = appointments.filter(a => {
+          if (a.fecha !== fecha || a.estado === 'cancelada') return false;
+          const aIsExt = a.servicioCategoria === 'extranjeria' || 
+            String(a.categoriaNombre || '').toLowerCase().includes('extranj') || 
+            String(a.subServicioId || '').startsWith('ext_') || 
+            String(a.subServicioNombre || '').toLowerCase().includes('extranj') ||
+            String(a.subServicioNombre || '').toLowerCase().includes('residente');
+          return aIsExt && (a.esEspecial || a.citaEspecial || a.esCupoAdicional || a.creadaPorSupervisor);
+        });
+
+        if (isNewBooking && activeSpecialCitas.length >= 15) {
           return res.status(400).json({
             success: false,
-            error: `Límite de cupos especiales alcanzado. El máximo permitido de citas especiales adicionales creadas por supervisores para el día ${fecha} es de 30 citas.`
+            error: `Límite global de cupos especiales alcanzado para el día ${fecha}. El cupo máximo permitido es de 15 citas especiales adicionales de supervisión (capacidad máxima total de la jornada ampliada: 71 citas).`
           });
         }
+        // Supervisors are permitted to generate appointments in ANY schedule without overlap blocking
       }
 
       // Enforce daily capacity, days of the week, and hours check for Pasados de Edad
@@ -3413,63 +3826,86 @@ async function startServer() {
         }
       }
 
-      const existingIdx = appointments.findIndex(a => a.id === id || a.codigoTransaccion === codigoTransaccion);
+      // 3. Enforce general/standard pool capacity check (limit of exactly 1 appointment per slot)
+      const isGeneralPool = !isExtranjeriaPrimeraVez && !isPastAge;
+      if (isGeneralPool && !isSupervisorSpecial) {
+        const isNewBooking = appointments.findIndex(a => a.id === id) < 0;
+        const hourlyGeneralCitas = appointments.filter(a => 
+          a.fecha === fecha && 
+          a.hora === hora && 
+          a.estado !== 'cancelada' &&
+          // do not count Extranjeria first-time as they have their own pool/booths
+          a.subServicioId !== 'ext_primera_vez' &&
+          !(a.subServicioNombre && a.subServicioNombre.toLowerCase().includes('primera vez')) &&
+          // do not count Pasados de Edad either as they have their own custom slots and rules
+          a.subServicioId !== 'ced_pasados_edad' &&
+          !(a.subServicioNombre?.toLowerCase().includes('pasado') || a.subServicioNombre?.toLowerCase().includes('tardía'))
+        );
 
-      const regParts = datosPersonales ? [
-        datosPersonales.primerNombre || '',
-        datosPersonales.segundoNombre || '',
-        datosPersonales.primerApellido || '',
-        datosPersonales.segundoApellido || ''
-      ].map((s: any) => String(s || '').trim()).filter(Boolean) : [];
-      const regPartsName = regParts.length > 0 ? regParts.join(' ') : '';
-
-      const emailForApp = datosPersonales?.correo || req.body.correo || '';
-      let emailExtractedName = '';
-      if (emailForApp && typeof emailForApp === 'string' && emailForApp.includes('@')) {
-        const local = emailForApp.split('@')[0].trim().toLowerCase();
-        if (!['admin', 'soporte', 'extranjeria', 'info', 'contacto', 'noreply'].some(p => local.startsWith(p))) {
-          let cleaned = local.replace(/[\._\-\+]/g, ' ').replace(/[0-9]/g, ' ').replace(/\s+/g, ' ').trim();
-          const words = cleaned.split(' ').filter(Boolean);
-          if (words.length >= 2) {
-            emailExtractedName = words.map(w => w.length === 1 ? w.toUpperCase() + '.' : w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-          } else if (words.length === 1) {
-            const single = words[0];
-            const COMMON_NAMES = ['jovanna', 'jovana', 'manuel', 'carlos', 'maria', 'juan', 'jose', 'ana', 'pedro', 'luis', 'david', 'elena'];
-            for (const fn of COMMON_NAMES) {
-              if (single.startsWith(fn) && single.length > fn.length) {
-                const first = fn.charAt(0).toUpperCase() + fn.slice(1);
-                const rest = single.slice(fn.length);
-                const restCap = rest.length === 1 ? rest.toUpperCase() + '.' : rest.charAt(0).toUpperCase() + rest.slice(1);
-                emailExtractedName = `${first} ${restCap}`.trim();
-                break;
-              }
-            }
-            if (!emailExtractedName && single.length >= 3) {
-              emailExtractedName = single.charAt(0).toUpperCase() + single.slice(1);
-            }
-          }
+        if (isNewBooking && hourlyGeneralCitas.length >= 1) {
+          return res.status(400).json({
+            success: false,
+            error: `El cupo de las ${hora} el día ${fecha} ya se encuentra reservado en el sistema de citas generales. Por favor, seleccione otro horario.`
+          });
         }
       }
 
-      const isPlaceholderCheck = (n: any) => {
-        if (!n || typeof n !== 'string') return true;
-        const c = n.trim().toUpperCase();
-        return ['N/D', 'N/A', 'SIN NOMBRE', 'CIUDADANO N/D', 'NULL', 'UNDEFINED', 'NO APLICA'].includes(c) ||
-          c === 'CIUDADANO' || c === 'CIUDADANO EXTRANJERO' || /^CIUDADANO\s*\(.*\)$/i.test(c);
+      const existingIdx = appointments.findIndex(a => a.id === id || a.codigoTransaccion === codigoTransaccion);
+
+      const bodyDp = datosPersonales || req.body.datosPersonales || req.body.datos_personales || {};
+      const regPrimerNombre = bodyDp.primerNombre || req.body.primerNombre || req.body.primer_nombre || '';
+      const regSegundoNombre = bodyDp.segundoNombre || req.body.segundoNombre || req.body.segundo_nombre || '';
+      const regPrimerApellido = bodyDp.primerApellido || req.body.primerApellido || req.body.primer_apellido || '';
+      const regSegundoApellido = bodyDp.segundoApellido || req.body.segundoApellido || req.body.segundo_apellido || '';
+
+      const regParts = [
+        regPrimerNombre,
+        regSegundoNombre,
+        regPrimerApellido,
+        regSegundoApellido
+      ].map((s: any) => String(s || '').trim()).filter(Boolean);
+      const regPartsName = regParts.length > 0 ? regParts.join(' ') : '';
+
+      const emailForApp = bodyDp.correo || req.body.correo || '';
+      let emailExtractedName = '';
+
+      let finalCitizenName = '';
+      if (regPartsName && !isGenericPlaceholderName(regPartsName)) {
+        finalCitizenName = regPartsName;
+      } else if (bodyDp.nombreCompleto && !isGenericPlaceholderName(bodyDp.nombreCompleto)) {
+        finalCitizenName = bodyDp.nombreCompleto.trim();
+      } else if (bodyDp.nombre_completo && !isGenericPlaceholderName(bodyDp.nombre_completo)) {
+        finalCitizenName = bodyDp.nombre_completo.trim();
+      } else if (req.body.nombre && !isGenericPlaceholderName(req.body.nombre)) {
+        finalCitizenName = req.body.nombre.trim();
+      } else if (req.body.nombreCompleto && !isGenericPlaceholderName(req.body.nombreCompleto)) {
+        finalCitizenName = req.body.nombreCompleto.trim();
+      } else if (existingIdx >= 0 && appointments[existingIdx].nombre && !isGenericPlaceholderName(appointments[existingIdx].nombre)) {
+        finalCitizenName = appointments[existingIdx].nombre.trim();
+      } else if (bodyDp.pasaporte) {
+        finalCitizenName = `Ciudadano (${bodyDp.pasaporte})`;
+      } else if (req.body.identificacion) {
+        finalCitizenName = `Ciudadano (${req.body.identificacion})`;
+      } else {
+        finalCitizenName = 'Ciudadano';
+      }
+
+      const sanitizedDatosPersonales = {
+        ...bodyDp,
+        primerNombre: regPrimerNombre || undefined,
+        segundoNombre: regSegundoNombre || undefined,
+        primerApellido: regPrimerApellido || undefined,
+        segundoApellido: regSegundoApellido || undefined,
+        nombreCompleto: finalCitizenName
       };
 
-      const finalCitizenName = (!isPlaceholderCheck(datosPersonales?.nombreCompleto) ? datosPersonales?.nombreCompleto.trim() : '') ||
-        (!isPlaceholderCheck(req.body.nombre) ? req.body.nombre.trim() : '') ||
-        (!isPlaceholderCheck(regPartsName) ? regPartsName : '') ||
-        emailExtractedName ||
-        (datosPersonales?.pasaporte ? `Ciudadano (${datosPersonales.pasaporte})` : '') || '';
-      if (datosPersonales && !datosPersonales.nombreCompleto && finalCitizenName) {
-        datosPersonales.nombreCompleto = finalCitizenName;
-      }
+      const finalCreadoPor = isSupervisorAuth 
+        ? (creadoPor || bodyDp.creadoPor || "Portal Web (Ciudadano)") 
+        : "Portal Web (Ciudadano)";
 
       const serverCita: ServerCita = {
         id,
-        correo: datosPersonales?.correo || req.body.correo || "",
+        correo: bodyDp.correo || req.body.correo || "",
         codigoTransaccion,
         categoriaNombre: categoriaNombre || servicioCategoria || "Trámite",
         subServicioNombre: subServicioNombre || subServicioId || "Servicio",
@@ -3478,26 +3914,34 @@ async function startServer() {
         hora,
         sucursalNombre: sucursalNombre || sucursalId || "Sucursal",
         sucursalDireccion: sucursalDireccion || "",
-        identificacion: datosPersonales?.identificacion || req.body.identificacion || "",
-        telefono: datosPersonales?.telefono || req.body.telefono || "",
+        identificacion: bodyDp.pasaporte || bodyDp.identificacion || req.body.identificacion || "",
+        telefono: bodyDp.telefono || req.body.telefono || "",
         requisitos: requisitos || [],
         estado: estado || "confirmada",
         fechaCreacion: fechaCreacion || new Date().toISOString(),
-        numeroSeguimiento: datosPersonales?.numeroSeguimiento || req.body.numeroSeguimiento || undefined,
-        datosPersonales: datosPersonales || undefined,
+        numeroSeguimiento: bodyDp.numeroSeguimiento || req.body.numeroSeguimiento || undefined,
+        datosPersonales: sanitizedDatosPersonales,
         nombre: finalCitizenName,
-        creadoPor: creadoPor || datosPersonales?.creadoPor || undefined,
-        creadaPorSupervisor: isSupervisorSpecial || Boolean(req.body.creadaPorSupervisor || datosPersonales?.creadaPorSupervisor),
-        esEspecial: isSupervisorSpecial || Boolean(req.body.esEspecial || req.body.citaEspecial || datosPersonales?.esEspecial),
-        citaEspecial: isSupervisorSpecial || Boolean(req.body.citaEspecial || datosPersonales?.citaEspecial),
-        esCupoAdicional: isSupervisorSpecial || Boolean(req.body.esCupoAdicional || datosPersonales?.esCupoAdicional),
-        motivoEspecial: req.body.motivoEspecial || datosPersonales?.motivoEspecial || undefined,
-        numeroCitaDia: req.body.numeroCitaDia || datosPersonales?.numeroCitaDia || undefined,
-        resolucion: req.body.resolucion || datosPersonales?.numeroResolucion || undefined
+        primerNombre: sanitizedDatosPersonales.primerNombre,
+        segundoNombre: sanitizedDatosPersonales.segundoNombre,
+        primerApellido: sanitizedDatosPersonales.primerApellido,
+        segundoApellido: sanitizedDatosPersonales.segundoApellido,
+        pasaporte: sanitizedDatosPersonales.pasaporte,
+        nacionalidad: sanitizedDatosPersonales.nacionalidad,
+        creadoPor: finalCreadoPor,
+        creadaPorSupervisor: isSupervisorSpecial,
+        esEspecial: isSupervisorSpecial,
+        citaEspecial: isSupervisorSpecial,
+        esCupoAdicional: isSupervisorSpecial,
+        motivoEspecial: isSupervisorSpecial ? (req.body.motivoEspecial || bodyDp.motivoEspecial || undefined) : undefined,
+        numeroCitaDia: req.body.numeroCitaDia || bodyDp.numeroCitaDia || undefined,
+        resolucion: req.body.resolucion || bodyDp.numeroResolucion || undefined
       };
 
       await safeUpsertAppointment({
-        identificacion: serverCita.id,
+        id: serverCita.id,
+        identificacion: serverCita.identificacion,
+        ciudadano_identificacion: serverCita.identificacion,
         codigo_transaccion: serverCita.codigoTransaccion,
         fecha: serverCita.fecha,
         tiempo: serverCita.hora,
@@ -3505,9 +3949,8 @@ async function startServer() {
         estado: existingIdx >= 0 ? appointments[existingIdx].estado : serverCita.estado,
         sucursal_id: sucursalId || "anc_main",
         sub_servicio_id: subServicioId || "ced_primera_vez",
-        tipo_identificacion: serverCita.datosPersonales?.tipoIdentificacion || "Cedula",
+        tipo_identificacion: serverCita.datosPersonales?.tipoIdentificacion || ((servicioCategoria === 'extranjeria' || subServicioId?.startsWith('ext_')) ? "Pasaporte" : "Cedula"),
         identificacion_ciudadano: serverCita.identificacion,
-        ciudadano_identificacion: serverCita.identificacion,
         fecha_nacimiento: serverCita.datosPersonales?.fechaNacimiento || "2000-01-01",
         telefono: serverCita.telefono,
         correo: serverCita.correo,
@@ -3517,10 +3960,10 @@ async function startServer() {
         resolucion: serverCita.resolucion || null,
         data: serverCita,
         datos_personales: serverCita.datosPersonales,
-        primer_nombre: serverCita.datosPersonales?.primerNombre || null,
-        segundo_nombre: serverCita.datosPersonales?.segundoNombre || null,
-        primer_apellido: serverCita.datosPersonales?.primerApellido || null,
-        segundo_apellido: serverCita.datosPersonales?.segundoApellido || null,
+        primer_nombre: serverCita.primerNombre || serverCita.datosPersonales?.primerNombre || null,
+        segundo_nombre: serverCita.segundoNombre || serverCita.datosPersonales?.segundoNombre || null,
+        primer_apellido: serverCita.primerApellido || serverCita.datosPersonales?.primerApellido || null,
+        segundo_apellido: serverCita.segundoApellido || serverCita.datosPersonales?.segundoApellido || null,
         pasaporte: serverCita.datosPersonales?.pasaporte || null,
         nacionalidad: serverCita.datosPersonales?.nacionalidad || null,
         numero_resolucion: serverCita.datosPersonales?.numeroResolucion || null,
@@ -3569,7 +4012,8 @@ async function startServer() {
     }
   });
 
-  // API to sync / create multiple appointments (Accepts both array and { appointments: [...] } formats)
+  // API to sync / upsert multiple appointments (Accepts both array and { appointments: [...] } formats)
+  // Strictly upsert-only: never deletes missing appointments or clears the database on empty list
   app.post("/api/appointments", verifyAdminSession, async (req, res) => {
     try {
       let appointmentsList: any[] = [];
@@ -3582,26 +4026,11 @@ async function startServer() {
       }
 
       if (appointmentsList.length === 0) {
-        saveAppointments([]);
-        if (isPgConfigured && pgPool && isPgAvailable) {
-          try {
-            await pgPool.query(`DELETE FROM appointments`);
-          } catch (pgErr: any) {
-            console.error("[Azure PostgreSQL] Error clearing appointments:", pgErr.message);
-          }
-        }
-        return res.json({ success: true, message: "Todas las citas han sido eliminadas y sincronizadas" });
+        return res.json({ success: true, message: "No se proporcionaron citas para actualizar", count: 0 });
       }
-
-      const incomingIds = new Set<string>();
 
       for (const appointment of appointmentsList) {
         if (!appointment.id) continue;
-        incomingIds.add(String(appointment.id));
-        if (appointment.codigoTransaccion) incomingIds.add(String(appointment.codigoTransaccion));
-        if (appointment.identificacion) incomingIds.add(String(appointment.identificacion));
-        if (appointment.datosPersonales?.identificacion) incomingIds.add(String(appointment.datosPersonales.identificacion));
-        if (appointment.datosPersonales?.pasaporte) incomingIds.add(String(appointment.datosPersonales.pasaporte));
 
         // Strictly enforce Extranjería nomenclature for all CSV appointments
         const isCsvAppt = String(appointment.id || '').includes('CSV') || 
@@ -3695,32 +4124,56 @@ async function startServer() {
         });
       }
 
-      // Sync deletions: Keep only incoming appointments in local storage
+      // Upsert into local file storage without deleting any existing appointments
       const currentLocal = getAppointments();
-      const kept = currentLocal.filter(a => 
-        incomingIds.has(String(a.id)) || 
-        incomingIds.has(String(a.codigoTransaccion)) || 
-        (a.identificacion && incomingIds.has(String(a.identificacion)))
-      );
-      saveAppointments(kept);
-
-      // Sync deletions in PostgreSQL
-      if (isPgConfigured && pgPool && isPgAvailable && incomingIds.size > 0) {
-        try {
-          const idsArray = Array.from(incomingIds);
-          await pgPool.query(
-            `DELETE FROM appointments WHERE id != ALL($1::varchar[]) AND identificacion != ALL($1::varchar[])`,
-            [idsArray]
-          );
-        } catch (pgErr: any) {
-          console.warn("[Azure PostgreSQL] Warning syncing removed appointments:", pgErr.message);
+      for (const appt of appointmentsList) {
+        if (!appt.id) continue;
+        const existingIdx = currentLocal.findIndex(a => 
+          a.id === appt.id || 
+          (appt.codigoTransaccion && a.codigoTransaccion === appt.codigoTransaccion) ||
+          (appt.identificacion && a.identificacion === appt.identificacion)
+        );
+        if (existingIdx >= 0) {
+          currentLocal[existingIdx] = { ...currentLocal[existingIdx], ...appt };
+        } else {
+          currentLocal.push(appt);
         }
       }
+      saveAppointments(currentLocal);
 
-      return res.json({ success: true, message: "Citas sincronizadas con éxito" });
+      return res.json({ success: true, message: "Citas actualizadas con éxito (upsert)", count: appointmentsList.length });
     } catch (e: any) {
       console.error("Error bulk-syncing appointments:", e);
       return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // Explicit bulk-delete endpoint for appointments
+  app.post("/api/appointments/bulk-delete", verifyAdminSession, async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ success: false, error: "Se requiere un array de IDs a eliminar" });
+      }
+      const idSet = new Set(ids.map(String));
+      const localAppointments = getAppointments();
+      const filtered = localAppointments.filter(a => !idSet.has(String(a.id)) && !idSet.has(String(a.codigoTransaccion)) && !idSet.has(String(a.identificacion)));
+      saveAppointments(filtered);
+
+      if (isPgConfigured && pgPool && isPgAvailable) {
+        try {
+          await pgPool.query(
+            `DELETE FROM appointments WHERE id = ANY($1::varchar[]) OR identificacion = ANY($1::varchar[]) OR codigo_transaccion = ANY($1::varchar[])`,
+            [Array.from(idSet)]
+          );
+        } catch (pgErr: any) {
+          console.error("[Azure PostgreSQL] Error bulk deleting appointments:", pgErr.message);
+        }
+      }
+      return res.json({ success: true, message: `${ids.length} citas eliminadas correctamente` });
+    } catch (e: any) {
+      console.error("Error bulk deleting appointments:", e);
+      res.status(500).json({ success: false, error: "Ocurrió un error interno en el servidor" });
     }
   });
 
@@ -3897,19 +4350,43 @@ async function startServer() {
             "Fotocopia del carné expedido por el Servicio Nacional de Migración",
             "Fotocopia de la página de las generales del pasaporte"
           ],
-          datosPersonales: {
-            primerNombre: c.nombre.split(' ')[0] || '',
-            primerApellido: c.nombre.split(' ')[1] || '',
-            nombreCompleto: c.nombre,
-            pasaporte: c.pasaporte,
-            identificacion: c.pasaporte,
-            nacionalidad: c.nacionalidad,
-            numeroResolucion: c.resolucion,
-            correo: c.correo,
-            telefono: c.telefono,
-            tipoIdentificacion: 'Pasaporte',
-            creadoPor: 'Generador Oficial 56 Cupos (07:00 AM - 01:45 PM)'
-          }
+          datosPersonales: (() => {
+            const nParts = c.nombre.split(/\s+/).filter(Boolean);
+            let pNom = '';
+            let sNom = '';
+            let pApe = '';
+            let sApe = '';
+            if (nParts.length >= 4) {
+              pNom = nParts[0];
+              sNom = nParts[1];
+              pApe = nParts[2];
+              sApe = nParts.slice(3).join(' ');
+            } else if (nParts.length === 3) {
+              pNom = nParts[0];
+              pApe = nParts[1];
+              sApe = nParts[2];
+            } else if (nParts.length === 2) {
+              pNom = nParts[0];
+              pApe = nParts[1];
+            } else {
+              pNom = nParts[0] || '';
+            }
+            return {
+              primerNombre: pNom,
+              segundoNombre: sNom || undefined,
+              primerApellido: pApe,
+              segundoApellido: sApe || undefined,
+              nombreCompleto: c.nombre,
+              pasaporte: c.pasaporte,
+              identificacion: c.pasaporte,
+              nacionalidad: c.nacionalidad,
+              numeroResolucion: c.resolucion,
+              correo: c.correo,
+              telefono: c.telefono,
+              tipoIdentificacion: 'Pasaporte',
+              creadoPor: 'Generador Oficial 56 Cupos (07:00 AM - 01:45 PM)'
+            };
+          })()
         };
       });
 
@@ -3976,33 +4453,47 @@ async function startServer() {
     }
   });
 
-  // API to cancel an appointment from dashboard
-  app.post("/api/cancel-appointment", async (req, res) => {
+  // API to cancel an appointment from dashboard or verified citizen
+  app.post("/api/cancel-appointment", rateLimiter(15, 60 * 1000), async (req, res) => {
     try {
-      const { id } = req.body;
+      const { id, codigoTransaccion, correo } = req.body;
       if (!id) {
         return res.status(400).json({ error: "Se requiere un ID de cita" });
       }
 
       const appointments = getAppointments();
-      const appointment = appointments.find(a => a.id === id);
-      if (appointment) {
-        appointment.estado = 'cancelada';
-        saveAppointments(appointments);
-        
-        if (isPgConfigured && pgPool && isPgAvailable) {
-          try {
-            await pgPool.query(`UPDATE appointments SET estado = 'cancelada' WHERE identificacion = $1`, [id]);
-          } catch (pgErr: any) {
-            console.error("[Azure PostgreSQL] Error updating cancel status:", pgErr.message);
-          }
-        }
-        return res.json({ success: true, status: 'cancelada' });
+      const appointment = appointments.find(a => a.id === id || a.codigoTransaccion === id);
+      if (!appointment) {
+        return res.status(404).json({ error: "Cita no encontrada en el servidor." });
       }
-      return res.status(404).json({ error: "Cita no encontrada en el servidor." });
+
+      // Check ownership: caller must be an authenticated administrator OR provide the appointment transaction code / email
+      const isAdmin = await verifySession(req);
+      if (!isAdmin) {
+        const matchesTx = Boolean(codigoTransaccion && (appointment.codigoTransaccion === codigoTransaccion || appointment.id === codigoTransaccion));
+        const matchesEmail = Boolean(correo && (appointment.correo === correo || appointment.datosPersonales?.correo === correo));
+        if (!matchesTx && !matchesEmail) {
+          return res.status(403).json({ 
+            success: false, 
+            error: "No tiene autorización para cancelar esta cita. Proporcione el código de confirmación o correo registrado." 
+          });
+        }
+      }
+
+      appointment.estado = 'cancelada';
+      saveAppointments(appointments);
+      
+      if (isPgConfigured && pgPool && isPgAvailable) {
+        try {
+          await pgPool.query(`UPDATE appointments SET estado = 'cancelada' WHERE identificacion = $1 OR id = $1 OR codigo_transaccion = $1`, [appointment.id]);
+        } catch (pgErr: any) {
+          console.error("[Azure PostgreSQL] Error updating cancel status:", pgErr.message);
+        }
+      }
+      return res.json({ success: true, status: 'cancelada' });
     } catch (e: any) {
       console.error("Error canceling appointment:", e);
-      res.status(500).json({ error: "Ocurrió un error interno en el servidor" });
+      res.status(500).json({ error: getSafeErrorMessage(e) });
     }
   });
 
@@ -4287,26 +4778,55 @@ async function startServer() {
       // Automatically register/update status on reminder send too!
       const appointments = await getDBAppointments();
       const existingIdx = appointments.findIndex(a => a.id === id || a.codigoTransaccion === codigoTransaccion);
+      const existing = existingIdx >= 0 ? appointments[existingIdx] : null;
+
+      const dp = req.body.datosPersonales || existing?.datosPersonales || undefined;
+      const dpParts = dp ? [
+        dp.primerNombre || '',
+        dp.segundoNombre || '',
+        dp.primerApellido || '',
+        dp.segundoApellido || ''
+      ].map((s: any) => String(s || '').trim()).filter(Boolean) : [];
+      const dpPartsName = dpParts.length > 0 ? dpParts.join(' ') : '';
+
+      let resolvedCitizenName = '';
+      if (dpPartsName && !isGenericPlaceholderName(dpPartsName)) {
+        resolvedCitizenName = dpPartsName;
+      } else if (dp?.nombreCompleto && !isGenericPlaceholderName(dp.nombreCompleto)) {
+        resolvedCitizenName = dp.nombreCompleto.trim();
+      } else if (req.body.nombre && !isGenericPlaceholderName(req.body.nombre)) {
+        resolvedCitizenName = req.body.nombre.trim();
+      } else if (existing?.nombre && !isGenericPlaceholderName(existing.nombre)) {
+        resolvedCitizenName = existing.nombre.trim();
+      } else if (dp?.pasaporte) {
+        resolvedCitizenName = `Ciudadano (${dp.pasaporte})`;
+      } else {
+        resolvedCitizenName = 'Ciudadano';
+      }
+
+      if (dp) {
+        dp.nombreCompleto = resolvedCitizenName;
+      }
       
       const serverCita: ServerCita = {
-        id: id || `TE-${Date.now()}`,
-        correo: email || "",
-        codigoTransaccion: codigoTransaccion,
-        categoriaNombre: categoryTranslation(categoriaNombre) || "",
-        subServicioNombre: subServicioNombre || "",
-        subServicioId: req.body.subServicioId || undefined,
-        fecha: req.body.fecha || new Date().toISOString().split('T')[0],
-        hora: hora || "",
-        sucursalNombre: sucursalNombre || "",
-        sucursalDireccion: sucursalDireccion || "",
-        identificacion: identificacion || "",
-        telefono: telefono || "",
-        requisitos: requisitos || [],
+        id: id || existing?.id || `TE-${Date.now()}`,
+        correo: email || existing?.correo || "",
+        codigoTransaccion: codigoTransaccion || existing?.codigoTransaccion,
+        categoriaNombre: categoryTranslation(categoriaNombre) || existing?.categoriaNombre || "",
+        subServicioNombre: subServicioNombre || existing?.subServicioNombre || "",
+        subServicioId: req.body.subServicioId || existing?.subServicioId || undefined,
+        fecha: req.body.fecha || existing?.fecha || new Date().toISOString().split('T')[0],
+        hora: hora || existing?.hora || "",
+        sucursalNombre: sucursalNombre || existing?.sucursalNombre || "",
+        sucursalDireccion: sucursalDireccion || existing?.sucursalDireccion || "",
+        identificacion: identificacion || existing?.identificacion || "",
+        telefono: telefono || existing?.telefono || "",
+        requisitos: (requisitos && requisitos.length > 0) ? requisitos : (existing?.requisitos || []),
         estado: existingIdx >= 0 ? appointments[existingIdx].estado : 'confirmada',
         fechaCreacion: existingIdx >= 0 ? appointments[existingIdx].fechaCreacion : new Date().toISOString(),
-        numeroSeguimiento: numeroSeguimiento || undefined,
-        datosPersonales: req.body.datosPersonales || undefined,
-        nombre: req.body.nombre || (req.body.datosPersonales?.nombreCompleto) || ""
+        numeroSeguimiento: numeroSeguimiento || existing?.numeroSeguimiento || undefined,
+        datosPersonales: dp,
+        nombre: resolvedCitizenName
       };
 
       await safeUpsertAppointment({
@@ -4732,10 +5252,12 @@ async function startServer() {
   app.get("/api/users", verifyAdminSession, async (req, res) => {
     try {
       const users = await getDBUsers();
-      return res.json({ success: true, users });
+      // Data Minimization: sanitize and omit password hashes before returning to client
+      const sanitized = users.map(({ password, ...u }) => u);
+      return res.json({ success: true, users: sanitized });
     } catch (e: any) {
       console.error("Error fetching users list:", e);
-      return res.status(500).json({ success: false, error: e.message });
+      return res.status(500).json({ success: false, error: getSafeErrorMessage(e) });
     }
   });
 
@@ -4841,61 +5363,53 @@ async function startServer() {
     }
   });
 
-  // Endpoint público para cambio de contraseña (primer ingreso o reseteo obligado)
+  // Endpoint para cambio de contraseña (primer ingreso o reseteo obligado con validación estricta)
   app.post("/api/change-password", rateLimiter(5, 60 * 1000), async (req, res) => {
     try {
       const { username, currentPassword, newPassword } = req.body;
-      if (!username || !newPassword) {
-        return res.status(400).json({ success: false, error: "Nombre de usuario y nueva contraseña requeridos." });
+      if (!username || !currentPassword || !newPassword) {
+        return res.status(400).json({ success: false, error: "Nombre de usuario, contraseña actual y nueva contraseña son requeridos." });
       }
 
       const cleanNewPass = String(newPassword).trim();
-      if (cleanNewPass.length < 4) {
-        return res.status(400).json({ success: false, error: "La nueva contraseña debe tener al menos 4 caracteres." });
+      if (cleanNewPass.length < 8) {
+        return res.status(400).json({ success: false, error: "La nueva contraseña debe tener al menos 8 caracteres." });
       }
 
+      const cleanCurrentPass = String(currentPassword).trim();
       const cleanUsername = String(username).trim().toLowerCase();
       const localUsers = getUsers();
       const userIdx = localUsers.findIndex(u => u.username.toLowerCase() === cleanUsername);
 
-      if (userIdx >= 0) {
-        if (currentPassword && localUsers[userIdx].password && !verifyPassword(currentPassword, localUsers[userIdx].password)) {
-          return res.status(401).json({ success: false, error: "La contraseña actual ingresada es incorrecta." });
-        }
-        const hashedNewPass = hashPassword(cleanNewPass);
-        localUsers[userIdx].password = hashedNewPass;
-        localUsers[userIdx].mustChangePassword = false;
-        saveUsers(localUsers);
-
-        if (isPgConfigured && pgPool && isPgAvailable) {
-          try {
-            await pgPool.query(
-              `UPDATE usuarios SET password = $1, must_change_password = FALSE WHERE LOWER(username) = $2`,
-              [hashedNewPass, cleanUsername]
-            );
-          } catch (pgErr: any) {
-            console.error("[Azure PostgreSQL] Error updating password:", pgErr.message);
-          }
-        }
-
-        return res.json({ success: true, message: "Contraseña actualizada con éxito." });
-      } else {
-        const hashedNewPass = hashPassword(cleanNewPass);
-        const newUser: ServerUser = {
-          username: cleanUsername,
-          password: hashedNewPass,
-          role: "super",
-          nombre: cleanUsername,
-          fechaCreacion: new Date().toISOString(),
-          mustChangePassword: false
-        };
-        localUsers.push(newUser);
-        saveUsers(localUsers);
-        return res.json({ success: true, message: "Contraseña actualizada exitosamente." });
+      if (userIdx < 0) {
+        return res.status(404).json({ success: false, error: "Usuario no encontrado." });
       }
+
+      const user = localUsers[userIdx];
+      if (!verifyPassword(cleanCurrentPass, user.password || "")) {
+        return res.status(401).json({ success: false, error: "La contraseña actual ingresada es incorrecta." });
+      }
+
+      const hashedNewPass = hashPassword(cleanNewPass);
+      localUsers[userIdx].password = hashedNewPass;
+      localUsers[userIdx].mustChangePassword = false;
+      saveUsers(localUsers);
+
+      if (isPgConfigured && pgPool && isPgAvailable) {
+        try {
+          await pgPool.query(
+            `UPDATE usuarios SET password = $1, must_change_password = FALSE WHERE LOWER(username) = $2`,
+            [hashedNewPass, cleanUsername]
+          );
+        } catch (pgErr: any) {
+          console.error("[Azure PostgreSQL] Error updating password:", pgErr.message);
+        }
+      }
+
+      return res.json({ success: true, message: "Contraseña actualizada con éxito." });
     } catch (e: any) {
       console.error("Error updating password:", e);
-      return res.status(500).json({ success: false, error: e.message });
+      return res.status(500).json({ success: false, error: getSafeErrorMessage(e) });
     }
   });
 
@@ -4905,17 +5419,18 @@ async function startServer() {
 
   // Live in-memory cache to guarantee instantaneous zero-delay sync across Kiosk, TV, Agents and Mobile Tracker
   const memoryTicketsStore: Map<string, any> = new Map();
+  const recentUpdatesMap: Map<string, number> = new Map();
   const memoryModulosStore: Map<string, any> = new Map();
   const lastModuleHeartbeats: Map<string, number> = new Map();
 
   // Helper normalizers for seamless synchronization across Kiosk, TV and Agents
-  function normalizeTicketStatus(st: any): string {
+  function normalizeTicketStatus(st: any, assignedCubicle?: any): string {
     const s = String(st || "").toUpperCase();
-    if (s === "ESPERA" || s === "WAITING") return "WAITING";
-    if (s === "LLAMADO" || s === "CALLING") return "CALLING";
-    if (s === "ATENDIENDO" || s === "ATTENDING" || s === "ATENCION") return "ATTENDING";
-    if (s === "COMPLETADO" || s === "FINALIZADO" || s === "COMPLETED") return "COMPLETED";
-    if (s === "CANCELADO" || s === "MISSED" || s === "PERDIDO") return "MISSED";
+    if (s.includes("COMPLET") || s.includes("FINALIZ")) return "COMPLETED";
+    if (s.includes("CANCEL") || s.includes("MISSED") || s.includes("PERDID")) return "MISSED";
+    if (s.includes("ATENDI") || s.includes("ATENCION") || s.includes("ATTEND") || s.includes("PROCESO")) return "ATTENDING";
+    if (s.includes("LLAMA") || s.includes("CALL")) return "CALLING";
+    if (assignedCubicle) return "CALLING";
     return "WAITING";
   }
 
@@ -4978,20 +5493,42 @@ async function startServer() {
           dbQueryExecuted = true;
           
           if (dbRes.rows && dbRes.rows.length > 0) {
+            const appointmentsLookup = getAppointments();
             dbTickets = dbRes.rows.map((r: any) => {
               const svc = normalizeServiceType(r.tipo_tramite);
               const phase = normalizeTicketPhase(r.fase_actual || (r.modulo_asignado ? "CAJA" : (svc === "REGISTRO" ? "TRIADA" : "CAJA")), svc);
-              const st = normalizeTicketStatus(r.estado);
+              const st = normalizeTicketStatus(r.estado, r.modulo_asignado);
               const cTime = r.hora_emision ? new Date(r.hora_emision).getTime() : Date.now();
               const callTime = r.hora_llamado ? new Date(r.hora_llamado).getTime() : undefined;
               const attTime = r.hora_inicio_atencion ? new Date(r.hora_inicio_atencion).getTime() : undefined;
               const compTime = r.hora_fin_atencion ? new Date(r.hora_fin_atencion).getTime() : undefined;
 
+              let finalName = r.nombre || "Ciudadano";
+              if (isGenericPlaceholderName(finalName)) {
+                const appointments = appointmentsLookup;
+                const cleanId = String(r.id || '').trim();
+                const cleanCode = String(r.numero_ticket || '').trim();
+                const foundApp = appointments.find(a => 
+                  (a.id && cleanId && a.id === cleanId) || 
+                  (a.codigoTransaccion && cleanId && a.codigoTransaccion === cleanId) || 
+                  (a.codigoTransaccion && cleanCode && a.codigoTransaccion === cleanCode) ||
+                  (a.id && cleanCode && a.id === cleanCode) ||
+                  (a.identificacion && cleanId && a.identificacion === cleanId) ||
+                  (a.datosPersonales?.identificacion && cleanId && a.datosPersonales.identificacion === cleanId) ||
+                  (a.datosPersonales?.pasaporte && cleanId && a.datosPersonales.pasaporte === cleanId)
+                );
+                if (foundApp && foundApp.nombre && !isGenericPlaceholderName(foundApp.nombre)) {
+                  finalName = foundApp.nombre;
+                } else if (foundApp?.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(foundApp.datosPersonales.nombreCompleto)) {
+                  finalName = foundApp.datosPersonales.nombreCompleto;
+                }
+              }
+
               return {
                 id: r.id,
                 numberCode: r.numero_ticket,
                 number: parseInt(String(r.numero_ticket).replace(/\D/g, ""), 10) || 1,
-                name: r.nombre || "Ciudadano",
+                name: finalName,
                 serviceType: svc,
                 status: st,
                 currentPhase: phase,
@@ -5017,29 +5554,52 @@ async function startServer() {
       }
 
       if (dbQueryExecuted) {
-        // PostgreSQL is authoritative. Sync memoryTicketsStore to reflect the true state of DB
+        // Preservar en memoria tickets recién creados, modificados o en tránsito (creados en los últimos 30s o actualizados en los últimos 15s)
+        // para que aparezcan al instante (0ms) en la cola sin depender de la latencia de Postgres.
+        const freshRecentMemTickets = new Map<string, any>();
+        const nowMs = Date.now();
+        for (const [id, t] of memoryTicketsStore.entries()) {
+          const lastUpdated = recentUpdatesMap.get(id) || 0;
+          const isFresh = (nowMs - (t.createdAt || 0)) < 30000 || (nowMs - lastUpdated) < 15000;
+          if (isFresh) {
+            freshRecentMemTickets.set(id, t);
+          }
+        }
+
         if (sucursalId === "ALL") {
           if (!includeAllDays) {
-            // Keep previous days' memory cache untouched if they exist, but clear/sync today's list
             for (const [id, t] of memoryTicketsStore.entries()) {
-              if (t.createdAt >= startOfTodayPanama.getTime()) {
+              if (t.createdAt >= startOfTodayPanama.getTime() && !freshRecentMemTickets.has(id)) {
                 memoryTicketsStore.delete(id);
               }
             }
           } else {
-            memoryTicketsStore.clear();
+            for (const id of memoryTicketsStore.keys()) {
+              if (!freshRecentMemTickets.has(id)) {
+                memoryTicketsStore.delete(id);
+              }
+            }
           }
           dbTickets.forEach(t => memoryTicketsStore.set(t.id, t));
         } else {
           for (const [id, t] of memoryTicketsStore.entries()) {
-            if ((t.sucursalId || "OFF-1") === sucursalId && (includeAllDays || t.createdAt >= startOfTodayPanama.getTime())) {
+            if ((t.sucursalId || "OFF-1") === sucursalId && (includeAllDays || t.createdAt >= startOfTodayPanama.getTime()) && !freshRecentMemTickets.has(id)) {
               memoryTicketsStore.delete(id);
             }
           }
           dbTickets.forEach(t => memoryTicketsStore.set(t.id, t));
         }
 
-        const finalTickets = dbTickets.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        // Combinar dbTickets con cualquier ticket recién creado o actualizado en memoria (la memoria tiene prioridad sobre DB)
+        const mergedTicketMap = new Map<string, any>();
+        dbTickets.forEach(t => mergedTicketMap.set(t.id, t));
+        for (const [id, t] of freshRecentMemTickets.entries()) {
+          if (sucursalId === "ALL" || (t.sucursalId || "OFF-1") === sucursalId) {
+            mergedTicketMap.set(id, t); // La memoria siempre sobreescribe el estado de la base de datos (latencia cero)
+          }
+        }
+
+        const finalTickets = Array.from(mergedTicketMap.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
         return res.json({ success: true, tickets: finalTickets, serverTime: Date.now() });
       }
 
@@ -5126,20 +5686,41 @@ async function startServer() {
         return res.status(400).json({ success: false, error: "id y numberCode son requeridos" });
       }
 
-      const normService = normalizeServiceType(serviceType);
-      const normStatus = normalizeTicketStatus(status);
-      const normPhase = normalizeTicketPhase(currentPhase, normService);
       const cubId = assignedCubicleId || assignedCubicle || null;
+      const normService = normalizeServiceType(serviceType);
+      const normStatus = normalizeTicketStatus(status, cubId);
+      const normPhase = normalizeTicketPhase(currentPhase, normService);
       const tCreatedAt = typeof createdAt === "number" ? createdAt : (createdAt ? new Date(createdAt).getTime() : Date.now());
       const tCalledAt = calledAt ? (typeof calledAt === "number" ? calledAt : new Date(calledAt).getTime()) : undefined;
       const tAttendedAt = attendedAt ? (typeof attendedAt === "number" ? attendedAt : new Date(attendedAt).getTime()) : undefined;
       const tCompletedAt = completedAt ? (typeof completedAt === "number" ? completedAt : new Date(completedAt).getTime()) : undefined;
 
+      let finalName = name || "Ciudadano";
+      if (isGenericPlaceholderName(finalName)) {
+        const appointments = getAppointments();
+        const cleanId = String(id || '').trim();
+        const cleanCode = String(numberCode || '').trim();
+        const foundApp = appointments.find(a => 
+          (a.id && cleanId && a.id === cleanId) || 
+          (a.codigoTransaccion && cleanId && a.codigoTransaccion === cleanId) || 
+          (a.codigoTransaccion && cleanCode && a.codigoTransaccion === cleanCode) ||
+          (a.id && cleanCode && a.id === cleanCode) ||
+          (a.identificacion && cleanId && a.identificacion === cleanId) ||
+          (a.datosPersonales?.identificacion && cleanId && a.datosPersonales.identificacion === cleanId) ||
+          (a.datosPersonales?.pasaporte && cleanId && a.datosPersonales.pasaporte === cleanId)
+        );
+        if (foundApp && foundApp.nombre && !isGenericPlaceholderName(foundApp.nombre)) {
+          finalName = foundApp.nombre;
+        } else if (foundApp?.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(foundApp.datosPersonales.nombreCompleto)) {
+          finalName = foundApp.datosPersonales.nombreCompleto;
+        }
+      }
+
       const ticketPayload = {
         id: String(id),
         numberCode: String(numberCode),
         number: parseInt(String(numberCode).replace(/\D/g, ""), 10) || 1,
-        name: name || "Ciudadano",
+        name: finalName,
         serviceType: normService,
         procedure: procedure || "",
         priority: !!priority,
@@ -5157,8 +5738,10 @@ async function startServer() {
         createdAt: tCreatedAt
       };
 
-      // Always save to memory store immediately
+      // Guardar en memoria de inmediato y notificar a todas las pantallas y consolas (latencia cero: 0ms)
       memoryTicketsStore.set(id, ticketPayload);
+      recentUpdatesMap.set(id, Date.now());
+      broadcastEvent("tickets_updated", { serverTime: Date.now() });
 
       if (isPgConfigured && pgPool && isPgAvailable) {
         try {
@@ -5189,7 +5772,7 @@ async function startServer() {
               numberCode,
               normService,
               procedure || "",
-              name || "Ciudadano",
+              finalName,
               !!priority,
               !!isAppointment,
               sucursalId || "OFF-1",
@@ -5219,8 +5802,6 @@ async function startServer() {
         }
       }
 
-      broadcastEvent("tickets_updated", { serverTime: Date.now() });
-
       return res.json({ success: true, message: "Ticket guardado en base de datos", ticket: ticketPayload, serverTime: Date.now() });
     } catch (e: any) {
       console.error("Error in POST /api/tickets:", e);
@@ -5243,11 +5824,32 @@ async function startServer() {
           const tCalledAt = t.calledAt ? (typeof t.calledAt === "number" ? t.calledAt : new Date(t.calledAt).getTime()) : undefined;
           const tCompletedAt = t.completedAt ? (typeof t.completedAt === "number" ? t.completedAt : new Date(t.completedAt).getTime()) : undefined;
 
+          let finalName = t.name || t.nombre || "Ciudadano";
+          if (isGenericPlaceholderName(finalName)) {
+            const appointments = getAppointments();
+            const cleanId = String(t.id || '').trim();
+            const cleanCode = String(t.numberCode || t.numero_ticket || '').trim();
+            const foundApp = appointments.find(a => 
+              (a.id && cleanId && a.id === cleanId) || 
+              (a.codigoTransaccion && cleanId && a.codigoTransaccion === cleanId) || 
+              (a.codigoTransaccion && cleanCode && a.codigoTransaccion === cleanCode) ||
+              (a.id && cleanCode && a.id === cleanCode) ||
+              (a.identificacion && cleanId && a.identificacion === cleanId) ||
+              (a.datosPersonales?.identificacion && cleanId && a.datosPersonales.identificacion === cleanId) ||
+              (a.datosPersonales?.pasaporte && cleanId && a.datosPersonales.pasaporte === cleanId)
+            );
+            if (foundApp && foundApp.nombre && !isGenericPlaceholderName(foundApp.nombre)) {
+              finalName = foundApp.nombre;
+            } else if (foundApp?.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(foundApp.datosPersonales.nombreCompleto)) {
+              finalName = foundApp.datosPersonales.nombreCompleto;
+            }
+          }
+
           const itemPayload = {
             id: t.id,
             numberCode: t.numberCode || t.numero_ticket,
             number: parseInt(String(t.numberCode || t.numero_ticket).replace(/\D/g, ""), 10) || 1,
-            name: t.name || t.nombre || "Ciudadano",
+            name: finalName,
             serviceType: normService,
             procedure: t.procedure || t.sub_tramite || "",
             priority: !!t.priority || !!t.es_prioritario,
@@ -5286,7 +5888,7 @@ async function startServer() {
                   t.numberCode || t.numero_ticket,
                   normService,
                   t.procedure || t.sub_tramite || "",
-                  t.name || t.nombre || "Ciudadano",
+                  finalName,
                   !!t.priority || !!t.es_prioritario,
                   !!t.isAppointment || !!t.es_cita,
                   sucursalId,
@@ -5558,6 +6160,118 @@ async function startServer() {
       return res.status(500).json({ success: false, error: e.message });
     }
   });
+
+  // Server-side Authoritative Auto-Assignment Worker to bypass browser tab throttling
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      const panamaLocal = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+      panamaLocal.setUTCHours(0, 0, 0, 0);
+      const startOfTodayPanama = new Date(panamaLocal.getTime() + 5 * 60 * 60 * 1000);
+
+      // Solo procesar turnos creados estrictamente hoy
+      const allTickets = Array.from(memoryTicketsStore.values()).filter(t => (t.createdAt || 0) >= startOfTodayPanama.getTime());
+      const allModulos = Array.from(memoryModulosStore.values());
+      const availableModulos = allModulos.filter(m => m.estado === "ONLINE_AVAILABLE" && m.agenteActual);
+
+      if (availableModulos.length === 0) return;
+
+      for (const modulo of availableModulos) {
+        const compatibleTickets = allTickets.filter(t => {
+          if (t.status !== "WAITING") return false;
+          if (t.assignedCubicleId) return false;
+
+          const isRc = modulo.tipoServicio === "REGISTRO" || modulo.nombre.toLowerCase().includes("registro");
+          if (isRc) {
+            if (t.serviceType !== "REGISTRO") return false;
+          } else {
+            const moduloPhase = modulo.tipoServicio === "CAJA" || modulo.nombre.toLowerCase().includes("caja") ? "CAJA" : "TRIADA";
+            if (t.currentPhase !== moduloPhase) return false;
+          }
+          return true;
+        });
+
+        if (compatibleTickets.length > 0) {
+          compatibleTickets.sort((a, b) => {
+            if (a.isAppointment && !b.isAppointment) return -1;
+            if (!a.isAppointment && b.isAppointment) return 1;
+            return a.createdAt - b.createdAt;
+          });
+
+          const chosenTicket = compatibleTickets[0];
+          const serverNow = Date.now();
+
+          chosenTicket.status = "CALLING";
+          chosenTicket.calledAt = serverNow;
+          chosenTicket.assignedCubicleId = modulo.id;
+          chosenTicket.assignedAgent = modulo.agenteActual;
+
+          memoryTicketsStore.set(chosenTicket.id, chosenTicket);
+
+          modulo.estado = "ATTENDING";
+          modulo.ticketActualId = chosenTicket.id;
+          memoryModulosStore.set(modulo.id, modulo);
+
+          if (isPgConfigured && pgPool && isPgAvailable) {
+            try {
+              await pgPool.query(
+                `UPDATE tickets SET estado = 'CALLING', hora_llamado = $1, modulo_asignado = $2, agente_asignado = $3 WHERE id = $4`,
+                [new Date(serverNow), modulo.id, modulo.agenteActual, chosenTicket.id]
+              );
+              await pgPool.query(
+                `UPDATE modulos_atencion SET estado = 'ATTENDING', ticket_actual_id = $1 WHERE id = $2`,
+                [chosenTicket.id, modulo.id]
+              );
+            } catch (dbErr) {
+              console.error("[Worker DB Sync Error]:", dbErr);
+            }
+          }
+
+          broadcastEvent("tickets_updated", { serverTime: Date.now() });
+          broadcastEvent("modules_updated", { serverTime: Date.now() });
+          
+          console.log(`[Authoritative Worker] Assigned ticket ${chosenTicket.numberCode} to module ${modulo.nombre}`);
+        }
+      }
+    } catch (e: any) {
+      // ignore
+    }
+  }, 2000);
+
+  // Mantenimiento diario del servidor: Purga automática de turnos de días anteriores
+  setInterval(() => {
+    try {
+      const now = new Date();
+      const panamaLocal = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+      panamaLocal.setUTCHours(0, 0, 0, 0);
+      const startOfTodayPanama = new Date(panamaLocal.getTime() + 5 * 60 * 60 * 1000);
+      const startOfTodayMs = startOfTodayPanama.getTime();
+
+      let cleaned = 0;
+      for (const [id, t] of memoryTicketsStore.entries()) {
+        if ((t.createdAt || 0) < startOfTodayMs) {
+          if (t.status === "WAITING" || t.status === "CALLING" || t.status === "ATTENDING") {
+            t.status = "MISSED";
+            t.assignedCubicleId = undefined;
+          }
+          memoryTicketsStore.delete(id);
+          cleaned++;
+        }
+      }
+
+      for (const [id, updatedTime] of recentUpdatesMap.entries()) {
+        if (updatedTime < startOfTodayMs) {
+          recentUpdatesMap.delete(id);
+        }
+      }
+
+      if (cleaned > 0) {
+        broadcastEvent("tickets_updated", { serverTime: Date.now() });
+      }
+    } catch (e) {
+      console.warn("[Server Daily Maintenance] Error:", e);
+    }
+  }, 5 * 60 * 1000).unref();
 
   // Vite middleware setup for assets and hot builds under development
   if (process.env.NODE_ENV !== "production") {

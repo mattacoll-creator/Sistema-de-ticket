@@ -579,8 +579,9 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
 
       const dp: any = c.datosPersonales || {};
       const isExtrans = c.servicioCategoria === 'extranjeria';
+      const extParts = [dp.primerNombre, dp.segundoNombre, dp.primerApellido, dp.segundoApellido].map(s => String(s || '').trim()).filter(Boolean).join(' ');
       const name = isExtrans 
-        ? `${dp.primerNombre || ''} ${dp.primerApellido || ''}`.trim() || (c as any).nombre || ''
+        ? (extParts || dp.nombreCompleto || (c as any).nombre || '')
         : (dp.nombreCompleto || (c as any).nombre || '');
       
       const labelTx = c.codigoTransaccion.length > 17 ? c.codigoTransaccion.slice(0, 15) + '...' : c.codigoTransaccion;
@@ -851,9 +852,10 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
     const rows = filtered.map(c => {
       const dp = c.datosPersonales;
       const isExtrans = c.servicioCategoria === 'extranjeria';
+      const extParts = [dp?.primerNombre, dp?.segundoNombre, dp?.primerApellido, dp?.segundoApellido].map(s => String(s || '').trim()).filter(Boolean).join(' ');
       const name = isExtrans 
-        ? `${dp?.primerNombre || ''} ${dp?.primerApellido || ''}`.trim()
-        : (dp?.nombreCompleto || '');
+        ? (extParts || dp?.nombreCompleto || c.nombre || '')
+        : (dp?.nombreCompleto || c.nombre || '');
       
       const subservice = c.subServicioId === 'ced_pasados_edad' ? 'Pasados de Edad (VID)' : c.subServicioId;
       
@@ -1408,10 +1410,12 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
         setEditingCita(null);
       }
       try {
-        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
         await fetch(`/api/appointments/${id}`, {
           method: 'DELETE',
-          headers: { 'Authorization': `Bearer ${token}` }
+          headers
         });
       } catch (e) {
         console.error('Error deleting appointment from server:', e);
@@ -2025,6 +2029,22 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                     }
                   } catch (e) {}
                 }
+
+                // Invalida el token en el servidor antes de limpiarlo localmente
+                const token = sessionStorage.getItem('admin_token');
+                if (token) {
+                  try {
+                    await fetch('/api/logout', {
+                      method: 'POST',
+                      headers: {
+                        'Authorization': `Bearer ${token}`
+                      }
+                    });
+                  } catch (logoutErr) {
+                    console.error("Error al invalidar el token en el servidor:", logoutErr);
+                  }
+                }
+
                 sessionStorage.removeItem('admin_token');
                 sessionStorage.removeItem('admin_role');
                 sessionStorage.removeItem('admin_username');
@@ -2138,7 +2158,7 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                   <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">Usuario</label>
                   <input
                     type="text"
-                    placeholder="Ejemplo: login / AdminTE / AdminMini / Migra26"
+                    placeholder="Ejemplo: adminte / usuario asignado"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded text-xs px-3 focus:outline-none focus:ring-1 focus:ring-blue-600 font-medium"
@@ -3745,11 +3765,11 @@ export default function AdminPanel({ citas, onUpdateCitas, onClose }: AdminPanel
                               <span>Control Horarios & Cupos</span>
                             </span>
                             <span className="text-[9px] font-mono bg-blue-950/60 border border-blue-500/40 text-blue-300 px-1.5 py-0.5 rounded font-black">
-                              56 Cupos
+                              71 Cupos (56 Web + 15 Sup.)
                             </span>
                           </div>
                           <p className="text-[10px] text-slate-400 leading-relaxed">
-                            Jornada oficial regulada de 07:00 AM a 01:45 PM cada 15 minutos.
+                            Jornada ampliada de 07:00 AM a 02:45 PM cada 15 minutos (56 web + 15 supervisor).
                           </p>
                           <button
                             type="button"

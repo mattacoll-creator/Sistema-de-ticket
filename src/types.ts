@@ -336,6 +336,12 @@ export interface Cita {
   correo?: string;
   telefono?: string;
   subServicioNombre?: string;
+  primerNombre?: string;
+  segundoNombre?: string;
+  primerApellido?: string;
+  segundoApellido?: string;
+  pasaporte?: string;
+  nacionalidad?: string;
 }
 
 export interface ExtranjeriaRecord {

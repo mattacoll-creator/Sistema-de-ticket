@@ -45,11 +45,13 @@ export default function TriadaSupervisorController({ officeFilter = 'Todos' }: T
   const fetchData = async () => {
     setLoading(true);
     try {
-      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const authHeaders: Record<string, string> = {};
+      if (token) authHeaders['Authorization'] = `Bearer ${token}`;
       
       // 1. Fetch real system users
       const usersRes = await fetch('/api/users', {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: authHeaders
       });
       const usersData = await usersRes.json();
       if (usersData && usersData.success && Array.isArray(usersData.users)) {
@@ -82,10 +84,13 @@ export default function TriadaSupervisorController({ officeFilter = 'Todos' }: T
     }
   };
 
-  // Poll for data every 5 seconds to ensure real-time automatic accuracy from DB
+  // Sincronización periódica de datos para el supervisor de Tríada
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 5000);
+    const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      fetchData();
+    }, 8000);
     return () => clearInterval(interval);
   }, []);
 

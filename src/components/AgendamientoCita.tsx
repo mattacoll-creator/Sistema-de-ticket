@@ -112,9 +112,10 @@ export default function AgendamientoCita({
   selectedSubServicioId,
 }: AgendamientoCitaProps) {
   const isExtranjeria = useMemo(() => {
-    return selectedCategoria === 'extranjeria' || 
-      (selectedSubServicioId && (selectedSubServicioId.includes('extranjero') || selectedSubServicioId.startsWith('ext_')));
-  }, [selectedCategoria, selectedSubServicioId]);
+    return selectedSubServicioId === 'ext_primera_vez';
+  }, [selectedSubServicioId]);
+
+  const isExtranjeriaPrimeraVezOnly = isExtranjeria;
 
   const isPastAgeTrámiteSelected = selectedSubServicioId === 'ced_pasados_edad';
 
@@ -165,21 +166,20 @@ export default function AgendamientoCita({
         .then(res => res.json())
         .then(data => {
           if (data && data.success && data.config) {
-            let { capacidad, intervalo, horaInicio, horaFin } = data.config;
-            if (horaFin === '02:00 AM' || horaFin === '02:00 PM') {
-              horaFin = '01:45 PM';
-            }
+            let { capacidad, intervalo, horaInicio } = data.config;
+            // Public web appointments are strictly limited to 56 slots within 07:00 AM - 01:45 PM
+            const horaFin = '01:45 PM';
             setExtranjeriaConfig({
-              start: horaInicio,
+              start: horaInicio || '07:00 AM',
               end: horaFin,
-              interval: intervalo,
-              capacity: capacidad
+              interval: intervalo || 15,
+              capacity: capacidad || 2
             });
-            // Also keep localstorage synced
-            localStorage.setItem('extranjeria_capacidad_usuarios', String(capacidad));
-            localStorage.setItem('extranjeria_intervalo_minutos', String(intervalo));
-            localStorage.setItem('extranjeria_hora_inicio', horaInicio);
-            localStorage.setItem('extranjeria_hora_fin', horaFin);
+            // Keep web public localstorage synced to 01:45 PM
+            localStorage.setItem('extranjeria_capacidad_usuarios', String(capacidad || 2));
+            localStorage.setItem('extranjeria_intervalo_minutos', String(intervalo || 15));
+            localStorage.setItem('extranjeria_hora_inicio', horaInicio || '07:00 AM');
+            localStorage.setItem('extranjeria_hora_fin', '01:45 PM');
           }
         })
         .catch(err => console.warn("Failed to retrieve extranjeria remote configs:", err));
@@ -208,7 +208,7 @@ export default function AgendamientoCita({
   }, []);
 
   const availableSlots = useMemo(() => {
-    if (isExtranjeria) {
+    if (isExtranjeriaPrimeraVezOnly) {
       return generateExtranjeriaSlots(
         extranjeriaConfig.start,
         extranjeriaConfig.end,
@@ -219,7 +219,7 @@ export default function AgendamientoCita({
       return ['08:00 AM', '09:00 AM', '10:30 AM', '11:30 AM'];
     }
     return HORAS_DISPONIBLES;
-  }, [isExtranjeria, isPastAgeTrámiteSelected, extranjeriaConfig]);
+  }, [isExtranjeriaPrimeraVezOnly, isPastAgeTrámiteSelected, extranjeriaConfig]);
 
   // Load active bookings in order to enforce dynamic capacity constraints
   const activeBookings = useMemo(() => {
@@ -359,7 +359,7 @@ export default function AgendamientoCita({
     if (!fecha) return 0;
     return mergedBookings.filter((c) => 
       c.fecha === fecha && 
-      (c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_')) &&
+      (c.subServicioId === 'ext_primera_vez' || (c.subServicioNombre && c.subServicioNombre.toLowerCase().includes('primera vez'))) &&
       c.estado !== 'cancelada'
     ).length;
   }, [fecha, mergedBookings]);
@@ -1051,11 +1051,11 @@ export default function AgendamientoCita({
                             }
                           }
 
-                          if (isExtranjeria) {
+                          if (isExtranjeriaPrimeraVezOnly) {
                             const bookedCount = mergedBookings.filter(c => 
                               c.fecha === fecha && 
                               c.hora === slot && 
-                              (c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_')) &&
+                              (c.subServicioId === 'ext_primera_vez' || (c.subServicioNombre && c.subServicioNombre.toLowerCase().includes('primera vez'))) &&
                               c.estado !== 'cancelada'
                             ).length;
                             return bookedCount < extranjeriaConfig.capacity;
@@ -1109,7 +1109,7 @@ export default function AgendamientoCita({
                               const bookedCount = mergedBookings.filter(c => 
                                 c.fecha === fecha && 
                                 c.hora === slot && 
-                                (c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_')) &&
+                                (c.subServicioId === 'ext_primera_vez' || (c.subServicioNombre && c.subServicioNombre.toLowerCase().includes('primera vez'))) &&
                                 c.estado !== 'cancelada'
                               ).length;
                               

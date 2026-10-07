@@ -50,11 +50,11 @@ export default function AdminCmsEditor({ onConfigSaved }: AdminCmsEditorProps) {
   const loadLocalFiles = async () => {
     setLoadingFiles(true);
     try {
-      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch('/api/uploads/list', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers
       });
       if (res.ok) {
         const data = await res.json();
@@ -92,13 +92,12 @@ export default function AdminCmsEditor({ onConfigSaved }: AdminCmsEditorProps) {
       reader.onload = async () => {
         const base64Data = reader.result as string;
         try {
-          const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+          const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = `Bearer ${token}`;
           const res = await fetch('/api/upload', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
+            headers,
             body: JSON.stringify({
               filename: file.name,
               base64Data
@@ -153,12 +152,12 @@ export default function AdminCmsEditor({ onConfigSaved }: AdminCmsEditorProps) {
       return;
     }
     try {
-      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch(`/api/uploads/${encodeURIComponent(filename)}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers
       });
       if (res.ok) {
         showStatus('Archivo eliminado del almacenamiento.', 'success');
@@ -217,13 +216,12 @@ export default function AdminCmsEditor({ onConfigSaved }: AdminCmsEditorProps) {
     if (!updatedConfig) return;
     setSaving(true);
     try {
-      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch('/api/cms/config', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers,
         body: JSON.stringify(updatedConfig),
       });
       

@@ -64,7 +64,7 @@ export default function AgentePage(props: AgentePageProps) {
   const fetchAppointments = useCallback(async () => {
     setIsLoadingCitas(true);
     try {
-      const token = sessionStorage.getItem("admin_token") || localStorage.getItem("te_session_token") || "superadmin_token";
+      const token = sessionStorage.getItem("admin_token") || localStorage.getItem("te_session_token");
       const headers: Record<string, string> = {};
       if (token) headers["Authorization"] = `Bearer ${token}`;
 

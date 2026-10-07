@@ -63,18 +63,6 @@ export function getUserDisplayDetails(u: SystemUser, isRc: boolean) {
       roleName = "Superadministrador";
     } else if (u.role === UserRole.SUPERVISOR) {
       roleName = "Supervisor Registro Civil";
-    } else if (u.username === "mcruz") {
-      fullName = "Mateo Cruz (Oficial de Recepción Sede Ancón)";
-      roleName = "Oficial de Recepción";
-    } else if (u.username === "frios") {
-      fullName = "Felipe Ríos (Oficial de Hechos Vitales Bocas del Toro)";
-      roleName = "Oficial de Hechos Vitales";
-    } else if (u.username === "jgutierrez") {
-      fullName = "Julia Gutiérrez (Oficial de Investigación Sede Ancón)";
-      roleName = "Oficial de Investigación";
-    } else if (u.username === "spadilla") {
-      fullName = "Silvia Padilla (Recepción de Matrimonios Bocas del Toro)";
-      roleName = "Recepción de Matrimonios";
     } else {
       if (u.role === UserRole.AGENT_CAJA) {
         fullName = fullName.replace("Cajero", "Registrador Auxiliar").replace("Caja", "Oficial de Hechos Vitales");
@@ -116,6 +104,37 @@ interface AgentConsoleProps {
   onRefresh?: () => Promise<void> | void;
   onResetSystem?: () => Promise<void> | void;
 }
+
+const AttentionTimerBadge = React.memo(function AttentionTimerBadge({
+  startTime,
+  isActive
+}: {
+  startTime: number;
+  isActive: boolean;
+}) {
+  const [now, setNow] = React.useState(() => Date.now());
+
+  React.useEffect(() => {
+    if (!isActive || !startTime) return;
+    setNow(Date.now());
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isActive, startTime]);
+
+  if (!isActive || !startTime) {
+    return <span className="font-mono text-3xl font-black text-emerald-400 tracking-wider">00:00</span>;
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((now - startTime) / 1000));
+  const mins = Math.floor(elapsedSeconds / 60);
+  const secs = elapsedSeconds % 60;
+  const formatted = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+
+  return <span className="font-mono text-3xl font-black text-emerald-400 tracking-wider">{formatted}</span>;
+});
 
 export default function AgentConsole({
   tickets,
@@ -264,7 +283,6 @@ export default function AgentConsole({
   const [loginError, setFormLoginError] = useState("");
   const [locallyAttendingTicketIds, setLocallyAttendingTicketIds] = useState<Record<string, boolean>>({});
   const [attentionStartTime, setAttentionStartTime] = useState<Record<string, number>>({});
-  const [currentTime, setCurrentTime] = useState(Date.now());
   const [cajaTransferNotification, setCajaTransferNotification] = useState<{
     ticketCode: string;
     name: string;
@@ -294,15 +312,7 @@ export default function AgentConsole({
     }
   };
 
-  // Live timer interval for attention chronometer
-  React.useEffect(() => {
-    const timerInterval = setInterval(() => {
-      setCurrentTime(Date.now());
-    }, 1000);
-    return () => clearInterval(timerInterval);
-  }, []);
-
-  // Polling ágil para mantener la consola del agente sincronizada con nuevos tickets emitidos en quioscos
+  // Polling de respaldo para mantener la consola del agente sincronizada (SSE ya provee actualizaciones instantáneas)
   React.useEffect(() => {
     if (!onRefresh) return;
     const pollInterval = setInterval(() => {
@@ -310,7 +320,7 @@ export default function AgentConsole({
         return;
       }
       onRefresh();
-    }, 1000);
+    }, 8000);
     return () => clearInterval(pollInterval);
   }, [onRefresh]);
 
@@ -574,6 +584,10 @@ export default function AgentConsole({
 
   const candidateWaitingTickets = ecosystemTickets.filter(t => {
     if (t.status !== TicketStatus.WAITING) return false;
+
+    // Si ya está asignado a un cubículo o siendo llamado/atendido por una ventanilla, NO debe figurar en la cola de espera
+    if (t.assignedCubicleId) return false;
+    if (cubicles.some(c => c.currentTicketId === t.id)) return false;
     
     if (gatewaySelection === "registro_civil") {
       // For Registro Civil, we only handle REGISTRO tickets compatible with the cubicle
@@ -638,14 +652,6 @@ export default function AgentConsole({
   const startAttTime = activeTicket
     ? (attentionStartTime[activeTicket.id] || activeTicket.attendedAt || activeTicket.calledAt || activeTicket.createdAt)
     : 0;
-
-  const elapsedSeconds = (isAttendingActive && startAttTime)
-    ? Math.max(0, Math.floor((currentTime - startAttTime) / 1000))
-    : 0;
-
-  const timerMins = Math.floor(elapsedSeconds / 60);
-  const timerSecs = elapsedSeconds % 60;
-  const formattedAttentionTimer = `${String(timerMins).padStart(2, "0")}:${String(timerSecs).padStart(2, "0")}`;
 
   // AUTO-ASSIGNMENT LOGIC ENCAPSULATED PER AGENT:
   // Instead of a global hook looping over all cubicles (which causes a race condition between tabs),
@@ -863,7 +869,7 @@ export default function AgentConsole({
                 <input
                   type="text"
                   required
-                  placeholder="Ej: mcruz, jgutierrez"
+                  placeholder="Ingrese su usuario asignado"
                   value={usernameInput}
                   onChange={(e) => setUsernameInput(e.target.value)}
                   className="w-full px-3.5 py-2.5 text-xs bg-white border border-slate-250 rounded-xl focus:border-[#122e70] focus:ring-1 focus:ring-[#122e70] focus:outline-none placeholder:text-slate-400 font-bold"
@@ -898,27 +904,6 @@ export default function AgentConsole({
                 <span>Validar & Entrar</span>
               </button>
             </form>
-
-            <div className="text-[9.5px] leading-relaxed text-slate-400 border-t border-slate-200/60 pt-3 flex flex-col gap-1">
-              <span>💡 <strong>Cuentas Demo Sugeridas:</strong></span>
-              {gatewaySelection === "registro_civil" ? (
-                <>
-                  <span>- <strong>@mcruz</strong> (Mateo Cruz - Oficial de Recepción Sede Ancón)</span>
-                  <span>- <strong>@frios</strong> (Felipe Ríos - Oficial de Hechos Vitales Bocas del Toro)</span>
-                  <span>- <strong>@jgutierrez</strong> (Julia Gutiérrez - Oficial de Investigación Sede Ancón)</span>
-                  <span>- <strong>@spadilla</strong> (Silvia Padilla - Recepción de Matrimonios Bocas del Toro)</span>
-                </>
-              ) : (
-                <>
-                  <span>- <strong>@mcruz</strong> (Mateo Cruz - Caja Sede Ancón)</span>
-                  <span>- <strong>@frios</strong> (Felipe Ríos - Caja Bocas del Toro)</span>
-                  <span>- <strong>@jgutierrez</strong> (Julia Gutiérrez - Tríada Sede Ancón)</span>
-                  <span>- <strong>@spadilla</strong> (Silvia Padilla - Tríada Bocas del Toro)</span>
-                </>
-              )}
-              <span>- O use cuentas creadas en <strong>Superadministrador → Gestión de Operadores</strong></span>
-              <span className="font-bold text-[#122e70]">🔑 Contraseña: El mismo nombre de usuario o "123456"</span>
-            </div>
           </div>
 
         </div>
@@ -1312,7 +1297,7 @@ export default function AgentConsole({
                   <input
                     type="text"
                     required
-                    placeholder="Ej: jgutierrez, spadilla"
+                    placeholder="Ingrese usuario de supervisor"
                     value={rcSupervisorUsername}
                     onChange={(e) => {
                       setRcSupervisorUsername(e.target.value);
@@ -1353,14 +1338,6 @@ export default function AgentConsole({
                   <span>Autenticar Supervisor</span>
                 </button>
               </form>
-
-              <div className="text-[9.5px] leading-relaxed text-slate-400 border-t border-slate-200/60 pt-3 flex flex-col gap-1">
-                <span>💡 <strong>Cuentas Autorizadas de Supervisión:</strong></span>
-                <span>- <strong>@jgutierrez</strong> (Julia Gutiérrez - Oficial de Investigación / Supervisora)</span>
-                <span>- <strong>@spadilla</strong> (Silvia Padilla - Recepción de Matrimonio / Supervisora)</span>
-                <span>- <strong>@superadmin</strong> (Superadministrador del Sistema)</span>
-                <span className="font-bold text-[#122e70]">🔑 Contraseña: El mismo nombre de usuario o "123456"</span>
-              </div>
             </div>
           ) : (
             /* RC SUPERVISOR DASHBOARD VIEW */
@@ -2038,9 +2015,7 @@ export default function AgentConsole({
                     </div>
                   </div>
                   <div className="bg-black/80 border border-emerald-500/40 px-5 py-2 rounded-xl text-center shadow-inner flex items-baseline gap-2">
-                    <span className="font-mono text-3xl font-black text-emerald-400 tracking-wider">
-                      {formattedAttentionTimer}
-                    </span>
+                    <AttentionTimerBadge startTime={startAttTime} isActive={isAttendingActive} />
                     <span className="text-[10px] uppercase font-bold text-slate-400">min : seg</span>
                   </div>
                 </div>

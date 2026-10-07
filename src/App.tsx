@@ -124,76 +124,35 @@ export default function App() {
   // --- INTEGRACIÓN GESTIÓN DE ROLES Y USUARIOS ---
   const DEFAULT_USERS: SystemUser[] = [
     {
-      id: "user-login-generic",
-      username: "login",
-      fullName: "Usuario de Prueba Inicial",
-      role: UserRole.SUPERADMIN,
-      officeId: "OFF-1",
-      password: "login",
-      mustChangePassword: true
-    },
-    {
       id: "user-super",
       username: "superadmin",
       fullName: "Administrador Central",
       role: UserRole.SUPERADMIN,
       officeId: "OFF-1" // Sede Ancón
-    },
-    {
-      id: "user-sup-ancon",
-      username: "rsanchez",
-      fullName: "Ricardo Sánchez (Supervisor Sede Ancón)",
-      role: UserRole.SUPERVISOR,
-      officeId: "OFF-1" // Sede Ancón
-    },
-    {
-      id: "user-sup-bocas",
-      username: "amora",
-      fullName: "Ana María Mora (Supervisor Regional Bocas)",
-      role: UserRole.SUPERVISOR,
-      officeId: "OFF-2" // Bocas del Toro
-    },
-    {
-      id: "user-caja-ancon",
-      username: "mcruz",
-      fullName: "Mateo Cruz (Cajero Sede Ancón)",
-      role: UserRole.AGENT_CAJA,
-      officeId: "OFF-1" // Sede Ancón
-    },
-    {
-      id: "user-triada-ancon",
-      username: "jgutierrez",
-      fullName: "Julia Gutiérrez (Tríada Sede Ancón)",
-      role: UserRole.AGENT_TRIADA,
-      officeId: "OFF-1" // Sede Ancón
-    },
-    {
-      id: "user-caja-bocas",
-      username: "frios",
-      fullName: "Felipe Ríos (Cajero Bocas del Toro)",
-      role: UserRole.AGENT_CAJA,
-      officeId: "OFF-2" // Bocas del Toro
-    },
-    {
-      id: "user-triada-bocas",
-      username: "spadilla",
-      fullName: "Silvia Padilla (Tríada Bocas del Toro)",
-      role: UserRole.AGENT_TRIADA,
-      officeId: "OFF-2" // Bocas del Toro
     }
   ];
 
   const [users, setUsers] = useState<SystemUser[]>(() => {
     const saved = localStorage.getItem("system_users");
+    const purgeSet = new Set(['login', 'user-login-generic', 'oscargave3003', 'adminmini', 'rsanchez', 'amora', 'mcruz', 'jgutierrez', 'frios', 'spadilla', 'supertriada', 'supercaja', 'user-sup-ancon', 'user-sup-bocas', 'user-caja-ancon', 'user-triada-ancon', 'user-caja-bocas', 'user-triada-bocas']);
     try {
-      return saved ? JSON.parse(saved) : DEFAULT_USERS;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((u: any) => !purgeSet.has(u.username) && !purgeSet.has(u.id));
+        }
+      }
+      return DEFAULT_USERS;
     } catch {
       return DEFAULT_USERS;
     }
   });
 
   const [currentActiveUserId, setCurrentActiveUserId] = useState<string>(() => {
-    return localStorage.getItem("current_active_user_id") || "user-caja-ancon";
+    const stored = localStorage.getItem("current_active_user_id");
+    const purgeIds = new Set(['user-caja-ancon', 'user-triada-ancon', 'user-sup-ancon', 'user-caja-bocas', 'user-triada-bocas', 'user-sup-bocas']);
+    if (stored && !purgeIds.has(stored)) return stored;
+    return "user-super";
   });
 
   useEffect(() => {
@@ -204,10 +163,10 @@ export default function App() {
   useEffect(() => {
     const fetchDBUsers = async () => {
       try {
-        const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
-        const res = await fetch('/api/users', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const res = await fetch('/api/users', { headers });
         if (res.ok) {
           const data = await res.json();
           if (data.success && Array.isArray(data.users)) {
@@ -347,20 +306,29 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Registrar eventos para detectar actividad del usuario (teclado, mouse, clics, etc)
-    const recordActivity = () => {
-      localStorage.setItem("last_agent_activity_timestamp", Date.now().toString());
+    // Registrar actividad del usuario de forma throttled (máximo una escritura cada 30s) para evitar saturar la CPU
+    let lastActivityTimestamp = 0;
+    const recordActivity = (force: boolean = false) => {
+      const now = Date.now();
+      if (force || now - lastActivityTimestamp > 30000) {
+        lastActivityTimestamp = now;
+        try {
+          localStorage.setItem("last_agent_activity_timestamp", now.toString());
+        } catch {}
+      }
     };
 
-    window.addEventListener("mousemove", recordActivity);
-    window.addEventListener("keydown", recordActivity);
-    window.addEventListener("click", recordActivity);
-    window.addEventListener("scroll", recordActivity);
-    window.addEventListener("touchstart", recordActivity);
+    const handleUserActivity = () => recordActivity(false);
+
+    window.addEventListener("mousemove", handleUserActivity, { passive: true });
+    window.addEventListener("keydown", handleUserActivity, { passive: true });
+    window.addEventListener("click", handleUserActivity, { passive: true });
+    window.addEventListener("scroll", handleUserActivity, { passive: true });
+    window.addEventListener("touchstart", handleUserActivity, { passive: true });
 
     // Inicializar el timestamp si no existe
     if (!localStorage.getItem("last_agent_activity_timestamp")) {
-      recordActivity();
+      recordActivity(true);
     }
 
     const intervalId = setInterval(async () => {
@@ -482,11 +450,11 @@ export default function App() {
 
     return () => {
       clearInterval(intervalId);
-      window.removeEventListener("mousemove", recordActivity);
-      window.removeEventListener("keydown", recordActivity);
-      window.removeEventListener("click", recordActivity);
-      window.removeEventListener("scroll", recordActivity);
-      window.removeEventListener("touchstart", recordActivity);
+      window.removeEventListener("mousemove", handleUserActivity);
+      window.removeEventListener("keydown", handleUserActivity);
+      window.removeEventListener("click", handleUserActivity);
+      window.removeEventListener("scroll", handleUserActivity);
+      window.removeEventListener("touchstart", handleUserActivity);
     };
   }, [setOfficeCubicles]);
 

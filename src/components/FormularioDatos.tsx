@@ -103,17 +103,6 @@ export default function FormularioDatos({ initialData, onSuccess, onBack, select
             fechaCreacion: new Date().toISOString()
           },
           {
-            id: "Nº26-123-456",
-            number: "Nº26-123-456",
-            citizenName: "Oscar González G.",
-            identificacion: "8-999-9999",
-            fechaNacimiento: "1975-04-12",
-            correo: "oscargave3003@gmail.com",
-            telefono: "6123-4567",
-            notes: "Expediente de prueba pre-autorizado por la Dirección de Registro Civil",
-            fechaCreacion: new Date().toISOString()
-          },
-          {
             id: "Nº54-474-325",
             number: "Nº54-474-325",
             citizenName: "Ana María Espinoza",

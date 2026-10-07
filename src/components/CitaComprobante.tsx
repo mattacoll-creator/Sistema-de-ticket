@@ -215,18 +215,22 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
           id: cita.id,
           email: emailInput,
           codigoTransaccion: cita.codigoTransaccion,
-          categoriaNombre: currentCategory?.id || '',
-          subServicioNombre: currentSubService?.nombre || '',
+          categoriaNombre: currentCategory?.id || cita.servicioCategoria || '',
+          subServicioNombre: currentSubService?.nombre || cita.subServicioNombre || '',
+          subServicioId: cita.subServicioId,
+          servicioCategoria: cita.servicioCategoria,
           fechaFormateada: formatDate(cita.fecha),
           fecha: cita.fecha,
           hora: cita.hora,
-          sucursalNombre: currentSucursal?.nombre || '',
-          sucursalDireccion: currentSucursal?.direccion || '',
+          sucursalNombre: currentSucursal?.nombre || (cita as any).sucursalNombre || '',
+          sucursalDireccion: currentSucursal?.direccion || (cita as any).sucursalDireccion || '',
           identificacion: cita.datosPersonales.identificacion,
           telefono: cita.datosPersonales.telefono,
           requisitos: currentSubService?.requisitos || [],
           numeroSeguimiento: cita.datosPersonales.numeroSeguimiento,
-          ticketTurnoCode: cita.ticketTurnoCode
+          ticketTurnoCode: cita.ticketTurnoCode,
+          nombre: cita.nombre || cita.datosPersonales?.nombreCompleto || '',
+          datosPersonales: cita.datosPersonales
         }),
       });
 
@@ -288,19 +292,23 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
         body: JSON.stringify({
           email: targetEmail,
           codigoTransaccion: cita.codigoTransaccion,
-          categoriaNombre: currentCategory?.nombre || '',
-          subServicioNombre: currentSubService?.nombre || '',
+          categoriaNombre: currentCategory?.nombre || cita.servicioCategoria || '',
+          subServicioNombre: currentSubService?.nombre || cita.subServicioNombre || '',
+          subServicioId: cita.subServicioId,
+          servicioCategoria: cita.servicioCategoria,
           fechaFormateada: formatDate(cita.fecha),
           fecha: cita.fecha,
           id: cita.id,
           hora: cita.hora,
-          sucursalNombre: currentSucursal?.nombre || '',
-          sucursalDireccion: currentSucursal?.direccion || '',
+          sucursalNombre: currentSucursal?.nombre || (cita as any).sucursalNombre || '',
+          sucursalDireccion: currentSucursal?.direccion || (cita as any).sucursalDireccion || '',
           identificacion: cita.datosPersonales.identificacion,
           telefono: cita.datosPersonales.telefono,
           requisitos: currentSubService?.requisitos || [],
           numeroSeguimiento: cita.datosPersonales.numeroSeguimiento,
-          ticketTurnoCode: cita.ticketTurnoCode
+          ticketTurnoCode: cita.ticketTurnoCode,
+          nombre: cita.nombre || cita.datosPersonales?.nombreCompleto || '',
+          datosPersonales: cita.datosPersonales
         }),
       });
 
@@ -526,7 +534,15 @@ export default function CitaComprobante({ cita, onDone, onCancelCita, onDeleteCi
               <div className="bg-amber-50/20 border border-amber-200/60 rounded p-3.5 grid grid-cols-1 sm:grid-cols-2 gap-2.5 shadow-sm">
                 <div className="flex items-center gap-2 text-[11px] text-slate-700 col-span-1 sm:col-span-2">
                   <User className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                  <span className="truncate">Nombre Completo: <strong className="font-extrabold text-slate-800">{[cita.datosPersonales.primerNombre, cita.datosPersonales.segundoNombre, cita.datosPersonales.primerApellido, cita.datosPersonales.segundoApellido].filter(Boolean).join(' ')}</strong></span>
+                  <span className="truncate">Nombre Completo: <strong className="font-extrabold text-slate-800">{
+                    [cita.datosPersonales?.primerNombre, cita.datosPersonales?.segundoNombre, cita.datosPersonales?.primerApellido, cita.datosPersonales?.segundoApellido]
+                      .map(s => String(s || '').trim())
+                      .filter(Boolean)
+                      .join(' ') || 
+                    cita.datosPersonales?.nombreCompleto || 
+                    cita.nombre || 
+                    'Ciudadano Extranjero'
+                  }</strong></span>
                 </div>
                 <div className="flex items-center gap-1.5 text-[11px] text-slate-700">
                   <span className="text-[9px] font-extrabold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded uppercase tracking-wider">PASAPORTE</span>

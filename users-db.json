@@ -1,14 +1,5 @@
 [
   {
-    "username": "login",
-    "password": "5f0833239791f60ec75edace84bc96ad69d52e6f34ec6ff6c2789ad0a56ae337",
-    "role": "super",
-    "nombre": "Usuario Inicial (Cambio Requerido)",
-    "sucursalId": "OFF-1",
-    "fechaCreacion": "2026-08-07T08:00:00Z",
-    "mustChangePassword": true
-  },
-  {
     "username": "superadmin",
     "password": "3e1b5c082e31fd7f6a6afd054da6cb65bca6dacd534cabcfd5bdbf39323fbc8f",
     "role": "super",
@@ -17,77 +8,8 @@
     "fechaCreacion": "2026-08-01T08:00:00Z"
   },
   {
-    "username": "rsanchez",
-    "password": "7c92cbadeff1125ca777295565617fa6b4eef331ef5e7b8020e02518307d6fe5",
-    "role": "super",
-    "nombre": "Ricardo Sánchez (Supervisor Sede Ancón)",
-    "sucursalId": "OFF-1",
-    "fechaCreacion": "2026-08-01T08:00:00Z"
-  },
-  {
-    "username": "amora",
-    "password": "5d320e664936d6f87dcd412cb684f90102c0ece65dfb6369516557e1222ebddf",
-    "role": "super",
-    "nombre": "Ana María Mora (Supervisor Regional Bocas)",
-    "sucursalId": "OFF-2",
-    "fechaCreacion": "2026-08-01T08:00:00Z"
-  },
-  {
-    "username": "mcruz",
-    "password": "5beb9fd10aa2d39761f42122ad364b5473ac0b58b01e67b265f8da3adb5695f5",
-    "role": "agent_caja",
-    "nombre": "Mateo Cruz (Cajero Sede Ancón)",
-    "sucursalId": "OFF-1",
-    "fechaCreacion": "2026-08-01T08:00:00Z"
-  },
-  {
-    "username": "jgutierrez",
-    "password": "814ab4ef3864a30d3089dd30dedcff989ebe3bd1ba2f46dce73e9448e6285f63",
-    "role": "agent_triada",
-    "nombre": "Julia Gutiérrez (Tríada Sede Ancón)",
-    "sucursalId": "OFF-1",
-    "fechaCreacion": "2026-08-01T08:00:00Z"
-  },
-  {
-    "username": "frios",
-    "password": "3c3cb0b6ea980a2102721c5eaff343cd69af3a6ea50681c0a9e2af0bb9e30326",
-    "role": "agent_caja",
-    "nombre": "Felipe Ríos (Cajero Bocas del Toro)",
-    "sucursalId": "OFF-2",
-    "fechaCreacion": "2026-08-01T08:00:00Z"
-  },
-  {
-    "username": "spadilla",
-    "password": "e1a332ee4aa3eface0be76c48b7db55eff9d2fe1fc0117524029a0a9d11285a9",
-    "role": "agent_triada",
-    "nombre": "Silvia Padilla (Tríada Bocas del Toro)",
-    "sucursalId": "OFF-2",
-    "fechaCreacion": "2026-08-01T08:00:00Z"
-  },
-  {
-    "username": "oscargave3003",
-    "password": "167acba7d42c3df905b4d0632a10bae9e9fe6f6388de8880da08e76f987d25c7",
-    "role": "super",
-    "nombre": "Oscar Super Admin",
-    "fechaCreacion": "2026-06-05T18:11:00Z"
-  },
-  {
-    "username": "oscargave3003@gmail.com",
-    "password": "167acba7d42c3df905b4d0632a10bae9e9fe6f6388de8880da08e76f987d25c7",
-    "role": "super",
-    "nombre": "Oscar Super Admin (Email)",
-    "fechaCreacion": "2026-06-05T18:11:00Z"
-  },
-  {
-    "username": "adminmini",
-    "password": "de321cd791d54491b09c695dbba1504ad71849d9c110ee66b16bd5d3b44f99b8",
-    "role": "sencillo",
-    "nombre": "Administrador Sencillo",
-    "fechaCreacion": "2026-05-26T15:18:27Z"
-  },
-  {
     "username": "adminte",
-    "password": "167acba7d42c3df905b4d0632a10bae9e9fe6f6388de8880da08e76f987d25c7",
+    "password": "pbkdf2$100000$6f2ad58305f526be77b354773a37ab38$07d2d472a88abf3a2956b61c9b4f5aa084b3089d2bb8a2a54fee03e9c6573435ac537563496ddba44815fffc6cb91a90e3503675841a63001eb1503d49440765",
     "role": "super",
     "nombre": "Super Administrador TE",
     "fechaCreacion": "2026-05-26T15:18:27Z"
@@ -132,20 +54,6 @@
     "password": "20b1a5260ffcf5e1e9682f23da7900207eea09f60d1a7c75fa9ef90424bc167a",
     "role": "extranjeria_cubiculo",
     "nombre": "Cubículo Ticket Extranjería",
-    "fechaCreacion": "2026-05-28T18:13:00Z"
-  },
-  {
-    "username": "supertriada",
-    "password": "20b1a5260ffcf5e1e9682f23da7900207eea09f60d1a7c75fa9ef90424bc167a",
-    "role": "triada_supervisor",
-    "nombre": "Supervisor de Tríada y Foto",
-    "fechaCreacion": "2026-05-28T18:13:00Z"
-  },
-  {
-    "username": "supercaja",
-    "password": "20b1a5260ffcf5e1e9682f23da7900207eea09f60d1a7c75fa9ef90424bc167a",
-    "role": "caja_supervisor",
-    "nombre": "Supervisor de Caja y Pagos",
     "fechaCreacion": "2026-05-28T18:13:00Z"
   }
 ]

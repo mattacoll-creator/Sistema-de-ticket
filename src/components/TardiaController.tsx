@@ -30,6 +30,7 @@ import {
 import { jsPDF } from 'jspdf';
 import { Cita, AdminRole, TipoIdentificacion } from '../types';
 import { SUCURSALES_TE } from '../data';
+import { resolveCitizenName } from '../utils/citizenNameResolver';
 
 const getTodayDateStr = () => {
   const d = new Date();
@@ -660,13 +661,12 @@ Su número de seguimiento es: ${uniqueNumber}`;
     localStorage.setItem('tardia_hora_fin', tardiaHoraFin);
     
     try {
-      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch('/api/tardia/config', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers,
         body: JSON.stringify({
           capacidadTotalDia: tardiaCapacidadTotal,
           intervalo: tardiaIntervalo,
@@ -1518,7 +1518,8 @@ Su número de seguimiento es: ${trackNum}`;
                     </thead>
                     <tbody className="divide-y divide-slate-900 text-xs text-slate-350">
                       {filteredTardiaCitas.map(cita => {
-                        const citizen = cita.datosPersonales;
+                        const citizen = cita.datosPersonales || {};
+                        const displayName = resolveCitizenName(cita) || citizen.nombreCompleto || cita.nombre || 'N/A';
                         const isRealizada = cita.estado === 'realizada';
                         const isCancelada = cita.estado === 'cancelada' || cita.estado === 'no_asistire';
                         const isConfirmada = !isRealizada && !isCancelada;
@@ -1532,7 +1533,7 @@ Su número de seguimiento es: ${trackNum}`;
                             </td>
                             <td className="p-3 font-semibold space-y-0.5">
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-white text-xs">{citizen.nombreCompleto || 'N/A'}</span>
+                                <span className="text-white text-xs">{displayName}</span>
                                 {cita.creadaPorSupervisor && (
                                   <span className="bg-amber-500/10 text-amber-500 border border-amber-500/30 text-[8px] font-black uppercase px-1.5 py-0.5 rounded tracking-wider shadow-inner font-mono">
                                     ★ Cita Especial
@@ -1993,7 +1994,7 @@ Su número de seguimiento es: ${trackNum}`;
                       {/* Citizen metadata */}
                       <div className="space-y-1.5 text-xs text-slate-355">
                         <div className="text-xs font-black text-white uppercase leading-tight flex items-center justify-between gap-1.5 flex-wrap">
-                          <span>{citizen.nombreCompleto || 'Sin nombre'}</span>
+                          <span>{resolveCitizenName(cita) || citizen?.nombreCompleto || cita.nombre || 'Ciudadano'}</span>
                           {cita.creadaPorSupervisor && (
                             <span className="bg-amber-500/10 text-amber-500 border border-amber-500/30 text-[8px] font-black uppercase px-2 py-0.5 rounded tracking-wider shadow-inner font-mono inline-block">
                               ★ Cita Especial

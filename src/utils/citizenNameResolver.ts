@@ -48,50 +48,29 @@ export function isGenericPlaceholderName(name: string | null | undefined): boole
  */
 export function extractNameFromEmail(email: string | null | undefined): string {
   if (!email || typeof email !== 'string' || !email.includes('@')) return '';
-  const local = email.split('@')[0].trim().toLowerCase();
-  if (
-    local.startsWith('admin') || 
-    local.startsWith('soporte') || 
-    local.startsWith('test') || 
-    local.startsWith('extranjeria') ||
-    local.startsWith('info') || 
-    local.startsWith('contacto') || 
-    local.startsWith('sede') || 
-    local.startsWith('sucursal') ||
-    local.startsWith('noreply') ||
-    local.startsWith('no-reply')
-  ) {
-    return '';
-  }
   
-  // Replace separators with spaces
-  let cleaned = local.replace(/[\._\-\+]/g, ' ');
-  // Remove numbers
-  cleaned = cleaned.replace(/[0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+  const cleanEmail = email.trim().toLowerCase();
+  const username = cleanEmail.split('@')[0];
+  if (!username) return '';
+
+  // Clean numbers, dots, dashes, underscores
+  let cleaned = username.replace(/[0-9]+/g, '').replace(/[._\-]+/g, ' ').trim();
+  if (!cleaned) return '';
+
+  // Capitalize words
+  const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
   
-  const words = cleaned.split(' ').filter(Boolean);
-  if (words.length >= 2) {
-    return words.map(w => {
-      if (w.length === 1) return w.toUpperCase() + '.';
-      return w.charAt(0).toUpperCase() + w.slice(1);
-    }).join(' ');
-  }
-  
-  if (words.length === 1) {
-    const single = words[0];
-    for (const fn of COMMON_FIRST_NAMES) {
-      if (single.startsWith(fn) && single.length > fn.length) {
-        const first = fn.charAt(0).toUpperCase() + fn.slice(1);
-        const rest = single.slice(fn.length);
-        const restCap = rest.length === 1 ? rest.toUpperCase() + '.' : rest.charAt(0).toUpperCase() + rest.slice(1);
-        return `${first} ${restCap}`.trim();
-      }
-    }
-    if (single.length >= 3) {
-      return single.charAt(0).toUpperCase() + single.slice(1);
+  // Try to find if it starts with a common first name
+  for (const name of COMMON_FIRST_NAMES) {
+    if (cleaned.startsWith(name) && cleaned.length > name.length) {
+      // e.g. "jovannaolivares" -> "jovanna olivares"
+      const rest = cleaned.substring(name.length).trim();
+      return `${capitalize(name)} ${capitalize(rest)}`;
     }
   }
-  return '';
+
+  // Otherwise, just format the cleaned string
+  return cleaned.split(' ').map(word => capitalize(word)).join(' ');
 }
 
 /**
@@ -102,9 +81,16 @@ export function extractNameFromEmail(email: string | null | undefined): string {
 export function resolveCitizenName(app: any, fallbackRecords: any[] = []): string {
   if (!app) return 'Ciudadano';
 
-  const dp = app.datosPersonales || app.datos_personales || app.data?.datosPersonales || app.data?.datos_personales;
+  let dp = app.datosPersonales || app.datos_personales || app.data?.datosPersonales || app.data?.datos_personales;
   
-  // 1. Structured names inside datosPersonales (primerNombre, segundoNombre, primerApellido, segundoApellido)
+  // Safely parse dp if it is a JSON string
+  if (dp && typeof dp === 'string') {
+    try {
+      dp = JSON.parse(dp);
+    } catch (e) {}
+  }
+
+  // 1. Strictly prioritize the real name from the form (datosPersonales): Primer Nombre y Primer Apellido
   if (dp) {
     const parts = [
       dp.primerNombre || dp.primer_nombre || '',
@@ -114,9 +100,9 @@ export function resolveCitizenName(app: any, fallbackRecords: any[] = []): strin
     ].map((s: any) => String(s || '').trim()).filter(Boolean);
     
     if (parts.length > 0) {
-      const joined = parts.join(' ');
-      if (!isGenericPlaceholderName(joined)) {
-        return joined;
+      const partsCombined = parts.join(' ');
+      if (!isGenericPlaceholderName(partsCombined)) {
+        return partsCombined;
       }
     }
 
@@ -135,10 +121,6 @@ export function resolveCitizenName(app: any, fallbackRecords: any[] = []): strin
     if (dp.name && !isGenericPlaceholderName(dp.name)) {
       return dp.name.trim();
     }
-
-    if (dp.solicitante && !isGenericPlaceholderName(dp.solicitante)) {
-      return dp.solicitante.trim();
-    }
   }
 
   // 2. Direct top-level structured parts if present
@@ -149,13 +131,13 @@ export function resolveCitizenName(app: any, fallbackRecords: any[] = []): strin
     app.segundoApellido || app.segundo_apellido || ''
   ].map((s: any) => String(s || '').trim()).filter(Boolean);
   if (topParts.length > 0) {
-    const joined = topParts.join(' ');
-    if (!isGenericPlaceholderName(joined)) {
-      return joined;
+    const topCombined = topParts.join(' ');
+    if (!isGenericPlaceholderName(topCombined)) {
+      return topCombined;
     }
   }
 
-  // 3. Direct appointment-level names (if not a generic placeholder)
+  // 3. Direct appointment-level names (strictly verified to NOT be a placeholder or 'Ciudadano')
   if (app.nombre && !isGenericPlaceholderName(app.nombre)) {
     return app.nombre.trim();
   }
@@ -168,14 +150,8 @@ export function resolveCitizenName(app: any, fallbackRecords: any[] = []): strin
   if (app.ciudadano_nombre && !isGenericPlaceholderName(app.ciudadano_nombre)) {
     return app.ciudadano_nombre.trim();
   }
-  if (app.solicitante && !isGenericPlaceholderName(app.solicitante)) {
-    return app.solicitante.trim();
-  }
-  if (app.titular && !isGenericPlaceholderName(app.titular)) {
-    return app.titular.trim();
-  }
 
-  // 4. Match from foreign / extranjeria records database by passport or ID
+  // 4. Match from foreign records database by passport or ID
   const passport = String(dp?.pasaporte || app.pasaporte || app.identificacion || '').trim().toUpperCase();
   if (passport && Array.isArray(fallbackRecords) && fallbackRecords.length > 0) {
     const matched = fallbackRecords.find(r => 
@@ -187,46 +163,7 @@ export function resolveCitizenName(app: any, fallbackRecords: any[] = []): strin
     }
   }
 
-  // 5. Extract real name from contact email - examine ALL candidates across dp and app
-  const emailCandidates = [
-    dp?.correo,
-    app?.correo,
-    app?.email,
-    dp?.email,
-    app?.contactEmail,
-    dp?.contactEmail,
-    app?.contacto,
-    dp?.contacto,
-    app?.telefono,
-    dp?.telefono,
-    app?.creadoPor,
-    dp?.creadoPor
-  ];
-  for (const cand of emailCandidates) {
-    if (cand && typeof cand === 'string' && cand.includes('@')) {
-      const fromEmail = extractNameFromEmail(cand);
-      if (fromEmail && !isGenericPlaceholderName(fromEmail)) {
-        return fromEmail;
-      }
-    }
-  }
-
-  // Also check any other string property in app or dp in case an email is present
-  for (const container of [app, dp]) {
-    if (container && typeof container === 'object') {
-      for (const k of Object.keys(container)) {
-        const val = container[k];
-        if (typeof val === 'string' && val.includes('@')) {
-          const fromEmail = extractNameFromEmail(val);
-          if (fromEmail && !isGenericPlaceholderName(fromEmail)) {
-            return fromEmail;
-          }
-        }
-      }
-    }
-  }
-
-  // 6. Clean passport or nationality fallback as last resort
+  // 5. Fallback if no real name was found (NO email alias extraction)
   if (passport && passport !== 'N/D' && !passport.startsWith('TE-') && !passport.startsWith('EXT-')) {
     return `Ciudadano (${passport})`;
   }
@@ -234,5 +171,5 @@ export function resolveCitizenName(app: any, fallbackRecords: any[] = []): strin
     return `Ciudadano de ${dp.nacionalidad}`;
   }
 
-  return 'Ciudadano Extranjero';
+  return 'Ciudadano';
 }

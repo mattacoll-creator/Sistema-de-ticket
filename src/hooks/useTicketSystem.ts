@@ -24,13 +24,15 @@ const STORAGE_KEYS = {
  * para asegurar consistencia tipada exacta en todos los componentes y pantallas de TV.
  */
 export function normalizeClientTicket(raw: any): Ticket {
+  const cubId = raw.assignedCubicleId || raw.assignedCubicle || raw.modulo_asignado || undefined;
+
   const normStatus = ((): TicketStatus => {
     const s = String(raw.status || raw.estado || "").toUpperCase();
-    if (s === "WAITING" || s === "ESPERA") return TicketStatus.WAITING;
-    if (s === "CALLING" || s === "LLAMADO") return TicketStatus.CALLING;
-    if (s === "ATTENDING" || s === "ATENDIENDO" || s === "ATENCION") return TicketStatus.ATTENDING;
-    if (s === "COMPLETED" || s === "FINALIZADO" || s === "COMPLETADO") return TicketStatus.COMPLETED;
-    if (s === "MISSED" || s === "CANCELADO" || s === "PERDIDO") return TicketStatus.MISSED;
+    if (s.includes("COMPLET") || s.includes("FINALIZ")) return TicketStatus.COMPLETED;
+    if (s.includes("CANCEL") || s.includes("MISSED") || s.includes("PERDID")) return TicketStatus.MISSED;
+    if (s.includes("ATENDI") || s.includes("ATENCION") || s.includes("ATTEND") || s.includes("PROCESO")) return TicketStatus.ATTENDING;
+    if (s.includes("LLAMA") || s.includes("CALL")) return TicketStatus.CALLING;
+    if (cubId) return TicketStatus.CALLING;
     return TicketStatus.WAITING;
   })();
 
@@ -51,8 +53,6 @@ export function normalizeClientTicket(raw: any): Ticket {
   const cTime = raw.createdAt
     ? (typeof raw.createdAt === "number" ? raw.createdAt : new Date(raw.createdAt).getTime())
     : (raw.hora_emision ? new Date(raw.hora_emision).getTime() : getServerTimestamp());
-
-  const cubId = raw.assignedCubicleId || raw.assignedCubicle || raw.modulo_asignado || undefined;
 
   return {
     id: String(raw.id || Math.random().toString(36).substring(2, 9)),
@@ -798,13 +798,15 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
   const isAutoAssignActive = officeAutoAssign[currentOfficeId] !== false;
 
-  // Evitar loops innecesarios en serialización de estado
-  const currentStateRef = useRef<string>("");
-  currentStateRef.current = JSON.stringify({
-    tickets: officeTickets[currentOfficeId] || [],
-    cubicles: officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
-    auto_assign: officeAutoAssign[currentOfficeId] !== false
-  });
+  // Referencias estables para sincronización entre pestañas sin serializar en cada render
+  const officeTicketsRef = useRef(officeTickets);
+  officeTicketsRef.current = officeTickets;
+  const officeCubiclesRef = useRef(officeCubicles);
+  officeCubiclesRef.current = officeCubicles;
+  const officeAutoAssignRef = useRef(officeAutoAssign);
+  officeAutoAssignRef.current = officeAutoAssign;
+  const currentOfficeIdRef = useRef(currentOfficeId);
+  currentOfficeIdRef.current = currentOfficeId;
 
   const setTicketsForCurrentOffice = useCallback((updater: Ticket[] | ((prev: Ticket[]) => Ticket[])) => {
     setOfficeTickets(prev => {
@@ -995,11 +997,28 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
         setCurrentOfficeId(storedOffice);
       }
 
+      const startOfTodayInitial = new Date();
+      startOfTodayInitial.setHours(0, 0, 0, 0);
+      const startOfTodayInitialMs = startOfTodayInitial.getTime();
+
       const storedOfficeTickets = localStorage.getItem(STORAGE_KEYS.OFFICE_TICKETS);
       let loadedTickets: Record<string, Ticket[]> = {};
       if (storedOfficeTickets) {
         try {
-          loadedTickets = JSON.parse(storedOfficeTickets);
+          const rawLoaded = JSON.parse(storedOfficeTickets);
+          if (rawLoaded && typeof rawLoaded === 'object') {
+            Object.keys(rawLoaded).forEach(offKey => {
+              if (Array.isArray(rawLoaded[offKey])) {
+                // Descartar turnos no completados del día anterior para que no resuciten al iniciar el día
+                loadedTickets[offKey] = rawLoaded[offKey].filter((t: Ticket) => {
+                  if (t.createdAt && t.createdAt < startOfTodayInitialMs) {
+                    return false;
+                  }
+                  return true;
+                });
+              }
+            });
+          }
         } catch {
           loadedTickets = {};
         }
@@ -1309,13 +1328,44 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
       }
     });
 
-    // Polling de respaldo (Acelerado a 2000ms para máxima rapidez)
+    let lastDayChecked = new Date().toDateString();
+
+    // Polling de respaldo inteligente (10s) con respeto de visibilidad de pestaña.
+    // El sistema principal recibe actualizaciones inmediatas (0ms) a través de SSE (Server-Sent Events).
     const syncInterval = setInterval(() => {
       if (active) {
+        // Pausar sondeo si la pestaña del navegador está minimizada o en segundo plano
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+          return;
+        }
+
+        // Detección automática de cambio de día a medianoche
+        const currentDay = new Date().toDateString();
+        if (currentDay !== lastDayChecked) {
+          lastDayChecked = currentDay;
+          const startOfToday = new Date();
+          startOfToday.setHours(0, 0, 0, 0);
+          const startOfTodayMs = startOfToday.getTime();
+
+          setActiveCall(null);
+          setOfficeTickets(prev => {
+            const cleaned: Record<string, Ticket[]> = {};
+            Object.keys(prev).forEach(off => {
+              cleaned[off] = (prev[off] || []).filter(t => (t.createdAt || 0) >= startOfTodayMs);
+            });
+            try {
+              localStorage.setItem(STORAGE_KEYS.OFFICE_TICKETS, JSON.stringify(cleaned));
+              localStorage.removeItem("active_call_ticket");
+              localStorage.removeItem("ticket_system_active_call_v1");
+            } catch {}
+            return cleaned;
+          });
+        }
+
         refreshTickets();
         refreshCubicles();
       }
-    }, 2000);
+    }, 10000);
 
     return () => {
       active = false;
@@ -1356,7 +1406,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
   useEffect(() => {
     const handleStorageChange = (e: Event) => {
       const se = e as StorageEvent;
-      // If it's a StorageEvent, check key. Otherwise process anyway for manual reload dispatches
+      // If it's a StorageEvent with a key not related to ticket system, ignore immediately
       if (
         se.key &&
         se.key !== STORAGE_KEYS.OFFICE_TICKETS &&
@@ -1382,24 +1432,17 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           return;
         }
 
-        const storedOffice = localStorage.getItem(STORAGE_KEYS.CURRENT_OFFICE);
-        if (storedOffice && storedOffice !== currentOfficeId) {
-          setCurrentOfficeId(storedOffice);
+        if (!se.key || se.key === STORAGE_KEYS.CURRENT_OFFICE) {
+          const storedOffice = se.newValue || localStorage.getItem(STORAGE_KEYS.CURRENT_OFFICE);
+          if (storedOffice && storedOffice !== currentOfficeIdRef.current) {
+            setCurrentOfficeId(storedOffice);
+          }
         }
 
-        const storedOfficeTickets = localStorage.getItem(STORAGE_KEYS.OFFICE_TICKETS);
-        if (storedOfficeTickets) {
-          const parsedTickets = JSON.parse(storedOfficeTickets);
-          const rawOfficeList = parsedTickets[currentOfficeId] || [];
-          const normalizedOfficeList = rawOfficeList.map(normalizeClientTicket);
-
-          const incomingStateStr = JSON.stringify({
-            tickets: normalizedOfficeList,
-            cubicles: officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
-            auto_assign: officeAutoAssign[currentOfficeId] === true
-          });
-
-          if (incomingStateStr !== currentStateRef.current) {
+        if (!se.key || se.key === STORAGE_KEYS.OFFICE_TICKETS) {
+          const raw = se.newValue || localStorage.getItem(STORAGE_KEYS.OFFICE_TICKETS);
+          if (raw) {
+            const parsedTickets = JSON.parse(raw);
             const mappedAll: Record<string, Ticket[]> = {};
             Object.keys(parsedTickets).forEach(k => {
               mappedAll[k] = (parsedTickets[k] || []).map(normalizeClientTicket);
@@ -1408,39 +1451,26 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
           }
         }
 
-        const storedOfficeCubicles = localStorage.getItem(STORAGE_KEYS.OFFICE_CUBICLES);
-        if (storedOfficeCubicles) {
-          const loadedCubicles = JSON.parse(storedOfficeCubicles);
-          Object.keys(loadedCubicles).forEach(officeId => {
-            loadedCubicles[officeId] = loadedCubicles[officeId]
-              .filter((c: any) => {
-                const num = parseInt(c.id.replace("CUB-", ""), 10);
-                return !isNaN(num) && (num < 32 || num > 33);
-              })
-              .map((c: any) => migrateCubicleState(c, officeId));
-          });
-
-          const incomingStateStr = JSON.stringify({
-            tickets: officeTickets[currentOfficeId] || [],
-            cubicles: loadedCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
-            auto_assign: officeAutoAssign[currentOfficeId] === true
-          });
-
-          if (incomingStateStr !== currentStateRef.current) {
+        if (!se.key || se.key === STORAGE_KEYS.OFFICE_CUBICLES) {
+          const raw = se.newValue || localStorage.getItem(STORAGE_KEYS.OFFICE_CUBICLES);
+          if (raw) {
+            const loadedCubicles = JSON.parse(raw);
+            Object.keys(loadedCubicles).forEach(officeId => {
+              loadedCubicles[officeId] = loadedCubicles[officeId]
+                .filter((c: any) => {
+                  const num = parseInt(c.id.replace("CUB-", ""), 10);
+                  return !isNaN(num) && (num < 32 || num > 33);
+                })
+                .map((c: any) => migrateCubicleState(c, officeId));
+            });
             setOfficeCubicles(loadedCubicles);
           }
         }
 
-        const storedOfficeAutoAssign = localStorage.getItem(STORAGE_KEYS.OFFICE_AUTO_ASSIGN);
-        if (storedOfficeAutoAssign) {
-          const parsedAuto = JSON.parse(storedOfficeAutoAssign);
-          const incomingStateStr = JSON.stringify({
-            tickets: officeTickets[currentOfficeId] || [],
-            cubicles: officeCubicles[currentOfficeId] || getDefaultCubiclesForOffice(currentOfficeId),
-            auto_assign: parsedAuto[currentOfficeId] !== false
-          });
-
-          if (incomingStateStr !== currentStateRef.current) {
+        if (!se.key || se.key === STORAGE_KEYS.OFFICE_AUTO_ASSIGN) {
+          const raw = se.newValue || localStorage.getItem(STORAGE_KEYS.OFFICE_AUTO_ASSIGN);
+          if (raw) {
+            const parsedAuto = JSON.parse(raw);
             setOfficeAutoAssign(parsedAuto);
           }
         }
@@ -1454,7 +1484,7 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
     return () => {
       window.removeEventListener("storage", handleStorageChange);
     };
-  }, [currentOfficeId, officeTickets, officeCubicles, officeAutoAssign]);
+  }, []);
 
   // Unico canal BroadcastChannel estable y permanente por montaje para evitar perdidas o latencia de mensajes
   useEffect(() => {
@@ -1706,6 +1736,9 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
     if (specificTicketId) {
       chosenTicket = tickets.find(t => t.id === specificTicketId && (t.status === TicketStatus.WAITING || t.status === TicketStatus.MISSED));
+      if (chosenTicket && chosenTicket.assignedCubicleId && chosenTicket.assignedCubicleId !== cubicleId) {
+        return;
+      }
     }
 
     if (!chosenTicket) {
@@ -1716,6 +1749,10 @@ export function useTicketSystem(gatewaySelection?: "select" | "cedulacion" | "re
 
       const candidates = tickets.filter(t => {
         if (t.status !== TicketStatus.WAITING) return false;
+
+        // Si ya está asignado a un cubículo o activo en otra ventanilla, no debe estar en la cola de candidatos
+        if (t.assignedCubicleId) return false;
+        if (cubicles.some(c => c.currentTicketId === t.id)) return false;
 
         // Registro Civil: Ventanillas 1 al 23
         if (isRcBooth) {

@@ -213,25 +213,18 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
     }).length;
   }, [citasList]);
 
-  // Helper to trigger download of full 56-slot Extranjería CSV template (07:00 AM - 01:45 PM)
+  // Helper to trigger download of clean empty Extranjería CSV template
   const handleDownloadTemplate = () => {
     const headers = 'Fecha,N°,Hora,Nombre,Pasaporte,Resolución,Nacionalidad,Correo,Teléfono\n';
     const chosenDate = targetJornadaDate || new Date().toISOString().substring(0, 10);
     
     let csvRows = '';
+    // Generate clean template without demonstration data for official use
     for (let i = 0; i < 56; i++) {
       const seq = i + 1;
       const slotIdx = Math.min(EXTRANJERIA_OFFICIAL_SLOTS.length - 1, Math.floor(i / 2));
       const hora = EXTRANJERIA_OFFICIAL_SLOTS[slotIdx];
-      const citizen = DIVERSE_CITIZENS_56[i] || {
-        nombre: `Ciudadano Extranjero ${seq}`,
-        pasaporte: `PA-${7845100 + seq}`,
-        resolucion: `Res. 5006${String(seq).padStart(2, '0')} de 15/05/2026`,
-        nacionalidad: 'Extranjera',
-        correo: `extranjero.${seq}@email.com`,
-        telefono: `6${String(100 + seq).padStart(3, '0')}-5000`
-      };
-      csvRows += `${chosenDate},${seq},${hora},${citizen.nombre},${citizen.pasaporte},${citizen.resolucion},${citizen.nacionalidad},${citizen.correo},${citizen.telefono}\n`;
+      csvRows += `${chosenDate},${seq},${hora},,,,,,,\n`;
     }
     
     const csvContent = '\uFEFF' + headers + csvRows;
@@ -239,7 +232,7 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `plantilla_citas_extranjeria_56_cupos_${chosenDate}.csv`);
+    link.setAttribute('download', `plantilla_oficial_citas_extranjeria_${chosenDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -373,15 +366,17 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
 
       await onUpdateCitas(updatedList);
       try {
-        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
-        await fetch('/api/appointments', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ appointments: updatedList })
-        });
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+        if (token) {
+          await fetch('/api/appointments', {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ appointments: updatedList })
+          });
+        }
       } catch (postErr) {
         console.warn('Error syncing converted appointments to server:', postErr);
       }
@@ -421,18 +416,31 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
         return true;
       });
 
+      const removedItems = citasList.filter(c => {
+        if (!c) return false;
+        const id = String(c.id || '');
+        const tx = String(c.codigoTransaccion || '');
+        const creado = String(c.creadoPor || '').toLowerCase();
+        const isCsv = id.includes('CSV') || tx.includes('CSV') || creado.includes('csv') || creado.includes('importaci') || id.startsWith('TE-CSV');
+        const isExt = c.servicioCategoria === 'extranjeria' && (id.startsWith('EXT-') || tx.startsWith('EXT-'));
+        return isCsv && !isExt;
+      });
+      const removedIds = removedItems.map(c => c.id).filter(Boolean);
+
       const deletedCount = beforeCount - filtered.length;
       await onUpdateCitas(filtered);
       try {
-        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
-        await fetch('/api/appointments', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ appointments: filtered })
-        });
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+        if (token && removedIds.length > 0) {
+          await fetch('/api/appointments/bulk-delete', {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ ids: removedIds })
+          });
+        }
       } catch (postErr) {
         console.warn('Error syncing filtered appointments to server:', postErr);
       }
@@ -563,8 +571,13 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
           ]) || `PA-${10001 + index}`;
 
           // Detect names from single or multiple columns
-          const colNombres = getColValue(['nombres', 'primer nombre', 'primernombre', 'nombre(s)']);
-          const colApellidos = getColValue(['apellidos', 'primer apellido', 'primerapellido', 'segundo apellido', 'apellido(s)']);
+          const colPrimerNombre = getColValue(['primer nombre', 'primernombre', 'primer_nombre', 'primer_nombre_ciudadano']);
+          const colSegundoNombre = getColValue(['segundo nombre', 'segundonombre', 'segundo_nombre']);
+          const colPrimerApellido = getColValue(['primer apellido', 'primerapellido', 'primer_apellido', 'apellido paterno']);
+          const colSegundoApellido = getColValue(['segundo apellido', 'segundoapellido', 'segundo_apellido', 'apellido materno']);
+
+          const colNombres = getColValue(['nombres', 'nombre(s)']) || [colPrimerNombre, colSegundoNombre].filter(Boolean).join(' ');
+          const colApellidos = getColValue(['apellidos', 'apellido(s)']) || [colPrimerApellido, colSegundoApellido].filter(Boolean).join(' ');
           
           let rawNombreCompleto = '';
           if (colNombres && colApellidos && cleanKey(colNombres) !== cleanKey(colApellidos)) {
@@ -633,14 +646,38 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
           const hasRequired = (identificacion || nombreCompleto) && fecha && hora;
           const displayCitizenName = (!isGenericPlaceholderName(nombreCompleto) && nombreCompleto) ? nombreCompleto : (extractNameFromEmail(correo) || `Ciudadano Extranjero (${identificacion})`);
 
-          const nameParts = (displayCitizenName || '').split(' ').filter(Boolean);
-          const primerNombre = nameParts[0] || '';
-          const primerApellido = nameParts.slice(1).join(' ') || '';
+          let primerNombre = colPrimerNombre;
+          let segundoNombre = colSegundoNombre;
+          let primerApellido = colPrimerApellido;
+          let segundoApellido = colSegundoApellido;
+
+          if (!primerNombre && !primerApellido) {
+            const nameParts = (displayCitizenName || '').split(/\s+/).filter(Boolean);
+            if (nameParts.length >= 4) {
+              primerNombre = nameParts[0];
+              segundoNombre = nameParts[1];
+              primerApellido = nameParts[2];
+              segundoApellido = nameParts.slice(3).join(' ');
+            } else if (nameParts.length === 3) {
+              primerNombre = nameParts[0];
+              primerApellido = nameParts[1];
+              segundoApellido = nameParts[2];
+            } else if (nameParts.length === 2) {
+              primerNombre = nameParts[0];
+              primerApellido = nameParts[1];
+            } else if (nameParts.length === 1) {
+              primerNombre = nameParts[0];
+            }
+          }
 
           return {
             id: finalId,
             codigoTransaccion: finalTxCode,
             nombre: displayCitizenName,
+            primerNombre,
+            segundoNombre: segundoNombre || undefined,
+            primerApellido,
+            segundoApellido: segundoApellido || undefined,
             servicioCategoria: 'extranjeria',
             categoriaNombre: 'Trámites de Extranjería',
             subServicioId: 'ext_primera_vez',
@@ -662,7 +699,9 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
             requisitos: EXTRANJERIA_REQUISITOS,
             datosPersonales: {
               primerNombre,
+              segundoNombre: segundoNombre || undefined,
               primerApellido,
+              segundoApellido: segundoApellido || undefined,
               nombreCompleto: displayCitizenName,
               pasaporte: identificacion || `PA-${csvCode}`,
               identificacion: identificacion || `PA-${csvCode}`,
@@ -748,15 +787,17 @@ export default function CsvImporter({ citasList, onUpdateCitas }: CsvImporterPro
 
       // 4. Sync directly to backend database
       try {
-        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
-        await fetch('/api/appointments', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ appointments: mergedList })
-        });
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+        if (token) {
+          await fetch('/api/appointments', {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ appointments: validCitas })
+          });
+        }
       } catch (backendErr) {
         console.warn("Backend bulk sync notice:", backendErr);
       }

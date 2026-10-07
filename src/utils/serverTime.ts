@@ -39,6 +39,7 @@ export async function syncServerTime(): Promise<number> {
 if (typeof window !== "undefined") {
   syncServerTime();
   setInterval(() => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
     syncServerTime();
   }, 30000);
 }

@@ -275,9 +275,9 @@ export default function TicketTracker({
 
     const myScore = (trackedTicket.priority ? 4 : 0) + (trackedTicket.isAppointment ? 2 : 0);
 
-    // Tickets in the same phase and ecosystem waiting ahead
+    // Tickets in the same phase and ecosystem waiting ahead (excluding those already assigned to cubicles)
     const aheadTickets = effectiveTickets.filter((t) => {
-      if (t.status !== TicketStatus.WAITING) return false;
+      if (t.status !== TicketStatus.WAITING || t.assignedCubicleId) return false;
       if (t.currentPhase !== trackedTicket.currentPhase) return false;
       if (t.id === trackedTicket.id) return false;
 

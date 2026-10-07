@@ -123,7 +123,7 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
   // Fetch appointments from API or fallback
   const fetchAppointments = async () => {
     try {
-      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -193,7 +193,13 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
           
           let resolvedName = resolveCitizenName({ ...updated, datosPersonales: dp });
           if (!resolvedName || isGenericPlaceholderName(resolvedName)) {
-            resolvedName = dp.nombreCompleto || partsName || updated.nombre || (dp.pasaporte ? `Ciudadano (${dp.pasaporte})` : 'Ciudadano');
+            resolvedName = (partsName && !isGenericPlaceholderName(partsName))
+              ? partsName
+              : (dp.nombreCompleto && !isGenericPlaceholderName(dp.nombreCompleto))
+                ? dp.nombreCompleto
+                : (updated.nombre && !isGenericPlaceholderName(updated.nombre))
+                  ? updated.nombre
+                  : (dp.pasaporte ? `Ciudadano (${dp.pasaporte})` : 'Ciudadano');
           }
           if (resolvedName && (!dp.nombreCompleto || isGenericPlaceholderName(dp.nombreCompleto))) {
             dp.nombreCompleto = resolvedName;
@@ -312,9 +318,12 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
 
   const saveCitas = async (newList: Cita[]) => {
     setCitasList(newList);
-    localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(newList));
     try {
-      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+      localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(newList));
+    } catch {}
+    try {
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      if (!token) return;
       await fetch('/api/appointments', {
         method: 'POST',
         headers: { 
@@ -364,16 +373,32 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       return;
     }
 
-    if (isExtranjeria) {
-      // Strictly enforce regulatory maximum of 56 appointments per day for web (Agéndate) bookings
+    const isExtranjeriaPrimeraVezOnly = selectedSubServicioId === 'ext_primera_vez' || 
+      (selectedCategoria === 'extranjeria' && (sub.includes('primera') || sub.includes('residente permanente por primera vez')));
+
+    if (isExtranjeriaPrimeraVezOnly) {
+      // 1. Strictly enforce regulatory maximum of 56 appointments per day for web (Agéndate) bookings
       const dayCountExtranjeria = citasList.filter(c => 
         c.fecha === fecha && 
-        (c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_')) && 
+        (c.subServicioId === 'ext_primera_vez' || (c.subServicioNombre && c.subServicioNombre.toLowerCase().includes('primera vez'))) && 
         c.estado !== 'cancelada'
       ).length;
 
       if (dayCountExtranjeria >= 56) {
         alert(`No es posible programar esta cita: Se ha alcanzado el límite reglamentario estricto de 56 citas para el día ${fecha} en la plataforma Agéndate. La excepción de cupos adicionales está reservada única y exclusivamente para citas autorizadas por supervisores de Extranjería.`);
+        return;
+      }
+
+      // 2. Strictly enforce regulatory limit of 2 bookings per 15-minute slot
+      const slotCountExtranjeria = citasList.filter(c => 
+        c.fecha === fecha && 
+        c.hora === hora &&
+        (c.subServicioId === 'ext_primera_vez' || (c.subServicioNombre && c.subServicioNombre.toLowerCase().includes('primera vez'))) && 
+        c.estado !== 'cancelada'
+      ).length;
+
+      if (slotCountExtranjeria >= 2) {
+        alert(`No es posible programar esta cita: Se ha alcanzado el límite reglamentario de 2 cupos para el horario de las ${hora} el día ${fecha} en trámites de Extranjería de Primera Vez.`);
         return;
       }
     }
@@ -387,6 +412,28 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
     const prefix = isPasadosDeEdad ? 'PA' : (isExtranjeria ? 'EXT' : 'TE');
     const finalTxCode = `${prefix}-${code}`;
     const newId = `${prefix}-${Date.now()}`;
+
+    const structuredPartsName = [
+      datosPersonales.primerNombre,
+      datosPersonales.segundoNombre,
+      datosPersonales.primerApellido,
+      datosPersonales.segundoApellido
+    ].map(s => String(s || '').trim()).filter(Boolean).join(' ');
+
+    const citizenFullName = (structuredPartsName && !isGenericPlaceholderName(structuredPartsName))
+      ? structuredPartsName.trim()
+      : (datosPersonales.nombreCompleto && !isGenericPlaceholderName(datosPersonales.nombreCompleto))
+        ? datosPersonales.nombreCompleto.trim()
+        : resolveCitizenName({ datosPersonales }) || (datosPersonales.pasaporte ? `Ciudadano (${datosPersonales.pasaporte})` : 'Ciudadano');
+
+    const sanitizedDatosPersonales: DatosPersonales = {
+      ...datosPersonales,
+      primerNombre: datosPersonales.primerNombre?.trim() || undefined,
+      segundoNombre: datosPersonales.segundoNombre?.trim() || undefined,
+      primerApellido: datosPersonales.primerApellido?.trim() || undefined,
+      segundoApellido: datosPersonales.segundoApellido?.trim() || undefined,
+      nombreCompleto: citizenFullName
+    };
 
     let ticketTurnoCode: string | undefined = undefined;
     const isTardia20Anos = sub.includes('ced_pasados_edad') || sub.includes('20') || sub.includes('pasado');
@@ -409,8 +456,7 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
       else if (sub.includes('duplicado')) procedureCode = 'DUP';
       else if (sub.includes('juvenil')) procedureCode = 'CJ';
 
-      const citizenName = datosPersonales.nombreCompleto || 
-        `${datosPersonales.primerNombre || ''} ${datosPersonales.primerApellido || ''}`.trim() || 'Ciudadano Cita';
+      const citizenName = citizenFullName || 'Ciudadano Cita';
 
       // Only mark as preferential if citizen specifically indicated disability or priority
       const isPriorityCitizen = Boolean(datosPersonales.tieneDiscapacidad);
@@ -425,51 +471,25 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
     }
 
     let numeroCitaDia: number | undefined = undefined;
-    if (selectedCategoria === 'extranjeria') {
+    if (isExtranjeriaPrimeraVezOnly) {
       const dayCount = citasList.filter(c => 
         c.fecha === fecha && 
-        (c.servicioCategoria === 'extranjeria' || c.subServicioId?.includes('extranjero') || c.subServicioId?.startsWith('ext_')) && 
+        (c.subServicioId === 'ext_primera_vez' || (c.subServicioNombre && c.subServicioNombre.toLowerCase().includes('primera vez'))) && 
         c.estado !== 'cancelada'
       ).length;
       numeroCitaDia = dayCount + 1;
     }
 
-    const structuredPartsName = [
-      datosPersonales.primerNombre,
-      datosPersonales.segundoNombre,
-      datosPersonales.primerApellido,
-      datosPersonales.segundoApellido
-    ].map(s => String(s || '').trim()).filter(Boolean).join(' ');
-
-    const emailName = extractNameFromEmail(datosPersonales.correo);
-
-    const citizenFullName = (selectedCategoria === 'extranjeria')
-      ? (
-          (structuredPartsName && !isGenericPlaceholderName(structuredPartsName))
-            ? structuredPartsName.trim()
-            : (datosPersonales.nombreCompleto && !isGenericPlaceholderName(datosPersonales.nombreCompleto))
-              ? datosPersonales.nombreCompleto.trim()
-              : resolveCitizenName({ datosPersonales }) || 'Ciudadano Extranjero'
-        )
-      : (
-          (datosPersonales.nombreCompleto && !isGenericPlaceholderName(datosPersonales.nombreCompleto))
-            ? datosPersonales.nombreCompleto.trim()
-            : (structuredPartsName && !isGenericPlaceholderName(structuredPartsName))
-              ? structuredPartsName
-              : (emailName && !isGenericPlaceholderName(emailName))
-                ? emailName
-                : resolveCitizenName({ datosPersonales }) || (datosPersonales.pasaporte ? `Ciudadano (${datosPersonales.pasaporte})` : 'Ciudadano')
-        );
-
-    const sanitizedDatosPersonales: DatosPersonales = {
-      ...datosPersonales,
-      nombreCompleto: citizenFullName
-    };
-
     const nuevaCita: Cita = {
       id: newId,
       datosPersonales: sanitizedDatosPersonales,
       nombre: citizenFullName,
+      primerNombre: sanitizedDatosPersonales.primerNombre,
+      segundoNombre: sanitizedDatosPersonales.segundoNombre,
+      primerApellido: sanitizedDatosPersonales.primerApellido,
+      segundoApellido: sanitizedDatosPersonales.segundoApellido,
+      pasaporte: sanitizedDatosPersonales.pasaporte,
+      nacionalidad: sanitizedDatosPersonales.nacionalidad,
       servicioCategoria: selectedCategoria,
       subServicioId: selectedSubServicioId,
       sucursalId,
@@ -488,7 +508,10 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
     };
 
     const updated = [nuevaCita, ...citasList];
-    saveCitas(updated);
+    setCitasList(updated);
+    try {
+      localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(updated));
+    } catch {}
 
     // Direct registration with backend
     try {
@@ -498,6 +521,12 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
         body: JSON.stringify({
           ...nuevaCita,
           nombre: citizenFullName,
+          primerNombre: sanitizedDatosPersonales.primerNombre,
+          segundoNombre: sanitizedDatosPersonales.segundoNombre,
+          primerApellido: sanitizedDatosPersonales.primerApellido,
+          segundoApellido: sanitizedDatosPersonales.segundoApellido,
+          pasaporte: sanitizedDatosPersonales.pasaporte,
+          nacionalidad: sanitizedDatosPersonales.nacionalidad,
           datosPersonales: sanitizedDatosPersonales,
           creadoPor: 'Portal Web (Ciudadano)'
         })
@@ -510,26 +539,43 @@ export default function CitasApp({ initialTab = 'agendar', onNavigateToTurnos, o
     setCurrentStep(4);
   };
 
-  const handleCancelCita = (citaId: string) => {
+  const handleCancelCita = async (citaId: string) => {
     const updated = citasList.map(c => c.id === citaId ? { ...c, estado: 'cancelada' as const } : c);
-    saveCitas(updated);
+    setCitasList(updated);
+    try {
+      localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(updated));
+    } catch {}
     if (activeCita && activeCita.id === citaId) {
       setActiveCita({ ...activeCita, estado: 'cancelada' });
+    }
+    try {
+      await fetch('/api/cancel-appointment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: citaId })
+      });
+    } catch (e) {
+      console.warn('Error cancelling appointment on server:', e);
     }
   };
 
   const handleDeleteCita = async (citaId: string) => {
     const updated = citasList.filter(c => c.id !== citaId);
-    saveCitas(updated);
+    setCitasList(updated);
+    try {
+      localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(updated));
+    } catch {}
     if (activeCita && activeCita.id === citaId) {
       setActiveCita(null);
       setCurrentStep(1);
     }
     try {
-      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       await fetch(`/api/appointments/${citaId}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers
       });
     } catch (e) {
       console.error('Error deleting appointment from server:', e);

@@ -44,7 +44,8 @@ import {
   CheckCheck,
   Settings,
   Star,
-  ShieldCheck
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import { AdminRole } from '../types';
@@ -58,6 +59,19 @@ const SELECT_TIMES_OPTIONS = [
   '12:00 PM', '12:30 PM', '01:00 PM', '01:30 PM', '02:00 PM', '02:30 PM', '03:00 PM', '03:30 PM',
   '04:00 PM', '04:30 PM', '05:00 PM', '05:30 PM', '06:00 PM', '06:30 PM', '07:00 PM', '07:30 PM',
   '08:00 PM', '08:30 PM', '09:00 PM', '09:30 PM', '10:00 PM', '10:30 PM', '11:00 PM', '11:30 PM'
+];
+
+const EXTRANJERIA_SLOTS_OPTIONS = [
+  '07:00 AM', '07:15 AM', '07:30 AM', '07:45 AM',
+  '08:00 AM', '08:15 AM', '08:30 AM', '08:45 AM',
+  '09:00 AM', '09:15 AM', '09:30 AM', '09:45 AM',
+  '10:00 AM', '10:15 AM', '10:30 AM', '10:45 AM',
+  '11:00 AM', '11:15 AM', '11:30 AM', '11:45 AM',
+  '12:00 PM', '12:15 PM', '12:30 PM', '12:45 PM',
+  '01:00 PM', '01:15 PM', '01:30 PM', '01:45 PM',
+  '02:00 PM', '02:15 PM', '02:30 PM', '02:45 PM',
+  '03:00 PM', '03:15 PM', '03:30 PM', '03:45 PM',
+  '04:00 PM'
 ];
 
 // Extranjeria Mandatory Documents Checklists
@@ -83,6 +97,8 @@ interface Booth {
   staff: string;
   empty: boolean; // True for the 4 reserve booths initially empty
   receso?: boolean; // Is the operator currently on recess/break?
+  disabledBy?: string; // Supervisor who disabled the booth
+  disabledAt?: string; // Timestamp when disabled
 }
 
 interface AppointmentMetadata {
@@ -385,20 +401,27 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     }
   }, [currentRole, forceSubRole]);
 
-  const todayStr = React.useMemo(() => new Date().toISOString().substring(0, 10), []);
+  // Helper to dynamically get local today in YYYY-MM-DD
+  const getLocalTodayDateString = (): string => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const [todayStr, setTodayStr] = useState<string>(getLocalTodayDateString);
   const isStrictTodayOnly = React.useMemo(() => {
     if (atencionShowAllDates) return false;
     return true; // Enforce today-only mode strictly for ALL roles by default to prevent heavy loading and RAM consumption
   }, [atencionShowAllDates]);
 
-  // Ensure Atención Entrada starts with a valid focused date (today if has appointments, or first available)
+  // Ensure Atención Entrada starts with a valid focused date (today if has appointments, or default today)
   React.useEffect(() => {
     if (!atencionDateFilter) {
-      if (appointments.some((app: any) => isExtranjeriaAppointment(app) && app.fecha === todayStr)) {
-        setAtencionDateFilter(todayStr);
-      }
+      setAtencionDateFilter(todayStr);
     }
-  }, [atencionDateFilter, appointments, todayStr]);
+  }, [atencionDateFilter, todayStr]);
 
   // Safe utility to parse any date string format robustly
   const parseSafeDate = (dateStr: string): Date | null => {
@@ -616,12 +639,10 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   // Load real system users on mount
   useEffect(() => {
-    const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
-    fetch('/api/users', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    })
+    const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    fetch('/api/users', { headers })
       .then(res => res.json())
       .then(data => {
         if (data && data.success && Array.isArray(data.users)) {
@@ -850,14 +871,14 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
           return;
         }
 
-        const capacityExceeded = parsedData.filter(d => d.numeroCitaDia > 56).length;
+        const capacityExceeded = parsedData.filter(d => d.numeroCitaDia > 71).length;
 
         setParsedExtranjeriaRows(parsedData);
         setExtranjeriaImportStatus({
           success: true,
           message: capacityExceeded > 0
-            ? `¡Archivo analizado! Se detectaron ${parsedData.length} citas/expedientes. ⚠️ Atención: ${capacityExceeded} cita(s) tienen número N° superior a 56 (el límite máximo permitido para Extranjería es de 56 citas por día).`
-            : `¡Archivo analizado con éxito! Se cargaron ${parsedData.length} citas/expedientes con control de secuencia diaria (Capacidad: 56 citas/día).`
+            ? `¡Archivo analizado! Se detectaron ${parsedData.length} citas/expedientes. ⚠️ Atención: ${capacityExceeded} cita(s) tienen número N° superior a 71 (el límite máximo permitido para Extranjería es de 71 citas por día: 56 web + 15 supervisor).`
+            : `¡Archivo analizado con éxito! Se cargaron ${parsedData.length} citas/expedientes con control de secuencia diaria (Capacidad: 71 citas/día).`
         });
       } catch (err) {
         console.error(err);
@@ -872,75 +893,16 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   const handleDownloadExtranjeriaTemplate = () => {
     const headers = 'Fecha,N°,Hora,Nombre,Resolución / Fecha,Nacionalidad\n';
-    const slots = generateExtranjeriaSlots('07:00 AM', '01:45 PM', 15);
+    const slots = generateExtranjeriaSlots('07:00 AM', '02:45 PM', 15);
     const todayStr = new Date().toISOString().substring(0, 10);
-    
-    const sampleNames = [
-      { n: "Carlos Eduardo Mendoza Silva", nac: "Colombia" },
-      { n: "Elena Rostova Ivanova", nac: "Rusia" },
-      { n: "David Chen Wu", nac: "China" },
-      { n: "Maria Santos Da Silva", nac: "Brasil" },
-      { n: "Jean Pierre Dupont", nac: "Francia" },
-      { n: "Andrea Paola Gutierrez", nac: "Venezuela" },
-      { n: "Marco Aurelio Rossi", nac: "Italia" },
-      { n: "Sofia Nicole Castillo", nac: "Nicaragua" },
-      { n: "Liam Alexander Smith", nac: "Estados Unidos" },
-      { n: "Camila Alejandra Morales", nac: "Costa Rica" },
-      { n: "Mateo Sebastian Vargas", nac: "Perú" },
-      { n: "Isabella Marie Leclerc", nac: "Canadá" },
-      { n: "Alejandro Jose Hernandez", nac: "República Dominicana" },
-      { n: "Valeria Gomez Gomez", nac: "España" },
-      { n: "Lucas Santiago Ferreira", nac: "Portugal" },
-      { n: "Fatima Zahra Mansouri", nac: "Marruecos" },
-      { n: "Kenji Sato Tanaka", nac: "Japón" },
-      { n: "Ana Maria Alvarez", nac: "México" },
-      { n: "Oliver James Wright", nac: "Reino Unido" },
-      { n: "Lucia Fernandez Diaz", nac: "Argentina" },
-      { n: "Gabriel Antonio Castro", nac: "El Salvador" },
-      { n: "Emma Louise Mueller", nac: "Alemania" },
-      { n: "Diego Andres Pineda", nac: "Honduras" },
-      { n: "Mia Chloe Jansen", nac: "Países Bajos" },
-      { n: "Samuel David Ocampo", nac: "Guatemala" },
-      { n: "Clara Beatriz Romero", nac: "Chile" },
-      { n: "Noah Benjamin Cohen", nac: "Israel" },
-      { n: "Julieta Rocio Benitez", nac: "Paraguay" },
-      { n: "Thiago Silva Barbosa", nac: "Brasil" },
-      { n: "Zoe Charlotte Martin", nac: "Francia" },
-      { n: "Sebastian Cruz Delgado", nac: "Ecuador" },
-      { n: "Astrid Linnea Lind", nac: "Suecia" },
-      { n: "Joaquin Manuel Rios", nac: "Uruguay" },
-      { n: "Chloe Grace O'Connor", nac: "Irlanda" },
-      { n: "Emilio Rafael Cardenas", nac: "Bolivia" },
-      { n: "Min-Jun Park Kim", nac: "Corea del Sur" },
-      { n: "Renata Luciana Pacheco", nac: "México" },
-      { n: "Dmitry Sergeyev Popov", nac: "Rusia" },
-      { n: "Mariana Soledad Flores", nac: "Argentina" },
-      { n: "Lars Erik Hansen", nac: "Noruega" },
-      { n: "Alonso Javier Sucre", nac: "Venezuela" },
-      { n: "Hanna Marie Becker", nac: "Alemania" },
-      { n: "Gonzalo Ignacio Paredes", nac: "Perú" },
-      { n: "Amina Bint Youssef", nac: "Egipto" },
-      { n: "Federico Dante Moretti", nac: "Italia" },
-      { n: "Sara Ines Betancourt", nac: "Colombia" },
-      { n: "William Robert Taylor", nac: "Australia" },
-      { n: "Daniela Paola Navarro", nac: "Nicaragua" },
-      { n: "Rajesh Kumar Patel", nac: "India" },
-      { n: "Victoria Isabel Salazar", nac: "Costa Rica" },
-      { n: "Ethan Bradley Miller", nac: "Estados Unidos" },
-      { n: "Paulina Eugenia Cordero", nac: "Chile" },
-      { n: "Klaus Dieter Schmidt", nac: "Suiza" },
-      { n: "Catalina Maria Restrepo", nac: "Colombia" },
-      { n: "Andrei Nicolae Radu", nac: "Rumania" },
-      { n: "Beatriz Helena Moncada", nac: "Honduras" }
-    ];
 
     let csvRows = '';
-    for (let i = 0; i < 56; i++) {
+    // Generate clean empty template rows for the supervisor to fill with real citizen data
+    for (let i = 0; i < 71; i++) {
       const seq = i + 1;
       const slotIdx = Math.min(slots.length - 1, Math.floor(i / 2));
       const hora = slots[slotIdx];
-      const person = sampleNames[i] || { n: `Ciudadano Extranjero ${seq}`, nac: "Extranjero" };
-      csvRows += `${todayStr},${seq},${hora},${person.n},Res. 5006${String(seq).padStart(2, '0')} de 15/05/2026,${person.nac}\n`;
+      csvRows += `${todayStr},${seq},${hora},,,,\n`;
     }
     
     const csvContent = '\uFEFF' + headers + csvRows;
@@ -948,7 +910,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `plantilla_citas_extranjeria_56_cupos_${todayStr}.csv`);
+    link.setAttribute('download', `plantilla_oficial_citas_extranjeria_71_cupos_${todayStr}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -991,7 +953,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       let registeredCount = 0;
 
       if (rowsWithDates.length > 0) {
-        const slots = generateExtranjeriaSlots('07:00 AM', '01:45 PM', 15);
+        const slots = generateExtranjeriaSlots('07:00 AM', '02:45 PM', 15);
         for (const r of rowsWithDates) {
           try {
             const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -1028,17 +990,41 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
               creadoPor: 'Importación CSV Secuencia Diaria',
               numeroCitaDia: seqNum,
               resolucion: r.resolucion || r.motivo,
-              datosPersonales: {
-                primerNombre: r.nombre.split(' ')[0] || '',
-                primerApellido: r.nombre.split(' ')[1] || '',
-                nombreCompleto: r.nombre,
-                pasaporte: r.pasaporte,
-                nacionalidad: r.nacionalidad,
-                numeroResolucion: r.resolucion,
-                correo: 'extranjeria@te.gob.pa',
-                telefono: 'N/A',
-                tipoIdentificacion: 'Pasaporte'
-              }
+              datosPersonales: (() => {
+                const nParts = (r.nombre || '').trim().split(/\s+/).filter(Boolean);
+                let pNom = '';
+                let sNom = '';
+                let pApe = '';
+                let sApe = '';
+                if (nParts.length >= 4) {
+                  pNom = nParts[0];
+                  sNom = nParts[1];
+                  pApe = nParts[2];
+                  sApe = nParts.slice(3).join(' ');
+                } else if (nParts.length === 3) {
+                  pNom = nParts[0];
+                  pApe = nParts[1];
+                  sApe = nParts[2];
+                } else if (nParts.length === 2) {
+                  pNom = nParts[0];
+                  pApe = nParts[1];
+                } else {
+                  pNom = nParts[0] || '';
+                }
+                return {
+                  primerNombre: pNom,
+                  segundoNombre: sNom || undefined,
+                  primerApellido: pApe,
+                  segundoApellido: sApe || undefined,
+                  nombreCompleto: r.nombre,
+                  pasaporte: r.pasaporte,
+                  nacionalidad: r.nacionalidad,
+                  numeroResolucion: r.resolucion,
+                  correo: 'extranjeria@te.gob.pa',
+                  telefono: 'N/A',
+                  tipoIdentificacion: 'Pasaporte'
+                };
+              })()
             };
 
             const appRes = await fetch('/api/register-appointment', {
@@ -1274,7 +1260,21 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   const [newCitaFecha, setNewCitaFecha] = useState('');
   const [newCitaHora, setNewCitaHora] = useState('08:00 AM');
 
-  // Capacity / Schedule setups
+  // Hours that are already booked on the target date for special appointments (overlap prevention)
+  const occupiedHoursForSpecialAppt = useMemo(() => {
+    const targetDate = standardizeDateString(newCitaFecha || selectedCalendarDateStr);
+    const dayCitas = appointmentsByDate[targetDate] || [];
+    const map: Record<string, string> = {};
+    dayCitas.forEach((c: any) => {
+      if (c.hora && c.estado !== 'cancelada' && c.status !== 'cancelada') {
+        const cName = getExtranjeriaCitizenName(c);
+        map[c.hora] = cName || c.id || 'Cita ocupada';
+      }
+    });
+    return map;
+  }, [appointmentsByDate, newCitaFecha, selectedCalendarDateStr]);
+
+  // Capacity / Schedule setups (Extranjería jornada ampliada interna: 07:00 AM a 02:45 PM)
   const [capacidad, setCapacidad] = useState<number>(() => {
     return parseInt(localStorage.getItem('extranjeria_capacidad_usuarios') || '2', 10);
   });
@@ -1285,7 +1285,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     return localStorage.getItem('extranjeria_hora_inicio') || '07:00 AM';
   });
   const [horaFin, setHoraFin] = useState<string>(() => {
-    return localStorage.getItem('extranjeria_hora_fin') || '02:00 AM';
+    return localStorage.getItem('extranjeria_hora_fin') || '02:45 PM';
   });
   const [ticketKioscoUrl, setTicketKioscoUrl] = useState<string>(() => {
     try {
@@ -1323,6 +1323,18 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     }
   };
 
+  const copyTvLink = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const url = `${origin}/tv/extranjeria`;
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(url)
+        .then(() => showStatus(`¡Enlace copiado al portapapeles! ${url}`, 'success'))
+        .catch(() => showStatus(`Enlace de Pantalla TV: ${url}`, 'info'));
+    } else {
+      showStatus(`Enlace de Pantalla TV: ${url}`, 'info');
+    }
+  };
+
   // Booth / Cubiculos state (4 enabled with staff, 4 reserve empty)
   const [booths, setBooths] = useState<Booth[]>(() => {
     const raw = localStorage.getItem('extranjeria_booths');
@@ -1345,13 +1357,13 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       { id: 8, name: "Cubículo 8", active: false, staff: "Turno de Reserva", empty: true, receso: false }
     ];
     if (loaded && Array.isArray(loaded)) {
-      // Migrate old names if they match previous defaults
+      // Migrate names to guarantee correct numbering for Extranjería
       return loaded.map(b => {
         let name = b.name;
-        if (b.id === 1 && (b.name === "Cubículo 1" || b.name === "Cubiculo 1")) name = "Cubículo 19";
-        if (b.id === 2 && (b.name === "Cubículo 2" || b.name === "Cubiculo 2")) name = "Cubículo 20";
-        if (b.id === 3 && (b.name === "Cubículo 3" || b.name === "Cubiculo 3")) name = "Cubículo 22";
-        if (b.id === 4 && (b.name === "Cubículo 4" || b.name === "Cubiculo 4")) name = "Cubículo 23";
+        if (Number(b.id) === 1 || b.id === 1 || b.name === "Cubículo 1" || b.name === "Cubiculo 1") name = "Cubículo 19";
+        if (Number(b.id) === 2 || b.id === 2 || b.name === "Cubículo 2" || b.name === "Cubiculo 2") name = "Cubículo 20";
+        if (Number(b.id) === 3 || b.id === 3 || b.name === "Cubículo 3" || b.name === "Cubiculo 3") name = "Cubículo 22";
+        if (Number(b.id) === 4 || b.id === 4 || b.name === "Cubículo 4" || b.name === "Cubiculo 4") name = "Cubículo 23";
 
         let staff = b.staff;
         if (b.id === 1 && (b.staff === "Lic. Ana Pérez" || b.staff === "Lic. Ana Perez")) staff = "Gestor de Extranjería";
@@ -1359,18 +1371,80 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         if (b.id === 3 && (b.staff === "Lic. María Rodríguez" || b.staff === "Lic. Maria Rodriguez" || b.staff === "Supervisor de Extranjería")) staff = "Gestor de Extranjería";
         if (b.id === 4 && (b.staff === "Lic. Juan Martínez" || b.staff === "Lic. Juan Martinez" || b.staff === "Atendimiento Entrada Extranjería")) staff = "Cubículo Ticket Extranjería";
 
-        return { ...b, name, staff, receso: b.receso !== undefined ? b.receso : false };
+        return { 
+          ...b, 
+          name, 
+          staff, 
+          receso: b.receso !== undefined ? b.receso : false,
+          disabledBy: b.disabledBy || undefined,
+          disabledAt: b.disabledAt || undefined
+        };
       });
     }
     return defaults;
   });
+
+  // Helper canónico para garantizar que los nombres de los cubículos activos sean siempre Cubículo 19, Cubículo 20, Cubículo 22, Cubículo 23
+  const getBoothDisplayName = useCallback((boothIdOrObj: any): string => {
+    if (!boothIdOrObj) return 'Cubículo 19';
+    if (typeof boothIdOrObj === 'object') {
+      const bName = String(boothIdOrObj.name || '');
+      if (bName.includes('20')) return 'Cubículo 20';
+      if (bName.includes('19')) return 'Cubículo 19';
+      if (bName.includes('22')) return 'Cubículo 22';
+      if (bName.includes('23')) return 'Cubículo 23';
+      const bId = Number(boothIdOrObj.id);
+      if (bId === 1 || bId === 19) return 'Cubículo 19';
+      if (bId === 2 || bId === 20) return 'Cubículo 20';
+      if (bId === 3 || bId === 22) return 'Cubículo 22';
+      if (bId === 4 || bId === 23) return 'Cubículo 23';
+      return boothIdOrObj.name || `Cubículo ${boothIdOrObj.id}`;
+    }
+    const num = Number(boothIdOrObj);
+    if (num === 1 || num === 19) return 'Cubículo 19';
+    if (num === 2 || num === 20) return 'Cubículo 20';
+    if (num === 3 || num === 22) return 'Cubículo 22';
+    if (num === 4 || num === 23) return 'Cubículo 23';
+    const found = booths.find(b => Number(b.id) === num);
+    if (found?.name) {
+      if (Number(found.id) === 2 || found.name.includes('20')) return 'Cubículo 20';
+      if (Number(found.id) === 1 || found.name.includes('19')) return 'Cubículo 19';
+      if (Number(found.id) === 3 || found.name.includes('22')) return 'Cubículo 22';
+      if (Number(found.id) === 4 || found.name.includes('23')) return 'Cubículo 23';
+      return found.name;
+    }
+    return `Cubículo ${boothIdOrObj}`;
+  }, [booths]);
 
   // Extranjería custom metadata tracking (document checks, supervisor forwarding, booth assignments, ticketing)
   const [appMetadata, setAppMetadata] = useState<Record<string, AppointmentMetadata>>(() => {
     const raw = localStorage.getItem('extranjeria_appointment_metadata');
     if (raw) {
       try {
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        const cleaned: Record<string, any> = {};
+        Object.entries(parsed).forEach(([k, v]: [string, any]) => {
+          if (k.startsWith('booth_') || k === 'active_call' || k === 'booths_config') {
+            cleaned[k] = v;
+            return;
+          }
+          const cName = String(v?.citizenName || v?.nombre || '').toUpperCase();
+          if (
+            k.includes('CSV-09') ||
+            k.includes('Q54QJ') ||
+            k.includes('20260928-122') ||
+            k.includes('154') ||
+            cName.includes('ISABEL') ||
+            cName.includes('WALTER') ||
+            cName.includes('CARLOS') ||
+            cName.includes('SANCHEZ') ||
+            cName.includes('SÁNCHEZ')
+          ) {
+            return; // Discard stale/demo key
+          }
+          cleaned[k] = v;
+        });
+        return cleaned;
       } catch (e) {
         return {};
       }
@@ -1435,33 +1509,36 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   // Memoized count of completed appointments today and in the selected date range for each operator
   const cubiculoUserStats = useMemo(() => {
-    const stats: Record<string, { today: number; range: number }> = {};
+    const stats: Record<string, { today: number; range: number; booths: Set<string> }> = {};
 
     // Initialize stats for each operator
     availableCubiculoUsers.forEach(user => {
-      stats[user] = { today: 0, range: 0 };
+      stats[user] = { today: 0, range: 0, booths: new Set() };
     });
 
     appointments.forEach(app => {
-      if (!app.fecha) return;
-      const meta = appMetadata[app.id];
+      if (!isExtranjeriaAppointment(app)) return;
+      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
       if (meta && meta.assignedCubiculo && meta.staffResponsable) {
         const op = meta.staffResponsable;
-        if (stats[op]) {
-          // Check if it's "realizada"
-          const isRealizada = meta.estadoTicket === 'realizada';
-          if (isRealizada) {
-            const stdAppDate = standardizeDateString(app.fecha || '');
-            const stdStart = standardizeDateString(reportStartDate);
-            const stdEnd = standardizeDateString(reportEndDate);
-            // Is it today?
-            if (stdAppDate === todayStr) {
-              stats[op].today += 1;
-            }
-            // Is it within the selected report range?
-            if (stdAppDate && stdAppDate >= stdStart && stdAppDate <= stdEnd) {
-              stats[op].range += 1;
-            }
+        if (!stats[op]) {
+          stats[op] = { today: 0, range: 0, booths: new Set() };
+        }
+        stats[op].booths.add(getBoothDisplayName(meta.assignedCubiculo));
+
+        // Check if it's "realizada"
+        const isRealizada = meta.estadoTicket === 'realizada';
+        if (isRealizada) {
+          const stdAppDate = standardizeDateString(app.fecha || app.date || '');
+          const stdStart = standardizeDateString(reportStartDate);
+          const stdEnd = standardizeDateString(reportEndDate);
+          // Is it today?
+          if (stdAppDate === todayStr || isCompletedToday(app, meta, todayStr)) {
+            stats[op].today += 1;
+          }
+          // Is it within the selected report range?
+          if (stdAppDate && stdAppDate >= stdStart && stdAppDate <= stdEnd) {
+            stats[op].range += 1;
           }
         }
       }
@@ -1470,22 +1547,26 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     return stats;
   }, [availableCubiculoUsers, appointments, appMetadata, todayStr, reportStartDate, reportEndDate]);
 
+  // Total completed appointments today across all booths in Extranjería
+  const totalTodayCompletedAllBooths = useMemo(() => {
+    return appointments.filter(app => {
+      if (!isExtranjeriaAppointment(app)) return false;
+      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+      return isCompletedToday(app, meta, todayStr);
+    }).length;
+  }, [appointments, appMetadata, todayStr]);
+
   // Helper to determine if a cubicle is busy with an active attention or call
   const isCubiculoBusy = useCallback((cubiculoId: number) => {
-    return Object.keys(appMetadata).some(id => {
-      const meta = appMetadata[id];
-      if (id.startsWith('booth_occupant_') || id.startsWith('booth_receso_')) return false;
+    return appointments.some(app => {
+      const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
       if (meta && Number(meta.assignedCubiculo) === Number(cubiculoId) && 
              (meta.estadoTicket === 'en_proceso' || meta.estadoTicket === 'en_atencion')) {
-        const app = appointments.find(a => String(a.id) === String(id) || (a.codigoTransaccion && String(a.codigoTransaccion) === String(id)));
-        if (app && app.fecha !== todayStr) {
-          return false;
-        }
         return true;
       }
       return false;
     });
-  }, [appMetadata, appointments, todayStr]);
+  }, [appointments, appMetadata]);
 
   // Fetch metadata from backend server
   const fetchServerMetadata = useCallback(async () => {
@@ -1494,6 +1575,59 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       if (res.ok) {
         const json = await res.json();
         if (json && json.success && json.metadata) {
+          // Synchronize active_call across remote displays / Smart TVs in real time
+          if (json.metadata.active_call !== undefined) {
+            const serverActiveCall = json.metadata.active_call;
+            if (serverActiveCall && serverActiveCall.timestamp) {
+              if (
+                serverActiveCall.cleanCitizenName?.includes('Carlos') ||
+                serverActiveCall.cleanCitizenName?.includes('Sanchez') ||
+                serverActiveCall.cleanCitizenName?.includes('Sánchez') ||
+                serverActiveCall.citizenName?.includes('Carlos') ||
+                serverActiveCall.citizenName?.includes('Sanchez') ||
+                serverActiveCall.citizenName?.includes('Sánchez') ||
+                serverActiveCall.appId === 'EXT-8K2P9'
+              ) {
+                setLastCallEvent(null);
+              } else if (Math.abs(Date.now() - serverActiveCall.timestamp) < 300000) {
+                setLastCallEvent(prev => {
+                  if (!prev || prev.timestamp !== serverActiveCall.timestamp) {
+                    setIsCallOverlayMinimized(false);
+                    setCallRemainingSeconds(10);
+                    return serverActiveCall;
+                  }
+                  return prev;
+                });
+              } else {
+                setLastCallEvent(prev => (prev ? null : prev));
+              }
+            } else if (serverActiveCall === null) {
+              setLastCallEvent(prev => (prev ? null : prev));
+            }
+          }
+
+          // Synchronize authoritative supervisor booths configuration across all screens only when changed
+          if (Array.isArray(json.metadata.booths_config) && json.metadata.booths_config.length > 0) {
+            setBooths(prev => {
+              const incoming = json.metadata.booths_config;
+              if (prev.length === incoming.length) {
+                const isIdentical = prev.every((b, idx) => {
+                  const inc = incoming[idx];
+                  return (
+                    inc &&
+                    b.id === inc.id &&
+                    b.nombre === inc.nombre &&
+                    b.activo === inc.activo &&
+                    b.receso === inc.receso &&
+                    b.currentUser === inc.currentUser
+                  );
+                });
+                if (isIdentical) return prev;
+              }
+              return incoming;
+            });
+          }
+
           setAppMetadata(prev => {
             const newMeta = json.metadata;
             const newKeys = Object.keys(newMeta);
@@ -1513,6 +1647,8 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                     p.hasDocuments !== n.hasDocuments ||
                     p.staffResponsable !== n.staffResponsable ||
                     p.reatencion !== n.reatencion ||
+                    (p as any).active !== (n as any).active ||
+                    (p as any).disabledBy !== (n as any).disabledBy ||
                     (p.checkedDocs?.length || 0) !== (n.checkedDocs?.length || 0)) {
                   hasChanged = true;
                   break;
@@ -1555,13 +1691,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     // Post to backend server for persistent database storage
     try {
       const payload = incremental || updated;
-      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'te_admin_master';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       await fetch('/api/extranjeria/metadata', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers,
         body: JSON.stringify({ metadata: payload })
       });
     } catch (e) {
@@ -1569,10 +1704,13 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     }
   }, []);
 
-  // Synchronize with server on mount and continuously every 2.5s
+  // Synchronize with server on mount and periodically every 8s (pausing when tab is hidden)
   useEffect(() => {
     fetchServerMetadata();
-    const interval = setInterval(fetchServerMetadata, 2500);
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      fetchServerMetadata();
+    }, 8000);
     return () => clearInterval(interval);
   }, [fetchServerMetadata]);
 
@@ -1593,18 +1731,33 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     localStorage.setItem('extranjeria_appointment_metadata', JSON.stringify(appMetadata));
   }, [appMetadata]);
 
-  // Sync booths recess status from appMetadata in real time
+  // Sync booths recess status and active/disabled status from appMetadata in real time across ALL supervisors
   useEffect(() => {
     setBooths(prev => {
       let changed = false;
       const updated = prev.map(b => {
-        const key = `booth_receso_${b.id}`;
-        const serverReceso = Boolean(appMetadata[key]?.reatencion);
-        if (b.receso !== serverReceso) {
+        let currentB = { ...b };
+        const recesoKey = `booth_receso_${b.id}`;
+        const serverReceso = Boolean(appMetadata[recesoKey]?.reatencion);
+        if (currentB.receso !== serverReceso) {
           changed = true;
-          return { ...b, receso: serverReceso };
+          currentB.receso = serverReceso;
         }
-        return b;
+
+        const statusKey = `booth_status_${b.id}`;
+        const statusMeta = appMetadata[statusKey] as any;
+        if (statusMeta && statusMeta.active !== undefined) {
+          const serverActive = Boolean(statusMeta.active);
+          const serverDisabledBy = statusMeta.disabledBy || undefined;
+          const serverDisabledAt = statusMeta.disabledAt || undefined;
+          if (currentB.active !== serverActive || currentB.disabledBy !== serverDisabledBy || currentB.disabledAt !== serverDisabledAt) {
+            changed = true;
+            currentB.active = serverActive;
+            currentB.disabledBy = serverDisabledBy;
+            currentB.disabledAt = serverDisabledAt;
+          }
+        }
+        return currentB;
       });
       return changed ? updated : prev;
     });
@@ -1669,6 +1822,52 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     timestamp: number;
   } | null>(null);
 
+  const [isCallOverlayMinimized, setIsCallOverlayMinimized] = useState<boolean>(false);
+  const [callRemainingSeconds, setCallRemainingSeconds] = useState<number>(10);
+
+  useEffect(() => {
+    if (lastCallEvent && lastCallEvent.timestamp) {
+      // Regla estricta: Descartar llamadas de días anteriores de inmediato
+      const callDay = new Date(lastCallEvent.timestamp).toLocaleDateString('en-CA');
+      const currentDay = getLocalTodayDateString();
+      if (callDay !== currentDay) {
+        setLastCallEvent(null);
+        try { localStorage.removeItem('te_extranjeria_active_call'); } catch {}
+        return;
+      }
+
+      // Regla estricta: Purgar y descartar llamadas viejas de demostración con "Carlos" o "Sanchez"
+      if (
+        lastCallEvent.cleanCitizenName?.includes('Carlos') ||
+        lastCallEvent.cleanCitizenName?.includes('Sanchez') ||
+        lastCallEvent.cleanCitizenName?.includes('Sánchez') ||
+        (lastCallEvent as any).citizenName?.includes('Carlos') ||
+        (lastCallEvent as any).citizenName?.includes('Sanchez') ||
+        (lastCallEvent as any).citizenName?.includes('Sánchez') ||
+        lastCallEvent.appId === 'EXT-8K2P9'
+      ) {
+        setLastCallEvent(null);
+        try { localStorage.removeItem('te_extranjeria_active_call'); } catch {}
+        return;
+      }
+
+      setIsCallOverlayMinimized(false);
+      setCallRemainingSeconds(10);
+
+      let remaining = 10;
+      const interval = setInterval(() => {
+        remaining -= 1;
+        setCallRemainingSeconds(Math.max(0, remaining));
+        if (remaining <= 0) {
+          setIsCallOverlayMinimized(true);
+          clearInterval(interval);
+        }
+      }, 1000);
+
+      return () => clearInterval(interval);
+    }
+  }, [lastCallEvent?.timestamp, lastCallEvent?.appId]);
+
   const lastAnnouncedTimestampRef = React.useRef<number>(0);
 
   // Synthesis-based sound alert for public display chimes
@@ -1718,6 +1917,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       osc2.start(ctx.currentTime + 0.12);
       osc2.stop(ctx.currentTime + 0.7);
 
+      setTimeout(() => {
+        try {
+          ctx.close().catch(() => {});
+        } catch {}
+      }, 1000);
+
       if (announcementText && 'speechSynthesis' in window) {
         setTimeout(() => {
           window.speechSynthesis.cancel();
@@ -1747,9 +1952,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     boothName: string;
     announcementText: string;
     type: 'cubiculo' | 'caja' | 'recall';
+    turnCode?: string;
   }) => {
     const callData = {
       ...payload,
+      citizenName: payload.cleanCitizenName,
       timestamp: Date.now(),
     };
 
@@ -1775,6 +1982,18 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
     // 3. Local component state
     setLastCallEvent(callData);
+
+    // 4. Cross-device network synchronization to server for Smart TVs / remote displays
+    try {
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      fetch('/api/extranjeria/metadata', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ metadata: { active_call: callData } })
+      }).catch(() => {});
+    } catch {}
   };
 
   // Cancel / clear active call on the Pantalla de Turnos (when agent starts attention or completes)
@@ -1808,6 +2027,18 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         window.speechSynthesis.cancel();
       }
     } catch {}
+
+    // 5. Clear active call on server for cross-device Smart TVs
+    try {
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      fetch('/api/extranjeria/metadata', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ metadata: { active_call: null } })
+      }).catch(() => {});
+    } catch {}
   };
 
   // Turn Screen Audio Listener: executes sound and voice strictly when subRole === 'pantalla'
@@ -1832,10 +2063,16 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     try {
       const stored = localStorage.getItem('te_extranjeria_active_call');
       if (stored) {
-        const parsed = JSON.parse(stored);
-        // Robust check allowing up to 3 minutes of clock skew (either positive or negative)
-        if (parsed && parsed.timestamp && (Math.abs(Date.now() - parsed.timestamp) < 180000)) {
-          handleCallAnnouncement(parsed);
+        if (stored.includes('Carlos') || stored.includes('Sanchez') || stored.includes('Sánchez') || stored.includes('8K2P9')) {
+          localStorage.removeItem('te_extranjeria_active_call');
+        } else {
+          const parsed = JSON.parse(stored);
+          // Robust check allowing up to 3 minutes of clock skew (either positive or negative)
+          if (parsed && parsed.timestamp && (Math.abs(Date.now() - parsed.timestamp) < 180000)) {
+            setIsCallOverlayMinimized(false);
+            setCallRemainingSeconds(10);
+            handleCallAnnouncement(parsed);
+          }
         }
       }
     } catch {}
@@ -1848,10 +2085,25 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         bc.onmessage = (event) => {
           if (event.data) {
             if (event.data.type === 'CALL_CITIZEN' && event.data.call) {
-              setLastCallEvent(event.data.call);
-              handleCallAnnouncement(event.data.call);
+              const call = event.data.call;
+              if (
+                call.cleanCitizenName?.includes('Carlos') ||
+                call.cleanCitizenName?.includes('Sanchez') ||
+                call.cleanCitizenName?.includes('Sánchez') ||
+                call.citizenName?.includes('Carlos') ||
+                call.citizenName?.includes('Sanchez') ||
+                call.citizenName?.includes('Sánchez') ||
+                call.appId === 'EXT-8K2P9'
+              ) {
+                return;
+              }
+              setIsCallOverlayMinimized(false);
+              setCallRemainingSeconds(10);
+              setLastCallEvent(call);
+              handleCallAnnouncement(call);
             } else if (event.data.type === 'CLEAR_CALL') {
               setLastCallEvent(null);
+              setIsCallOverlayMinimized(true);
               if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
                 window.speechSynthesis.cancel();
               }
@@ -1867,11 +2119,26 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         if (e.newValue) {
           try {
             const parsed = JSON.parse(e.newValue);
+            if (
+              parsed.cleanCitizenName?.includes('Carlos') ||
+              parsed.cleanCitizenName?.includes('Sanchez') ||
+              parsed.cleanCitizenName?.includes('Sánchez') ||
+              parsed.citizenName?.includes('Carlos') ||
+              parsed.citizenName?.includes('Sanchez') ||
+              parsed.citizenName?.includes('Sánchez') ||
+              parsed.appId === 'EXT-8K2P9'
+            ) {
+              localStorage.removeItem('te_extranjeria_active_call');
+              return;
+            }
+            setIsCallOverlayMinimized(false);
+            setCallRemainingSeconds(10);
             setLastCallEvent(parsed);
             handleCallAnnouncement(parsed);
           } catch {}
         } else {
           setLastCallEvent(null);
+          setIsCallOverlayMinimized(true);
           if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
             window.speechSynthesis.cancel();
           }
@@ -1890,42 +2157,72 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   const fetchAppointments = async () => {
     setLoading(true);
     try {
-      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
       let allAppointments: any[] = [];
       
       try {
-        const res = await fetch('/api/appointments', {
-          headers: {
-            'Authorization': `Bearer ${token}`
+        const extRes = await fetch('/api/extranjeria/appointments');
+        if (extRes.ok) {
+          const extData = await extRes.json();
+          if (extData && extData.success && Array.isArray(extData.appointments)) {
+            allAppointments = [...extData.appointments];
           }
-        });
+        }
+      } catch (extErr) {
+        console.warn('Network issue fetching extranjeria appointments:', extErr);
+      }
+
+      try {
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const res = await fetch('/api/appointments', { headers });
         if (res.ok) {
           const data = await res.json();
           if (data && data.success && Array.isArray(data.appointments)) {
-            allAppointments = [...data.appointments];
+            const existingIds = new Set(allAppointments.map((a: any) => String(a.id || '')));
+            data.appointments.forEach((app: any) => {
+              if (app && app.id && !existingIds.has(String(app.id))) {
+                allAppointments.push(app);
+                existingIds.add(String(app.id));
+              }
+            });
           }
         }
       } catch (netErr) {
         console.warn('Network issue fetching appointments, attempting local storage sync:', netErr);
       }
 
-      // Check and merge local storage appointments so none are missing
+      // Clean and sanitize local storage appointments so stale demo records do not contaminate Extranjería
       try {
         const saved = localStorage.getItem('citas_tribunal_electoral_v2');
         if (saved) {
           const localList = JSON.parse(saved);
           if (Array.isArray(localList) && localList.length > 0) {
-            const existingIds = new Set(allAppointments.map((a: any) => String(a.id || '')));
-            localList.forEach((localApp: any) => {
-              if (localApp && localApp.id && !existingIds.has(String(localApp.id))) {
-                allAppointments.push(localApp);
-                existingIds.add(String(localApp.id));
-              }
+            const purgedList = localList.filter((localApp: any) => {
+              const id = String(localApp?.id || '');
+              const name = String(localApp?.nombre || '').toUpperCase();
+              return !(
+                id.includes('CSV-09') ||
+                id.includes('Q54QJ') ||
+                id.includes('20260928-122') ||
+                id.includes('20260908-101') ||
+                id.includes('ESP-TEST') ||
+                name.includes('ISABEL CASTELLANO') ||
+                name.includes('WALTER LOPEZ') ||
+                name.includes('CARLOS SANCHEZ') ||
+                name.includes('CARLOS SÁNCHEZ') ||
+                name.includes('JOVANNA OLIVARES') ||
+                name.includes('JEAN DUPONT') ||
+                name.includes('JOHN SMITH')
+              );
             });
+            if (purgedList.length !== localList.length) {
+              localStorage.setItem('citas_tribunal_electoral_v2', JSON.stringify(purgedList));
+            }
           }
         }
       } catch (locErr) {
-        console.warn('Error reading local appointments backup in Extranjería:', locErr);
+        console.warn('Error sanitizing local appointments in Extranjería:', locErr);
       }
 
       if (allAppointments.length > 0) {
@@ -1977,6 +2274,23 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         const filtered = allAppointments.filter((app: any) => {
           const id = (app.id || '').toUpperCase();
           const tx = (app.codigoTransaccion || '').toUpperCase();
+          const nom = (app.nombre || app.datosPersonales?.nombreCompleto || '').toUpperCase();
+
+          // Strictly filter out any demo or test citizens
+          if (
+            id.includes('20260908-101') ||
+            id.includes('ESP-TEST') ||
+            id.includes('20260907-001') ||
+            nom.includes('JOVANNA OLIVARES') ||
+            nom.includes('JEAN DUPONT') ||
+            nom.includes('JOHN SMITH') ||
+            nom.includes('ISABEL CASTELLANO') ||
+            nom.includes('WALTER LOPEZ') ||
+            nom.includes('CARLOS SANCHEZ')
+          ) {
+            return false;
+          }
+
           const cat = (app.servicioCategoria || '').toLowerCase();
           const catName = (app.categoriaNombre || '').toLowerCase();
           const sub = (app.subServicioNombre || '').toLowerCase();
@@ -1997,13 +2311,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         }).map((app: any) => {
           const name = getExtranjeriaCitizenName(app);
           const dp = app.datosPersonales ? { ...app.datosPersonales } : {};
-          if (!dp.nombreCompleto || isGenericPlaceholderName(dp.nombreCompleto)) {
-            if (name && !isGenericPlaceholderName(name)) {
-              dp.nombreCompleto = name;
-            }
+          if (name && !isGenericPlaceholderName(name)) {
+            dp.nombreCompleto = name;
           }
           const standardizedDate = standardizeDateString(app.fecha);
-          const finalNombre = (app.nombre && !isGenericPlaceholderName(app.nombre)) ? app.nombre : name;
+          const finalNombre = (name && !isGenericPlaceholderName(name)) ? name : ((app.nombre && !isGenericPlaceholderName(app.nombre)) ? app.nombre : 'Ciudadano');
           return {
             ...app,
             fecha: standardizedDate || app.fecha,
@@ -2057,6 +2369,58 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     }
   };
 
+  // Auto-detect day rollover (cambio de día y paso de medianoche) para actualizar la TV y limpiar datos de ayer
+  useEffect(() => {
+    const checkDayRollover = () => {
+      const freshToday = getLocalTodayDateString();
+      if (freshToday !== todayStr) {
+        console.log(`[Extranjería TV] Cambio de día detectado: ${todayStr} -> ${freshToday}. Realizando transición a nuevo día.`);
+        setTodayStr(freshToday);
+        setAtencionDateFilter(freshToday);
+        setSelectedCalendarDateStr('');
+        setLastCallEvent(null);
+        setIsCallOverlayMinimized(true);
+        try { localStorage.removeItem('te_extranjeria_active_call'); } catch {}
+
+        // Limpiar metadatos de atención y recesos del día anterior para que no resuciten en cubículos ni TV
+        setAppMetadata(prev => {
+          const updated = { ...prev };
+          let changed = false;
+          Object.keys(prev).forEach(key => {
+            if (key.startsWith('booth_receso_')) {
+              delete updated[key];
+              changed = true;
+            } else if (!key.startsWith('booth_occupant_') && !key.startsWith('booths_config') && key !== 'active_call') {
+              const meta = prev[key];
+              if (meta && (meta.estadoTicket === 'en_atencion' || meta.estadoTicket === 'llamando' || meta.estadoTicket === 'en_proceso')) {
+                updated[key] = {
+                  ...meta,
+                  estadoTicket: 'realizada'
+                };
+                changed = true;
+              }
+            }
+          });
+          if (changed) {
+            try {
+              localStorage.setItem('extranjeria_appointment_metadata', JSON.stringify(updated));
+            } catch {}
+          }
+          return changed ? updated : prev;
+        });
+
+        fetchAppointments();
+        fetchServerMetadata();
+      }
+    };
+
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      checkDayRollover();
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [todayStr]);
+
   const handleCreateCitaSupervisor = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCitaNombre.trim() || !newCitaPasaporte.trim() || !newCitaFecha || !newCitaHora) {
@@ -2064,18 +2428,18 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       return;
     }
 
-    // Las citas que crean los supervisores de Extranjería son CUPOS ESPECIALES ADICIONALES a los 56 ordinarios
+    // Las citas que crean los supervisores de Extranjería son CUPOS ADICIONALES para la jornada ampliada (hasta 71 citas: 56 web + 15 supervisor)
     const dayAppointments = appointmentsByDate[newCitaFecha] || [];
-    const regularAppointments = dayAppointments.filter((a: any) => !a.creadaPorSupervisor && !a.esEspecial && !a.citaEspecial && !a.esCupoAdicional);
-    const specialAppointments = dayAppointments.filter((a: any) => a.creadaPorSupervisor || a.esEspecial || a.citaEspecial || a.esCupoAdicional);
+    const regularAppointments = dayAppointments.filter((a: any) => !a.creadaPorSupervisor && !a.esEspecial && !a.citaEspecial && !a.esCupoAdicional && a.estado !== 'cancelada');
+    const specialAppointments = dayAppointments.filter((a: any) => (a.creadaPorSupervisor || a.esEspecial || a.citaEspecial || a.esCupoAdicional) && a.estado !== 'cancelada');
 
-    // Límite máximo de 30 citas especiales adicionales por día
-    if (specialAppointments.length >= 30) {
-      showStatus('Se ha alcanzado el límite máximo de 30 citas especiales adicionales para esta fecha.', 'error');
+    if (specialAppointments.length >= 15 || (regularAppointments.length + specialAppointments.length) >= 71) {
+      showStatus('Se ha alcanzado la capacidad máxima de 71 citas para este día (56 cupos web + 15 cupos especiales de supervisión).', 'error');
       return;
     }
 
-    // Numeración de la cita: si es antes de los 56 cupos ordinarios, toma el correlativo; si es adicional, se numera sobre 56
+    // Los supervisores pueden generar citas en cualquier horario de la jornada (incluyendo franja ampliada hasta 2:45 PM y cualquier horario)
+    // Numeración de la cita: si es antes de los 56 cupos ordinarios de la web, toma el correlativo; si es adicional de supervisión, se numera del 57 al 71
     const nextSeq = regularAppointments.length < 56 
       ? regularAppointments.length + 1 
       : 56 + specialAppointments.length + 1;
@@ -2121,22 +2485,46 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         motivoEspecial: motivoVal,
         numeroCitaDia: nextSeq,
         resolucion: resolucionVal || undefined,
-        datosPersonales: {
-          primerNombre: newCitaNombre.split(' ')[0] || '',
-          primerApellido: newCitaNombre.split(' ')[1] || '',
-          nombreCompleto: newCitaNombre.trim(),
-          pasaporte: newCitaPasaporte.trim(),
-          nacionalidad: newCitaNacionalidad.trim() || 'No especificada',
-          correo: newCitaCorreo.trim() || 'extranjeria@te.gob.pa',
-          telefono: newCitaTelefono.trim() || 'N/A',
-          numeroResolucion: resolucionVal || undefined,
-          creadoPor: `${creatorName} (Cupo Especial)`,
-          creadaPorSupervisor: true,
-          esEspecial: true,
-          citaEspecial: true,
-          esCupoAdicional: true,
-          motivoEspecial: motivoVal
-        },
+        datosPersonales: (() => {
+          const nParts = newCitaNombre.trim().split(/\s+/).filter(Boolean);
+          let pNom = '';
+          let sNom = '';
+          let pApe = '';
+          let sApe = '';
+          if (nParts.length >= 4) {
+            pNom = nParts[0];
+            sNom = nParts[1];
+            pApe = nParts[2];
+            sApe = nParts.slice(3).join(' ');
+          } else if (nParts.length === 3) {
+            pNom = nParts[0];
+            pApe = nParts[1];
+            sApe = nParts[2];
+          } else if (nParts.length === 2) {
+            pNom = nParts[0];
+            pApe = nParts[1];
+          } else {
+            pNom = nParts[0] || '';
+          }
+          return {
+            primerNombre: pNom,
+            segundoNombre: sNom || undefined,
+            primerApellido: pApe,
+            segundoApellido: sApe || undefined,
+            nombreCompleto: newCitaNombre.trim(),
+            pasaporte: newCitaPasaporte.trim(),
+            nacionalidad: newCitaNacionalidad.trim() || 'No especificada',
+            correo: newCitaCorreo.trim() || 'extranjeria@te.gob.pa',
+            telefono: newCitaTelefono.trim() || 'N/A',
+            numeroResolucion: resolucionVal || undefined,
+            creadoPor: `${creatorName} (Cupo Especial)`,
+            creadaPorSupervisor: true,
+            esEspecial: true,
+            citaEspecial: true,
+            esCupoAdicional: true,
+            motivoEspecial: motivoVal
+          };
+        })(),
         requisitos: [
           'Precio (efectivo) B/. 100.00',
           'Cita especial autorizada por Supervisión de Extranjería (Cupo Adicional)',
@@ -2146,13 +2534,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         ]
       };
 
-      const sessionToken = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+      const sessionToken = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionToken) headers['Authorization'] = `Bearer ${sessionToken}`;
       const res = await fetch('/api/register-appointment', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${sessionToken}`
-        },
+        headers,
         body: JSON.stringify(payload)
       });
       const data = await res.json();
@@ -2187,12 +2574,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     }
 
     try {
-      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch(`/api/appointments/${citaId}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -2231,10 +2618,10 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   useEffect(() => {
     const autoRestore = async () => {
       try {
-        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token') || 'superadmin_token';
-        const res = await fetch('/api/appointments', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const res = await fetch('/api/appointments', { headers });
         if (res.ok) {
           const data = await res.json();
           if (data && data.success && Array.isArray(data.appointments)) {
@@ -2297,6 +2684,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   useEffect(() => {
     fetchAppointments();
 
+    // Polling interval: keep appointments fresh in real time for TV screens and consoles
+    const apptInterval = setInterval(() => {
+      fetchAppointments();
+    }, subRole === 'pantalla' ? 4000 : 8000);
+
     // Load schedule config from server
     fetch('/api/extranjeria/config')
       .then(res => res.json())
@@ -2306,12 +2698,13 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
           setCapacidad(cap);
           setIntervalo(inter);
           setHoraInicio(hIni);
-          setHoraFin(hFin);
+          const internalFin = (hFin === '01:45 PM' || !hFin) ? '02:45 PM' : hFin;
+          setHoraFin(internalFin);
           
           localStorage.setItem('extranjeria_capacidad_usuarios', String(cap));
           localStorage.setItem('extranjeria_intervalo_minutos', String(inter));
           localStorage.setItem('extranjeria_hora_inicio', hIni);
-          localStorage.setItem('extranjeria_hora_fin', hFin);
+          localStorage.setItem('extranjeria_hora_fin', internalFin);
 
           const cleanUrl = (tUrl && !tUrl.includes('sistema-de-ticket.vercel.app'))
             ? tUrl.trim()
@@ -2321,7 +2714,9 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         }
       })
       .catch(err => console.warn("Failed to load extranjeria config from server:", err));
-  }, []);
+
+    return () => clearInterval(apptInterval);
+  }, [subRole]);
 
   const showStatus = (text: string, type: 'success' | 'error' | 'info') => {
     setStatusMessage({ text, type });
@@ -2355,13 +2750,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     localStorage.setItem('extranjeria_ticket_kiosco_url', cleanUrl);
     
     try {
-      const token = sessionStorage.getItem('admin_token') || 'superadmin_token';
+      const token = sessionStorage.getItem('admin_token') || localStorage.getItem('te_session_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch('/api/extranjeria/config', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers,
         body: JSON.stringify({ capacidad, intervalo, horaInicio, horaFin, ticketKioscoUrl: cleanUrl })
       });
       const data = await res.json();
@@ -2376,32 +2770,78 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     }
   };
 
-  // Activate/deactivate a reserve booth (casillero de atención)
+  // Activate/deactivate a reserve or regular booth (casillero de atención)
   const toggleBoothActive = (boothId: number) => {
-    setBooths(prev => prev.map(b => {
+    const currentSupervisorUser = sessionStorage.getItem('admin_username') || localStorage.getItem('admin_username') || 'Supervisor';
+    let nextActive = false;
+    let staffName = '';
+    let disabledByVal: string | undefined = undefined;
+    let disabledAtVal: string | undefined = undefined;
+
+    const updatedBooths = booths.map(b => {
       if (b.id === boothId) {
-        const nextActive = !b.active;
-        let staffName = b.staff;
+        nextActive = !b.active;
+        staffName = b.staff;
         if (nextActive && b.empty) {
           staffName = "Gestor de Extranjería";
         } else if (!nextActive && b.empty) {
           staffName = "Turno de Reserva";
         }
-        return { ...b, active: nextActive, staff: staffName };
+        disabledByVal = nextActive ? undefined : currentSupervisorUser;
+        disabledAtVal = nextActive ? undefined : new Date().toLocaleTimeString('es-PA', { hour: '2-digit', minute: '2-digit' });
+        return { 
+          ...b, 
+          active: nextActive, 
+          staff: staffName,
+          disabledBy: disabledByVal,
+          disabledAt: disabledAtVal
+        };
       }
       return b;
-    }));
-    showStatus(`Casillero ${boothId} actualizado con éxito.`, 'success');
+    });
+
+    setBooths(updatedBooths);
+
+    // Broadcast status to all supervisors and persist to server
+    const statusKey = `booth_status_${boothId}`;
+    const statusItem: any = {
+      hasDocuments: false,
+      checkedDocs: [],
+      passedToSupervisor: false,
+      assignedCubiculo: boothId,
+      estadoTicket: 'ninguno' as const,
+      active: nextActive,
+      disabledBy: disabledByVal || null,
+      disabledAt: disabledAtVal || null
+    };
+
+    const incremental: Record<string, any> = { 
+      [statusKey]: statusItem,
+      booths_config: updatedBooths
+    };
+    const updatedMap = {
+      ...appMetadata,
+      ...incremental
+    };
+    persistMetadata(updatedMap, incremental);
+
+    if (nextActive) {
+      showStatus(`Casillero ${boothId} habilitado con éxito. Ahora recibirá citas para atención.`, 'success');
+    } else {
+      showStatus(`Casillero ${boothId} DESHABILITADO por ${currentSupervisorUser}. Ningún supervisor ni el sistema le asignará citas.`, 'info');
+    }
   };
 
   // Re-assign operator staff of any booth
   const updateBoothStaff = (boothId: number, newStaff: string) => {
-    setBooths(prev => prev.map(b => {
+    const updatedBooths = booths.map(b => {
       if (b.id === boothId) {
         return { ...b, staff: newStaff };
       }
       return b;
-    }));
+    });
+    setBooths(updatedBooths);
+    persistMetadata({ ...appMetadata, booths_config: updatedBooths as any }, { booths_config: updatedBooths as any });
     showStatus(`Operador asignado al Casillero ${boothId} actualizado a: ${newStaff}.`, 'success');
   };
 
@@ -2409,18 +2849,18 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   const toggleBoothReceso = async (boothId: number) => {
     let nextState = 'DISPONIBLE';
     let nextReceso = false;
-    setBooths(prev => prev.map(b => {
+    const updatedBooths = booths.map(b => {
       if (b.id === boothId) {
         nextReceso = !b.receso;
         nextState = nextReceso ? 'EN RECESO' : 'DISPONIBLE';
         return { ...b, receso: nextReceso };
       }
       return b;
-    }));
+    });
+    setBooths(updatedBooths);
 
     const key = `booth_receso_${boothId}`;
-    const updatedMeta = {
-      ...appMetadata,
+    const incremental: Record<string, any> = {
       [key]: {
         hasDocuments: false,
         checkedDocs: [],
@@ -2428,9 +2868,14 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
         assignedCubiculo: boothId,
         estadoTicket: 'ninguno' as const,
         reatencion: nextReceso
-      }
+      },
+      booths_config: updatedBooths
     };
-    await persistMetadata(updatedMeta, { [key]: updatedMeta[key] });
+    const updatedMeta = {
+      ...appMetadata,
+      ...incremental
+    };
+    await persistMetadata(updatedMeta, incremental);
 
     showStatus(`Casillero ${boothId} cambiado a estado: ${nextState}.`, 'success');
   };
@@ -2466,6 +2911,12 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       estadoTicket: 'ninguno'
     };
 
+    const cleanCitizenName = (app?.nombre && !isGenericPlaceholderName(app.nombre) && app.nombre !== 'Ciudadano en Atención')
+      ? app.nombre
+      : (app?.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(app.datosPersonales.nombreCompleto))
+        ? app.datosPersonales.nombreCompleto
+        : getExtranjeriaCitizenName(app);
+
     const allDocs = REQUISITOS_EXTRANJERIA.map(r => r.id);
     const updatedItem: AppointmentMetadata = {
       ...meta,
@@ -2473,8 +2924,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       checkedDocs: allDocs,
       passedToSupervisor: true,
       assignedCubiculo: null,
-      estadoTicket: 'ninguno'
-    };
+      estadoTicket: 'ninguno',
+      citizenName: cleanCitizenName,
+      nombre: cleanCitizenName,
+      codigoTransaccion: app?.codigoTransaccion || appId
+    } as any;
 
     const incremental: Record<string, AppointmentMetadata> = { [appId]: updatedItem };
     if (app && app.codigoTransaccion && app.codigoTransaccion !== appId) {
@@ -2495,13 +2949,20 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   // Assign appointment to cubicle (by supervisor)
   const handleAssignToCubiculo = (appId: string, cubiculoId: number) => {
     const targetBooth = booths.find(b => b.id === cubiculoId);
+    if (!targetBooth?.active) {
+      const disabledMsg = targetBooth?.disabledBy 
+        ? `No se puede asignar: El ${targetBooth.name} fue DESHABILITADO por el supervisor ${targetBooth.disabledBy}.`
+        : `No se puede asignar: El ${targetBooth?.name || 'cubículo'} se encuentra deshabilitado por supervisión.`;
+      showStatus(disabledMsg, 'error');
+      return;
+    }
     if (targetBooth?.receso) {
       showStatus(`No se puede asignar: El ${targetBooth.name} se encuentra EN RECESO.`, 'error');
       return;
     }
 
-    const app = appointments.find(a => a.id === appId || a.codigoTransaccion === appId);
-    const existingMeta = appMetadata[appId] || (app?.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+    const app = appointments.find(a => String(a.id) === String(appId) || (a.codigoTransaccion && String(a.codigoTransaccion) === String(appId)));
+    const existingMeta = appMetadata[appId] || (app?.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null) || appMetadata[String(appId)];
     const meta = existingMeta || {
       hasDocuments: true,
       checkedDocs: REQUISITOS_EXTRANJERIA.map(r => r.id),
@@ -2510,14 +2971,33 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       estadoTicket: 'ninguno'
     };
 
+    const cleanCitizenName = (app?.nombre && !isGenericPlaceholderName(app.nombre) && app.nombre !== 'Ciudadano en Atención')
+      ? app.nombre
+      : (app?.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(app.datosPersonales.nombreCompleto))
+        ? app.datosPersonales.nombreCompleto
+        : (meta.citizenName && !isGenericPlaceholderName(meta.citizenName) && meta.citizenName !== 'Ciudadano en Atención')
+          ? meta.citizenName
+          : getExtranjeriaCitizenName(app);
+
+    const appointmentNumber = String(app?.codigoTransaccion || app?.codigoCita || app?.id || appId).trim().toUpperCase();
+    const boothName = getBoothDisplayName(targetBooth || cubiculoId);
+
+    // REGLA CRÍTICA: NO hacer el llamado si el cubículo no está libre
+    const isFree = !isCubiculoBusy(Number(cubiculoId));
+
     const updatedItem: AppointmentMetadata = {
       ...meta,
       hasDocuments: true,
       checkedDocs: meta.checkedDocs && meta.checkedDocs.length > 0 ? meta.checkedDocs : REQUISITOS_EXTRANJERIA.map(r => r.id),
       passedToSupervisor: true,
       assignedCubiculo: cubiculoId,
-      estadoTicket: 'en_proceso'
-    };
+      estadoTicket: isFree ? 'en_proceso' : 'en_espera',
+      citizenName: cleanCitizenName,
+      nombre: cleanCitizenName,
+      codigoTransaccion: appointmentNumber,
+      turnCode: appointmentNumber,
+      timestampAsignacion: new Date().toISOString()
+    } as any;
 
     const incremental: Record<string, AppointmentMetadata> = { [appId]: updatedItem };
     if (app && app.codigoTransaccion && app.codigoTransaccion !== appId) {
@@ -2534,26 +3014,25 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     setSelectedAppForSupervisor(null);
     setSupervisorCheckedDocs([]);
 
-    const codePart = (app?.codigoTransaccion || appId).slice(-4).toUpperCase();
-    const cleanCitizenName = getExtranjeriaCitizenName(app);
-    const boothName = booths.find(b => b.id === cubiculoId)?.name || `Cubículo ${cubiculoId}`;
-    
-    // Spelling out "E-" for Speech Synthesis to sound natural
-    const codeSpelled = `E ${codePart.split('').join(' ')}`;
-    const announcementText = `Turno E, ${codeSpelled}. ${cleanCitizenName}. Favor dirigirse al ${boothName}.`;
+    if (isFree) {
+      // Regla: Solo llamar el nombre del ciudadano y el cubículo correspondiente cuando esté libre
+      const announcementText = `${cleanCitizenName}. Favor dirigirse al ${boothName}.`;
 
-    // Emit call strictly to the Turn Screen (pantalla de turnos) - no sound on supervisor/operator console
-    emitCallToPantalla({
-      appId,
-      codePart,
-      cleanCitizenName,
-      boothId: cubiculoId,
-      boothName,
-      announcementText,
-      type: 'cubiculo'
-    });
+      emitCallToPantalla({
+        appId,
+        codePart: appointmentNumber,
+        cleanCitizenName,
+        boothId: cubiculoId,
+        boothName,
+        announcementText,
+        type: 'cubiculo',
+        turnCode: appointmentNumber
+      });
 
-    showStatus(`Cita asignada al ${boothName}. Llamado emitido a la Pantalla de Turnos.`, 'success');
+      showStatus(`Cita asignada al ${boothName} (libre). Llamado emitido a la Pantalla de Turnos.`, 'success');
+    } else {
+      showStatus(`Cita asignada a la cola de ${boothName}. El cubículo no está libre actualmente; NO se emite llamado hasta que se desocupe.`, 'info');
+    }
   };
 
   // Assign or return a citizen to a cubicle for re-attention (reatención)
@@ -2563,11 +3042,17 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       showStatus(`No se puede reasignar: El ${targetBooth.name} se encuentra EN RECESO.`, 'error');
       return;
     }
+    if (!targetBooth?.active) {
+      showStatus(`No se puede reasignar: El ${targetBooth?.name || 'cubículo'} está deshabilitado.`, 'error');
+      return;
+    }
 
     const app = appointments.find(a => a.id === appId || a.codigoTransaccion === appId);
     if (!app) return;
     
     const existingMeta = appMetadata[appId] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+    const appointmentNumber = String(app?.codigoTransaccion || app?.codigoCita || app?.id || appId).trim().toUpperCase();
+    const isFree = !isCubiculoBusy(Number(cubiculoId));
     
     const updatedItem: AppointmentMetadata = {
       ...(existingMeta || {
@@ -2581,8 +3066,10 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       checkedDocs: existingMeta?.checkedDocs && existingMeta.checkedDocs.length > 0 ? existingMeta.checkedDocs : REQUISITOS_EXTRANJERIA.map(r => r.id),
       passedToSupervisor: true,
       assignedCubiculo: cubiculoId,
-      estadoTicket: 'en_proceso', // Will place back in queue/calling state
+      estadoTicket: isFree ? 'en_proceso' : 'en_espera',
       reatencion: true,
+      codigoTransaccion: appointmentNumber,
+      turnCode: appointmentNumber,
       timestampReatencion: new Date().toLocaleTimeString('es-PA', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     };
 
@@ -2598,24 +3085,33 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
     persistMetadata(updatedMap, incremental);
 
-    const codePart = String(app.codigoTransaccion || appId || '').slice(-4).toUpperCase();
-    const cleanCitizenName = getExtranjeriaCitizenName(app);
-    const boothName = booths.find(b => b.id === cubiculoId)?.name || `Cubículo ${cubiculoId}`;
+    const cleanCitizenName = (app?.nombre && !isGenericPlaceholderName(app.nombre) && app.nombre !== 'Ciudadano en Atención')
+      ? app.nombre
+      : (app?.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(app.datosPersonales.nombreCompleto))
+        ? app.datosPersonales.nombreCompleto
+        : (existingMeta?.citizenName && !isGenericPlaceholderName(existingMeta.citizenName) && existingMeta.citizenName !== 'Ciudadano en Atención')
+          ? existingMeta.citizenName
+          : getExtranjeriaCitizenName(app);
+    const boothName = getBoothDisplayName(targetBooth || cubiculoId);
     
-    const codeSpelled = `E ${codePart.split('').join(' ')}`;
-    const announcementText = `Reatención. Turno E, ${codeSpelled}. ${cleanCitizenName}. Favor dirigirse al ${boothName}.`;
+    if (isFree) {
+      const announcementText = `${cleanCitizenName}. Favor dirigirse al ${boothName}.`;
 
-    emitCallToPantalla({
-      appId,
-      codePart,
-      cleanCitizenName,
-      boothId: cubiculoId,
-      boothName,
-      announcementText,
-      type: 'cubiculo'
-    });
+      emitCallToPantalla({
+        appId,
+        codePart: appointmentNumber,
+        cleanCitizenName,
+        boothId: cubiculoId,
+        boothName,
+        announcementText,
+        type: 'cubiculo',
+        turnCode: appointmentNumber
+      });
 
-    showStatus(`Cita ${codePart} reasignada para REATENCIÓN en el ${boothName}. Llamado emitido.`, 'success');
+      showStatus(`Cita ${appointmentNumber} reasignada para REATENCIÓN en el ${boothName} (libre). Llamado emitido a pantalla.`, 'success');
+    } else {
+      showStatus(`Cita ${appointmentNumber} en cola de reatención de ${boothName}. El cubículo no está libre; no se emite llamado hasta que se desocupe.`, 'info');
+    }
   };
 
   // Recall a citizen aloud strictly via the Turn Screen
@@ -2624,26 +3120,75 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     if (!app) return;
     const meta = appMetadata[appId] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
     const cubiculoId = meta?.assignedCubiculo || selectedCubiculo;
-    const codePart = (app.codigoTransaccion || appId).slice(-4).toUpperCase();
-    const cleanCitizenName = getExtranjeriaCitizenName(app);
-    const boothName = booths.find(b => b.id === cubiculoId)?.name || `Cubículo ${cubiculoId}`;
+    const boothName = getBoothDisplayName(cubiculoId);
+    const targetBooth = booths.find(b => Number(b.id) === Number(cubiculoId));
 
-    const codeSpelled = `E ${codePart.split('').join(' ')}`;
+    if (targetBooth?.receso) {
+      showStatus(`No se puede llamar: El ${boothName} se encuentra EN RECESO.`, 'error');
+      return;
+    }
+    if (!targetBooth?.active) {
+      showStatus(`No se puede llamar: El ${boothName} se encuentra DESHABILITADO.`, 'error');
+      return;
+    }
+
+    // REGLA ESTRICTA: NO hacer el llamado si el cubículo no está libre
+    // (es decir, si ya está atendiendo o llamando a otro ciudadano en curso)
+    const isAttendingOther = Object.keys(appMetadata).some(id => {
+      if (id.startsWith('booth_') || id === 'active_call' || id === 'booths_config') return false;
+      if (id === appId || (app.codigoTransaccion && id === app.codigoTransaccion)) return false;
+      const m = appMetadata[id];
+      return m && Number(m.assignedCubiculo) === Number(cubiculoId) && (m.estadoTicket === 'en_atencion' || m.estadoTicket === 'en_proceso');
+    });
+
+    if (isAttendingOther) {
+      showStatus(`No se puede realizar el llamado: El ${boothName} no está libre (se encuentra ocupado con otro ciudadano en curso). Concluya la atención actual primero.`, 'error');
+      return;
+    }
+
+    const appointmentNumber = String(app.codigoTransaccion || app.codigoCita || app.id || appId).trim().toUpperCase();
+    const cleanCitizenName = (app?.nombre && !isGenericPlaceholderName(app.nombre) && app.nombre !== 'Ciudadano en Atención')
+      ? app.nombre
+      : (app?.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(app.datosPersonales.nombreCompleto))
+        ? app.datosPersonales.nombreCompleto
+        : (meta?.citizenName && !isGenericPlaceholderName(meta.citizenName) && meta.citizenName !== 'Ciudadano en Atención')
+          ? meta.citizenName
+          : getExtranjeriaCitizenName(app);
+
+    // Actualizar estado a 'en_proceso' (llamando)
+    const updatedItem: AppointmentMetadata = {
+      ...(meta || {
+        hasDocuments: true,
+        checkedDocs: REQUISITOS_EXTRANJERIA.map(r => r.id),
+        passedToSupervisor: true,
+        assignedCubiculo: cubiculoId,
+        estadoTicket: 'en_proceso'
+      }),
+      assignedCubiculo: cubiculoId,
+      estadoTicket: 'en_proceso',
+      citizenName: cleanCitizenName,
+      codigoTransaccion: appointmentNumber,
+      turnCode: appointmentNumber,
+      timestampLlamado: new Date().toISOString()
+    };
+    persistMetadata({ ...appMetadata, [appId]: updatedItem }, { [appId]: updatedItem });
+
     const announcementText = meta?.estadoTicket === 'pagado_en_caja'
-      ? `Turno E, ${codeSpelled}. ${cleanCitizenName}. Favor dirigirse a la caja de pago.`
-      : `Turno E, ${codeSpelled}. ${cleanCitizenName}. Favor dirigirse al ${boothName}.`;
+      ? `${cleanCitizenName}. Favor dirigirse a la caja de pago.`
+      : `${cleanCitizenName}. Favor dirigirse al ${boothName}.`;
 
     // Emit call strictly to the Turn Screen (pantalla de turnos)
     emitCallToPantalla({
       appId,
-      codePart,
+      codePart: appointmentNumber,
       cleanCitizenName,
       boothId: cubiculoId,
       boothName,
       announcementText,
-      type: meta?.estadoTicket === 'pagado_en_caja' ? 'caja' : 'recall'
+      type: meta?.estadoTicket === 'pagado_en_caja' ? 'caja' : 'recall',
+      turnCode: appointmentNumber
     });
-    showStatus(`Re-llamado enviado a la Pantalla de Turnos: ${cleanCitizenName} (E-${codePart})`, 'info');
+    showStatus(`Llamado emitido a la Pantalla de Turnos: ${cleanCitizenName} ➔ ${boothName}`, 'info');
   };
 
   // Purgar citas colgadas o activas del día anterior o de hoy (para mantenimiento)
@@ -2752,6 +3297,23 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       return;
     }
 
+    const boothNum = Number(manualSelectedBooth);
+    const boothLabel = getBoothDisplayName(boothNum);
+    const targetB = booths.find(b => Number(b.id) === boothNum);
+    if (!targetB?.active) {
+      const disBy = targetB?.disabledBy ? ` por el supervisor ${targetB.disabledBy}` : '';
+      showStatus(`No se puede asignar: El ${boothLabel} fue DESHABILITADO${disBy}.`, "error");
+      return;
+    }
+    if (targetB?.receso) {
+      showStatus(`No se puede asignar: El ${boothLabel} se encuentra EN RECESO.`, "error");
+      return;
+    }
+    if (isCubiculoBusy(boothNum)) {
+      showStatus(`No se puede realizar el llamado: El ${boothLabel} no está libre (se encuentra ocupado atendiendo a otro ciudadano).`, "error");
+      return;
+    }
+
     const docStr = manualCitizenDoc.trim() || 'N/A';
     const cleanName = manualCitizenName.trim();
     
@@ -2815,10 +3377,8 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       await persistMetadata(updatedMetadata, { [uniqueId]: newMeta });
 
       // 4. Emit the calling signal to the TV screen!
-      const boothObj = booths.find(b => b.id === manualSelectedBooth);
-      const boothLabel = boothObj ? boothObj.name : `Cubículo ${manualSelectedBooth}`;
-      
-      const announcementText = `Ciudadano ${cleanName}, código de turno ${uniqueId}, favor dirigirse al ${boothLabel}`;
+      const boothLabel = getBoothDisplayName(manualSelectedBooth);
+      const announcementText = `${cleanName}. Favor dirigirse al ${boothLabel}.`;
       
       const callData = {
         appId: uniqueId,
@@ -2884,66 +3444,43 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   // Automatically assign appointment to the active booth with the least load (load balancing)
   const handleAutoAssignToCubiculo = (appId: string) => {
-    let activeBooths = booths.filter(b => b.active && !b.receso);
+    const activeBooths = booths.filter(b => b.active && !b.receso);
     if (activeBooths.length === 0) {
       const activeButInRecess = booths.filter(b => b.active && b.receso);
       if (activeButInRecess.length > 0) {
         showStatus("No se puede asignar automáticamente: Todos los cubículos activos están en receso.", "error");
         return null;
       }
-
-      const restored = booths.map(b => b.id <= 4 ? { ...b, active: true } : b);
-      setBooths(restored);
-      try { localStorage.setItem('extranjeria_booths', JSON.stringify(restored)); } catch {}
-      activeBooths = restored.filter(b => b.active && !b.receso);
-    }
-    if (activeBooths.length === 0) {
-      showStatus("Error: No hay cubículos activos y disponibles (que no estén en receso) en este momento.", "error");
+      showStatus("No se puede asignar automáticamente: Todos los cubículos están deshabilitados. Por favor active un cubículo en Monitoreo o Configuración.", "error");
       return null;
     }
 
-    // PRIORITIZE OCCUPIED BOOTHS: Only assign to booths that have a logged-in agent currently attending
-    const occupiedBooths = activeBooths.filter(b => {
-      const occupant = appMetadata[`booth_occupant_${b.id}`];
-      return occupant && occupant.staffResponsable;
-    });
-    if (occupiedBooths.length > 0) {
-      activeBooths = occupiedBooths;
-    }
-
-    // EXCLUDE BUSY BOOTHS: Do not assign to booths currently attending or calling a citizen
+    // EXCLUDE BUSY BOOTHS: Prioritize booths not currently attending or calling a citizen
     const freeBooths = activeBooths.filter(b => !isCubiculoBusy(b.id));
-    if (freeBooths.length > 0) {
-      activeBooths = freeBooths;
-    } else {
-      showStatus("Todos los cubículos están atendiendo en este momento. El turno quedará en cola de espera.", "info");
-    }
+    const candidateBooths = freeBooths.length > 0 ? freeBooths : activeBooths;
 
-    // Count currently active appointments assigned to each active booth
+    // Count currently active appointments assigned to each booth
     const counts: Record<number, number> = {};
-    activeBooths.forEach(b => {
+    candidateBooths.forEach(b => {
       counts[b.id] = 0;
     });
 
     Object.keys(appMetadata).forEach(id => {
+      if (id.startsWith('booth_') || id === 'active_call' || id === 'booths_config') return;
       const meta = appMetadata[id];
       if (meta && meta.assignedCubiculo && meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada') {
-        const app = appointments.find(a => String(a.id) === String(id) || (a.codigoTransaccion && String(a.codigoTransaccion) === String(id)));
-        if (app && app.fecha !== todayStr) {
-          return;
-        }
         if (counts[meta.assignedCubiculo] !== undefined) {
           counts[meta.assignedCubiculo]++;
         }
       }
     });
 
-    // Find active booth with minimum load
-    let bestBooth = activeBooths[0];
+    // Find candidate booth with minimum load
+    let bestBooth = candidateBooths[0];
     let minCount = counts[bestBooth.id] ?? 0;
 
-    for (let i = 1; i < activeBooths.length; i++) {
-      const b = activeBooths[i];
+    for (let i = 1; i < candidateBooths.length; i++) {
+      const b = candidateBooths[i];
       const cnt = counts[b.id] ?? 0;
       if (cnt < minCount) {
         minCount = cnt;
@@ -2960,63 +3497,40 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     const allDocIds = REQUISITOS_EXTRANJERIA.map(r => r.id);
     setSupervisorCheckedDocs(allDocIds);
 
-    let activeBooths = booths.filter(b => b.active && !b.receso);
+    const activeBooths = booths.filter(b => b.active && !b.receso);
     if (activeBooths.length === 0) {
       const activeButInRecess = booths.filter(b => b.active && b.receso);
       if (activeButInRecess.length > 0) {
         showStatus("No se puede asignar automáticamente: Todos los cubículos activos están en receso.", "error");
         return;
       }
-
-      const restored = booths.map(b => b.id <= 4 ? { ...b, active: true } : b);
-      setBooths(restored);
-      try { localStorage.setItem('extranjeria_booths', JSON.stringify(restored)); } catch {}
-      activeBooths = restored.filter(b => b.active && !b.receso);
-    }
-    if (activeBooths.length === 0) {
-      showStatus("Error: No hay cubículos activos y disponibles (que no estén en receso) en este momento.", "error");
+      showStatus("No se puede asignar: Todos los cubículos están deshabilitados. Por favor active un cubículo en Monitoreo o Configuración.", "error");
       return;
     }
 
-    // PRIORITIZE OCCUPIED BOOTHS: Only assign to booths that have a logged-in agent currently attending
-    const occupiedBooths = activeBooths.filter(b => {
-      const occupant = appMetadata[`booth_occupant_${b.id}`];
-      return occupant && occupant.staffResponsable;
-    });
-    if (occupiedBooths.length > 0) {
-      activeBooths = occupiedBooths;
-    }
-
-    // EXCLUDE BUSY BOOTHS: Do not assign to booths currently attending or calling a citizen
+    // EXCLUDE BUSY BOOTHS: Prioritize booths not currently attending or calling a citizen
     const freeBooths = activeBooths.filter(b => !isCubiculoBusy(b.id));
-    if (freeBooths.length > 0) {
-      activeBooths = freeBooths;
-    } else {
-      showStatus("Todos los cubículos están atendiendo en este momento. El turno quedará en cola de espera.", "info");
-    }
+    const candidateBooths = freeBooths.length > 0 ? freeBooths : activeBooths;
 
-    const app = appointments.find(a => a.id === appId || a.codigoTransaccion === appId);
-    const existingMeta = appMetadata[appId] || (app?.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
-
-    // Count currently active appointments assigned to each active booth
     const counts: Record<number, number> = {};
-    activeBooths.forEach(b => {
+    candidateBooths.forEach(b => {
       counts[b.id] = 0;
     });
 
     Object.keys(appMetadata).forEach(id => {
+      if (id.startsWith('booth_') || id === 'active_call' || id === 'booths_config') return;
       const meta = appMetadata[id];
-      if (meta && meta.assignedCubiculo && meta.estadoTicket !== 'realizada') {
+      if (meta && meta.assignedCubiculo && meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada') {
         if (counts[meta.assignedCubiculo] !== undefined) {
           counts[meta.assignedCubiculo]++;
         }
       }
     });
 
-    let bestBooth = activeBooths[0];
+    let bestBooth = candidateBooths[0];
     let minCount = counts[bestBooth.id] ?? 0;
-    for (let i = 1; i < activeBooths.length; i++) {
-      const b = activeBooths[i];
+    for (let i = 1; i < candidateBooths.length; i++) {
+      const b = candidateBooths[i];
       const cnt = counts[b.id] ?? 0;
       if (cnt < minCount) {
         minCount = cnt;
@@ -3024,46 +3538,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       }
     }
 
-    const updatedItem: AppointmentMetadata = {
-      ...(existingMeta || { estadoTicket: 'ninguno' }),
-      hasDocuments: true,
-      checkedDocs: allDocIds,
-      passedToSupervisor: true,
-      assignedCubiculo: bestBooth.id,
-      estadoTicket: 'en_proceso'
-    };
-
-    const incremental: Record<string, AppointmentMetadata> = { [appId]: updatedItem };
-    if (app && app.codigoTransaccion && app.codigoTransaccion !== appId) {
-      incremental[app.codigoTransaccion] = updatedItem;
-    }
-
-    const updatedMap = {
-      ...appMetadata,
-      ...incremental
-    };
-
-    persistMetadata(updatedMap, incremental);
-
-    const codePart = (app?.codigoTransaccion || appId).slice(-4).toUpperCase();
-    const cleanCitizenName = getExtranjeriaCitizenName(app);
-    const boothName = bestBooth.name;
-    const codeSpelled = `E ${codePart.split('').join(' ')}`;
-    const announcementText = `Turno E, ${codeSpelled}. ${cleanCitizenName}. Favor dirigirse al ${boothName}.`;
-
-    emitCallToPantalla({
-      appId,
-      codePart,
-      cleanCitizenName,
-      boothId: bestBooth.id,
-      boothName,
-      announcementText,
-      type: 'cubiculo'
-    });
-
-    setSelectedAppForSupervisor(null);
-    setSupervisorCheckedDocs([]);
-    showStatus(`¡Los 3 requisitos fueron marcados con éxito y el ciudadano fue asignado de inmediato al ${boothName}!`, 'success');
+    handleAssignToCubiculo(appId, bestBooth.id);
   };
 
   // Trigger Ticket Call and Send to Cashier (Caja) for Payment strictly via Turn Screen
@@ -3089,24 +3564,25 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
     persistMetadata(updatedMap, incremental);
 
-    const codePart = (app?.codigoTransaccion || appId).slice(-4).toUpperCase();
-    const cleanCitizenName = getExtranjeriaCitizenName(app);
+    const appointmentNumber = String(app?.codigoTransaccion || app?.codigoCita || app?.id || appId).trim().toUpperCase();
+    const cleanCitizenName = (app?.nombre && !isGenericPlaceholderName(app.nombre) && app.nombre !== 'Ciudadano en Atención')
+      ? app.nombre
+      : getExtranjeriaCitizenName(app);
     const cubiculoId = meta.assignedCubiculo;
-    const boothName = booths.find(b => b.id === cubiculoId)?.name || `Cubículo ${cubiculoId || ''}`;
+    const boothName = getBoothDisplayName(cubiculoId);
     
-    // Spelling out "E-"
-    const codeSpelled = `E ${codePart.split('').join(' ')}`;
-    const announcementText = `Turno E, ${codeSpelled}. ${cleanCitizenName}. Favor dirigirse a la caja de pago.`;
+    const announcementText = `${cleanCitizenName}. Favor dirigirse a la caja de pago.`;
 
     // Emit call strictly to the Turn Screen (pantalla de turnos)
     emitCallToPantalla({
       appId,
-      codePart,
+      codePart: appointmentNumber,
       cleanCitizenName,
       boothId: cubiculoId || 0,
       boothName,
       announcementText,
-      type: 'caja'
+      type: 'caja',
+      turnCode: appointmentNumber
     });
 
     showStatus(`Llamada enviada a la Pantalla de Turnos. Ciudadano enviado a la Caja de Pago (${ticketKioscoUrl}).`, 'info');
@@ -3169,23 +3645,24 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
     return Array.from(dates).sort();
   }, [appointments]);
 
-  // Active working date for Extranjería Atención (Sala de Entrada)
+  // Active working date for Extranjería Atención (Sala de Entrada) y Pantalla TV
   const activeAtencionDate = useMemo(() => {
+    // REGLA CRÍTICA PARA PANTALLA DE TV (subRole === 'pantalla'):
+    // La pantalla de TV en sala de espera NUNCA debe mostrar citas de días anteriores.
+    // Su universo de atención en vivo es ESTRICTAMENTE el día de hoy (todayStr).
+    if (subRole === 'pantalla') {
+      return todayStr;
+    }
+
     if (subRole === 'supervisor' && selectedCalendarDateStr) {
       return standardizeDateString(selectedCalendarDateStr);
     }
     if (atencionDateFilter) return standardizeDateString(atencionDateFilter);
-    if (appointments.some((app: any) => isExtranjeriaAppointment(app) && standardizeDateString(app.fecha) === todayStr)) {
-      return todayStr;
-    }
-    if (selectedCalendarDateStr && appointments.some((app: any) => isExtranjeriaAppointment(app) && standardizeDateString(app.fecha) === standardizeDateString(selectedCalendarDateStr))) {
-      return standardizeDateString(selectedCalendarDateStr);
-    }
-    if (availableAppointmentDates.length > 0) {
-      return availableAppointmentDates[0];
-    }
+
+    // Por defecto en la operativa diaria (Atención, Cubículos), la fecha activa es SIEMPRE HOY.
+    // Si hoy no tiene citas cargadas aún, se mantiene en hoy (0 citas), NUNCA salta a ayer.
     return todayStr;
-  }, [subRole, selectedCalendarDateStr, atencionDateFilter, appointments, todayStr, availableAppointmentDates]);
+  }, [subRole, selectedCalendarDateStr, atencionDateFilter, todayStr]);
 
   // Dedicated universe for Atención Entrada on the active date:
   // Strictly the ordinary appointments (no slice to prevent hiding citizens) + any appointment created by the supervisor for that day
@@ -3239,14 +3716,14 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
   }, [appointments, activeAtencionDate]);
 
   // Appointments grouped by dynamic workflow queues:
-  // 1. Atención View queue: Extranjería appointments that are NOT yet passed to supervisor
+  // 1. Atención View queue: Extranjería appointments of the current day (hoy) / active date
   // Strictly constrained to the active day's total universe of appointments (ordinary + supervisor-created)
+  // Ensures all appointments of today are always visible in "En Sala de Entrada / Espera de Atención" for both supervisor and atención
   const queueAtencionIn = useMemo(() => {
     return atencionDayUniverse.totalUniverse.filter((app: any) => {
       const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
-      const notPassed = !meta || (!meta.passedToSupervisor && !meta.hasDocuments);
-      const notFinished = !meta || (meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada');
-      return notPassed && notFinished;
+      const isCancelled = meta?.estadoTicket === 'cancelada' || app?.estado === 'cancelada';
+      return !isCancelled;
     });
   }, [atencionDayUniverse.totalUniverse, appMetadata]);
 
@@ -3305,8 +3782,8 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       const notAssigned = !meta || meta.assignedCubiculo === null || meta.assignedCubiculo === undefined;
       const notFinished = !meta || (meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada');
       
-      // Strict: match target date
-      const targetDate = selectedCalendarDateStr || atencionDateFilter || todayStr;
+      // Strict: match target date (for TV screen mode subRole === 'pantalla', strictly todayStr)
+      const targetDate = subRole === 'pantalla' ? todayStr : (selectedCalendarDateStr || atencionDateFilter || todayStr);
       const appDate = standardizeDateString(app.fecha || '');
       const tDate = standardizeDateString(targetDate || '');
       if (appDate !== tDate) {
@@ -3315,7 +3792,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
       return isExt && isPassed && notAssigned && notFinished;
     });
-  }, [appointments, appMetadata, selectedCalendarDateStr, atencionDateFilter, todayStr]);
+  }, [appointments, appMetadata, subRole, selectedCalendarDateStr, atencionDateFilter, todayStr]);
 
   // Filtered supervisor pending list for quick search
   const filteredQueueSupervisorPending = useMemo(() => {
@@ -3389,49 +3866,34 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
   // Recommended booth based on load balancing
   const recommendedBooth = useMemo(() => {
+    // Only consider booths that are active and not in recess
     let activeBooths = booths.filter(b => b.active && !b.receso);
-    if (activeBooths.length === 0) {
-      activeBooths = booths.filter(b => b.active);
-    }
-    if (activeBooths.length === 0) {
-      activeBooths = booths.slice(0, 4);
-    }
     if (activeBooths.length === 0) return null;
 
-    // PRIORITIZE OCCUPIED BOOTHS: Only assign to booths that have a logged-in agent currently attending
-    const occupiedBooths = activeBooths.filter(b => {
-      const occupant = appMetadata[`booth_occupant_${b.id}`];
-      return occupant && occupant.staffResponsable;
-    });
-    if (occupiedBooths.length > 0) {
-      activeBooths = occupiedBooths;
-    }
-
-    // EXCLUDE BUSY BOOTHS: Prioritize booths that are not busy attending
+    // Prioritize booths that are not busy attending
     const freeBooths = activeBooths.filter(b => !isCubiculoBusy(b.id));
-    if (freeBooths.length > 0) {
-      activeBooths = freeBooths;
-    }
+    const candidateBooths = freeBooths.length > 0 ? freeBooths : activeBooths;
     
     const counts: Record<number, number> = {};
-    activeBooths.forEach(b => {
+    candidateBooths.forEach(b => {
       counts[b.id] = 0;
     });
 
     Object.keys(appMetadata).forEach(id => {
+      if (id.startsWith('booth_') || id === 'active_call' || id === 'booths_config') return;
       const meta = appMetadata[id];
-      if (meta && meta.assignedCubiculo && meta.estadoTicket !== 'realizada') {
+      if (meta && meta.assignedCubiculo && meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada') {
         if (counts[meta.assignedCubiculo] !== undefined) {
           counts[meta.assignedCubiculo]++;
         }
       }
     });
 
-    let bestBooth = activeBooths[0];
+    let bestBooth = candidateBooths[0];
     let minCount = counts[bestBooth.id] ?? 0;
 
-    for (let i = 1; i < activeBooths.length; i++) {
-      const b = activeBooths[i];
+    for (let i = 1; i < candidateBooths.length; i++) {
+      const b = candidateBooths[i];
       const cnt = counts[b.id] ?? 0;
       if (cnt < minCount) {
         minCount = cnt;
@@ -3439,7 +3901,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       }
     }
     return bestBooth;
-  }, [booths, appMetadata]);
+  }, [booths, appMetadata, isCubiculoBusy]);
 
   // 4. Cubículo View: appointments assigned to the currently selected cubicle
   const queueCubiculoAssigned = useMemo(() => {
@@ -3553,7 +4015,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
       return;
     }
 
-    const headers = ['N° Secuencia (1-56)', 'Fecha', 'Hora', 'Ciudadano', 'Pasaporte/ID', 'Resolución', 'ID Transacción', 'Operador Responsable', 'Cubículo', 'Estado', 'Hora Completado'];
+    const headers = ['N° Secuencia (1-71)', 'Fecha', 'Hora', 'Ciudadano', 'Pasaporte/ID', 'Resolución', 'ID Transacción', 'Operador Responsable', 'Cubículo', 'Estado', 'Hora Completado'];
     const rows = list.map(app => {
       const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
       const name = getExtranjeriaCitizenName(app);
@@ -3882,18 +4344,41 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
               </button>
 
               {subRole !== 'atencion' && subRole !== 'cubiculo' && (
-                <button
-                  type="button"
-                  onClick={() => { setSubRole('pantalla'); setSelectedAppForCheck(null); setSelectedAppForSupervisor(null); }}
-                  className={`px-4 py-2.5 rounded-lg text-xs font-black uppercase tracking-wider flex items-center gap-2 transition cursor-pointer ${
-                    subRole === 'pantalla'
-                      ? 'bg-emerald-600 text-white shadow-md'
-                      : 'bg-slate-950/60 text-slate-400 hover:text-slate-200 border border-slate-800'
-                  }`}
-                >
-                  <Tv className="w-4 h-4" />
-                  <span>Pantalla de Turnos</span>
-                </button>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => { setSubRole('pantalla'); setSelectedAppForCheck(null); setSelectedAppForSupervisor(null); }}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
+                      subRole === 'pantalla'
+                        ? 'bg-emerald-600 text-white shadow-md'
+                        : 'bg-slate-950/60 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <Tv className="w-4 h-4" />
+                    <span>Pantalla de Turnos</span>
+                  </button>
+
+                  <a
+                    href="/tv/extranjeria"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-2 rounded-lg text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer bg-slate-950/80 hover:bg-slate-850 text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 shadow-sm"
+                    title="Abrir la Pantalla de Turnos en una nueva pestaña (ideal para monitores de TV de sala de espera)"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Abrir TV 📺</span>
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={copyTvLink}
+                    className="px-2.5 py-2 rounded-lg text-xs font-black uppercase tracking-wider flex items-center gap-1 transition cursor-pointer bg-slate-950/80 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800"
+                    title="Copiar enlace de TV directo (/tv/extranjeria) al portapapeles"
+                  >
+                    <Download className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Copiar Link</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -3918,24 +4403,47 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
+            <div className="flex items-center gap-2 self-start md:self-auto shrink-0 flex-wrap">
               {currentRole !== 'extranjeria_atencion' && currentRole !== 'extranjeria_cubiculo' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (subRole === 'pantalla') {
-                      if ((currentRole as string) === 'extranjeria_supervisor') setSubRole('supervisor');
-                      else if ((currentRole as string) === 'extranjeria_atencion') setSubRole('atencion');
-                      else setSubRole('cubiculo');
-                    } else {
-                      setSubRole('pantalla');
-                    }
-                  }}
-                  className="bg-emerald-950/40 border border-emerald-500/30 hover:border-emerald-500/60 text-emerald-400 font-black text-[10px] uppercase py-1.5 px-3 rounded-lg transition cursor-pointer select-none flex items-center gap-1.5"
-                >
-                  <Tv className="w-3.5 h-3.5" />
-                  <span>{subRole === 'pantalla' ? 'Regresar a Consola' : 'Ver Pantalla de Turnos 📺'}</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (subRole === 'pantalla') {
+                        if ((currentRole as string) === 'extranjeria_supervisor') setSubRole('supervisor');
+                        else if ((currentRole as string) === 'extranjeria_atencion') setSubRole('atencion');
+                        else setSubRole('cubiculo');
+                      } else {
+                        setSubRole('pantalla');
+                      }
+                    }}
+                    className="bg-emerald-950/40 border border-emerald-500/30 hover:border-emerald-500/60 text-emerald-400 font-black text-[10px] uppercase py-1.5 px-3 rounded-lg transition cursor-pointer select-none flex items-center gap-1.5"
+                  >
+                    <Tv className="w-3.5 h-3.5" />
+                    <span>{subRole === 'pantalla' ? 'Regresar a Consola' : 'Ver Pantalla de Turnos 📺'}</span>
+                  </button>
+
+                  <a
+                    href="/tv/extranjeria"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="bg-slate-950 border border-slate-800 hover:border-emerald-500/40 text-emerald-400 hover:text-emerald-300 font-black text-[10px] uppercase py-1.5 px-2.5 rounded-lg transition cursor-pointer select-none flex items-center gap-1"
+                    title="Abrir en ventana independiente para TV"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>Abrir en TV</span>
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={copyTvLink}
+                    className="bg-slate-950 border border-slate-800 hover:border-amber-500/40 text-slate-300 hover:text-white font-black text-[10px] uppercase py-1.5 px-2.5 rounded-lg transition cursor-pointer select-none flex items-center gap-1"
+                    title="Copiar link directo de TV (/tv/extranjeria)"
+                  >
+                    <Download className="w-3 h-3 text-amber-400" />
+                    <span>Link</span>
+                  </button>
+                </>
               )}
               <div className="bg-amber-500/20 px-3 py-1.5 border border-amber-500/30 rounded-lg text-amber-400 font-mono text-[10px] uppercase font-bold tracking-wider select-none">
                 🔴 Estación Activa
@@ -4058,9 +4566,14 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                     </span>
                     <div className="text-left">
                       <span className="text-slate-400 font-bold uppercase text-[9.5px] block">Casilleros de Atención</span>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-mono font-black text-amber-300 text-xs">{activeBoothsCount} de {booths.length} Abiertos</span>
                         <span className="text-slate-400 text-[10.5px]">({booths.filter(b => b.active).map(b => b.name).join(', ')})</span>
+                        {booths.filter(b => !b.active).length > 0 && (
+                          <span className="text-rose-300 text-[9.5px] font-mono font-bold bg-rose-950/80 border border-rose-800/80 px-2 py-0.5 rounded">
+                            🚫 Inactivos: {booths.filter(b => !b.active).map(b => `${b.name} (${b.disabledBy || 'Supervisor'})`).join(', ')}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -4325,24 +4838,49 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                               O Asignar Directamente a un Cubículo:
                             </span>
                             <div className="grid grid-cols-2 gap-2">
-                              {(booths.filter(b => b.active).length > 0 ? booths.filter(b => b.active) : booths.slice(0, 4)).map(booth => (
-                                <button
-                                  key={`quick-assign-booth-${booth.id}`}
-                                  type="button"
-                                  onClick={() => handleAssignToCubiculo(selectedAppForSupervisor.id, booth.id)}
-                                  className="p-2.5 rounded-lg border border-slate-800 bg-slate-900/80 hover:bg-slate-850 hover:border-emerald-500/50 text-left transition flex flex-col justify-between gap-1 group cursor-pointer"
-                                >
-                                  <div className="flex items-center justify-between w-full">
-                                    <span className="text-xs font-black text-white group-hover:text-emerald-400">{booth.name}</span>
-                                    <span className="text-[8px] bg-emerald-950/60 text-emerald-400 border border-emerald-800/50 px-1 py-0.2 rounded font-mono font-bold">Activo</span>
-                                  </div>
-                                  <div className="text-[9px] text-slate-400 truncate">{booth.staff}</div>
-                                  <div className="text-[8.5px] text-emerald-400 font-extrabold uppercase mt-0.5 flex items-center gap-1">
-                                    <span>Asignar Aquí ⚡</span>
-                                    <ArrowRight className="w-2.5 h-2.5" />
-                                  </div>
-                                </button>
-                              ))}
+                              {booths.map(booth => {
+                                if (!booth.active) {
+                                  return (
+                                    <div
+                                      key={`quick-assign-booth-${booth.id}`}
+                                      className="p-2.5 rounded-lg border border-rose-900/40 bg-slate-950/80 text-left flex flex-col justify-between gap-1 opacity-60 cursor-not-allowed select-none"
+                                      title={`Deshabilitado por ${booth.disabledBy || 'Supervisión'}`}
+                                    >
+                                      <div className="flex items-center justify-between w-full">
+                                        <span className="text-xs font-black text-slate-400">{booth.name}</span>
+                                        <span className="text-[8px] bg-rose-950 text-rose-400 border border-rose-800/60 px-1 py-0.2 rounded font-mono font-bold">
+                                          🚫 Deshabilitado
+                                        </span>
+                                      </div>
+                                      <div className="text-[8.5px] text-rose-400/90 truncate font-mono">
+                                        Por: {booth.disabledBy || 'Supervisor'}
+                                      </div>
+                                      <div className="text-[8px] text-slate-500 font-bold uppercase mt-0.5">
+                                        No disponible
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
+                                return (
+                                  <button
+                                    key={`quick-assign-booth-${booth.id}`}
+                                    type="button"
+                                    onClick={() => handleAssignToCubiculo(selectedAppForSupervisor.id, booth.id)}
+                                    className="p-2.5 rounded-lg border border-slate-800 bg-slate-900/80 hover:bg-slate-850 hover:border-emerald-500/50 text-left transition flex flex-col justify-between gap-1 group cursor-pointer"
+                                  >
+                                    <div className="flex items-center justify-between w-full">
+                                      <span className="text-xs font-black text-white group-hover:text-emerald-400">{booth.name}</span>
+                                      <span className="text-[8px] bg-emerald-950/60 text-emerald-400 border border-emerald-800/50 px-1 py-0.2 rounded font-mono font-bold">Activo</span>
+                                    </div>
+                                    <div className="text-[9px] text-slate-400 truncate">{booth.staff}</div>
+                                    <div className="text-[8.5px] text-emerald-400 font-extrabold uppercase mt-0.5 flex items-center gap-1">
+                                      <span>Asignar Aquí ⚡</span>
+                                      <ArrowRight className="w-2.5 h-2.5" />
+                                    </div>
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
                         </div>
@@ -4370,8 +4908,9 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                               </button>
                             </div>
                           ) : (
-                            <div className="p-3 text-[10.5px] text-amber-400 font-bold text-center bg-amber-950/20 border border-amber-800/40 rounded">
-                              <span>Habilitando cubículos operativos...</span>
+                            <div className="p-3 text-[10.5px] text-amber-400 font-bold text-center bg-amber-950/20 border border-amber-800/40 rounded space-y-1">
+                              <div>⚠️ No hay cubículos habilitados disponibles</div>
+                              <div className="text-[9px] text-slate-400 font-normal">Todos los cubículos han sido deshabilitados por supervisión o están en receso. Reactive un cubículo en Monitoreo o Configuración para continuar.</div>
                             </div>
                           )}
 
@@ -4381,7 +4920,30 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                               O Seleccionar Cubículo Específico:
                             </span>
                             <div className="grid grid-cols-2 gap-2">
-                              {(booths.filter(b => b.active).length > 0 ? booths.filter(b => b.active) : booths.slice(0, 4)).map(booth => {
+                              {booths.map(booth => {
+                                if (!booth.active) {
+                                  return (
+                                    <div
+                                      key={`assign-direct-booth-${booth.id}`}
+                                      className="p-2.5 rounded-lg border border-rose-900/40 bg-slate-950/80 text-left flex flex-col justify-between gap-1 opacity-60 cursor-not-allowed select-none"
+                                      title={`Deshabilitado por ${booth.disabledBy || 'Supervisión'}`}
+                                    >
+                                      <div className="flex items-center justify-between w-full">
+                                        <span className="text-xs font-black text-slate-400">{booth.name}</span>
+                                        <span className="text-[8px] bg-rose-950 text-rose-400 border border-rose-800/60 px-1 py-0.2 rounded font-mono font-bold">
+                                          🚫 Deshabilitado
+                                        </span>
+                                      </div>
+                                      <div className="text-[8.5px] text-rose-400/90 truncate font-mono">
+                                        Por: {booth.disabledBy || 'Supervisor'}
+                                      </div>
+                                      <div className="text-[8px] text-slate-500 font-bold uppercase mt-0.5">
+                                        No disponible
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
                                 const countForBooth = Object.values(appMetadata).filter(
                                   (m: any) => m && Number(m.assignedCubiculo) === booth.id && m.estadoTicket !== 'realizada' && m.estadoTicket !== 'cancelada'
                                 ).length;
@@ -4700,6 +5262,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                                 <span className="text-[8.5px] bg-blue-950/60 text-blue-300 border border-blue-800/60 uppercase font-black px-2 py-0.5 rounded font-mono">
                                   Sala de Entrada
                                 </span>
+                                {((appMetadata[app.id]?.passedToSupervisor) || (app.codigoTransaccion && appMetadata[app.codigoTransaccion]?.passedToSupervisor)) && (
+                                  <span className="text-[8.5px] bg-emerald-950/60 text-emerald-300 border border-emerald-800/60 uppercase font-black px-2 py-0.5 rounded font-mono">
+                                    En Supervisor ✓
+                                  </span>
+                                )}
                                 {app.creadaPorSupervisor && (
                                   <span className="text-[8px] bg-purple-950/60 text-purple-300 border border-purple-800/60 uppercase font-bold px-1.5 py-0.5 rounded font-mono">
                                     Cupo Especial
@@ -4933,9 +5500,61 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
               {/* Main Cubicles Status Board */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {booths.filter(b => b.active).map(b => {
+                {booths.map(b => {
                   const operator = getBoothStaffName(b);
                   
+                  if (!b.active) {
+                    return (
+                      <div key={`supervisor-monitor-booth-${b.id}`} className="bg-slate-950 border-2 border-rose-900/60 rounded-2xl p-5 space-y-4 text-left shadow-xl relative overflow-hidden">
+                        <div className="flex items-center justify-between border-b border-rose-900/40 pb-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-sm font-black text-rose-300 uppercase tracking-wider">{b.name}</h4>
+                              <span className="text-[9px] bg-rose-950 text-rose-300 border border-rose-800 px-2 py-0.5 rounded font-black uppercase font-mono">
+                                🚫 Deshabilitado
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              Operador asignado: <strong className="text-slate-300">{operator}</strong>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleBoothActive(b.id)}
+                            className="text-[10px] font-black uppercase px-3 py-1.5 rounded-lg bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 transition cursor-pointer flex items-center gap-1 shadow-sm"
+                            title="Habilitar este cubículo para recibir citas"
+                          >
+                            <span>Habilitar Cubículo 🟢</span>
+                          </button>
+                        </div>
+
+                        <div className="bg-rose-950/25 border border-rose-900/40 rounded-xl p-4 space-y-2.5">
+                          <div className="flex items-center gap-2 text-rose-200 text-xs font-black">
+                            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                            <span>Cubículo Deshabilitado por Supervisión</span>
+                          </div>
+                          <div className="text-[11px] text-slate-300 space-y-1.5 font-sans">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-slate-400 font-medium">👤 Deshabilitado por:</span>
+                              <strong className="text-amber-300 font-mono font-bold bg-amber-950/60 px-2 py-0.5 rounded border border-amber-500/30">
+                                {b.disabledBy || 'Supervisor de Extranjería'}
+                              </strong>
+                            </div>
+                            {b.disabledAt && (
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-slate-400 font-medium">⏱ Hora de desactivación:</span>
+                                <strong className="text-slate-200 font-mono">{b.disabledAt}</strong>
+                              </div>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-rose-300/80 leading-relaxed pt-2 border-t border-rose-900/30 font-medium">
+                            🔒 <strong>Protección de asignación activa:</strong> El sistema tiene bloqueada la asignación automática y manual de turnos para este cubículo. Ningún supervisor ni el algoritmo le asignará ciudadanos mientras permanezca deshabilitado.
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
+
                   // Find all active appointments for this booth (not completed/realizada)
                   const assignedApps = appointments.filter(app => {
                     const meta = appMetadata[app.id];
@@ -5393,6 +6012,171 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 </div>
               </div>
 
+              {/* INFORME DIARIO DE ATENCIONES POR USUARIO / OPERADOR */}
+              <div className="bg-slate-950 rounded-xl border border-slate-800 p-5 space-y-5 shadow-xl text-left">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-900 pb-3">
+                  <div className="space-y-0.5 text-left">
+                    <h5 className="text-xs font-black uppercase text-white tracking-wider flex items-center gap-2">
+                      <Users className="w-4 h-4 text-amber-500" />
+                      <span>Informe Diario de Atenciones por Usuario / Operador</span>
+                      <span className="bg-amber-950/80 border border-amber-500/40 text-amber-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded">
+                        {availableCubiculoUsers.length} Operadores
+                      </span>
+                    </h5>
+                    <p className="text-[10px] text-slate-400 font-semibold">
+                      Registro consolidado de atenciones concluidas hoy ({todayStr}) y conteo por usuario en el rango seleccionado.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 px-3 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>Total Sala Hoy: <strong>{totalTodayCompletedAllBooths}</strong> atenciones</span>
+                    </div>
+                    {reportOperatorFilter !== 'all' && (
+                      <button
+                        type="button"
+                        onClick={() => setReportOperatorFilter('all')}
+                        className="bg-slate-900 hover:bg-slate-800 text-amber-400 border border-amber-500/40 text-[10px] font-black uppercase px-2.5 py-1.5 rounded-lg transition cursor-pointer"
+                      >
+                        Mostrar Todos ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Tarjetas de Operadores con Conteo Diario */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {availableCubiculoUsers.map(user => {
+                    const stats = cubiculoUserStats[user] || { today: 0, range: 0, booths: new Set() };
+                    const boothList = Array.from(stats.booths || []).join(', ') || 'Cubículo Asignado';
+                    const isSelected = reportOperatorFilter === user;
+
+                    return (
+                      <div
+                        key={`report-user-card-${user}`}
+                        className={`p-3.5 rounded-xl border transition flex flex-col justify-between gap-3 text-left ${
+                          isSelected
+                            ? 'bg-amber-950/40 border-amber-500 shadow-md shadow-amber-950/30'
+                            : 'bg-slate-900/60 border-slate-850 hover:border-slate-750'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11.5px] font-black text-white uppercase truncate" title={user}>
+                              {user}
+                            </span>
+                            <span className="text-[9px] bg-indigo-950/80 border border-indigo-800 text-indigo-300 font-mono font-bold px-1.5 py-0.2 rounded shrink-0">
+                              {boothList}
+                            </span>
+                          </div>
+                          <span className="text-[9.5px] text-slate-400 block font-medium">
+                            Funcionario / Operador de Ventanilla
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80 text-center">
+                          <div className="bg-slate-950/80 p-2 rounded border border-slate-800">
+                            <span className="text-[8px] text-slate-400 uppercase font-black block font-mono">Hoy</span>
+                            <span className="text-base font-mono font-black text-emerald-400">
+                              {stats.today}
+                            </span>
+                          </div>
+                          <div className="bg-slate-950/80 p-2 rounded border border-slate-800">
+                            <span className="text-[8px] text-slate-400 uppercase font-black block font-mono">En Rango</span>
+                            <span className="text-base font-mono font-black text-amber-400">
+                              {stats.range}
+                            </span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setReportOperatorFilter(isSelected ? 'all' : user)}
+                          className={`w-full py-1.5 rounded-lg text-[9.5px] font-black uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                            isSelected
+                              ? 'bg-amber-500 text-slate-950 shadow-sm font-black'
+                              : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800'
+                          }`}
+                        >
+                          <span>{isSelected ? '✓ Filtrando este Usuario' : 'Filtrar Informe 🔍'}</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* TABLA PREVIA DE CITAS DEL INFORME */}
+                <div className="pt-3 border-t border-slate-900 space-y-2.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-300 font-mono">
+                      Detalle de Citas del Informe ({matchingAppointments.length} resultados)
+                    </span>
+                    {reportOperatorFilter !== 'all' && (
+                      <span className="text-[9.5px] text-amber-400 font-bold font-mono">
+                        Filtrado por usuario: {reportOperatorFilter.toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+
+                  {matchingAppointments.length === 0 ? (
+                    <div className="bg-slate-900/40 border border-dashed border-slate-800 rounded-xl p-6 text-center text-slate-500 text-xs">
+                      No se encontraron citas con los filtros y fechas seleccionados.
+                    </div>
+                  ) : (
+                    <div className="max-h-[340px] overflow-y-auto border border-slate-850 rounded-xl overflow-hidden">
+                      <table className="w-full text-left text-xs text-slate-300">
+                        <thead className="bg-slate-900 text-[9.5px] font-black uppercase text-slate-400 tracking-wider sticky top-0 border-b border-slate-850">
+                          <tr>
+                            <th className="py-2.5 px-3">Fecha / Hora</th>
+                            <th className="py-2.5 px-3">N° Cita / Tx</th>
+                            <th className="py-2.5 px-3">Ciudadano</th>
+                            <th className="py-2.5 px-3">Pasaporte</th>
+                            <th className="py-2.5 px-3">Cubículo</th>
+                            <th className="py-2.5 px-3">Operador</th>
+                            <th className="py-2.5 px-3">Estado</th>
+                            <th className="py-2.5 px-3 text-right">Hora Conclusión</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-850 bg-slate-950/60 font-mono text-[11px]">
+                          {matchingAppointments.slice(0, 100).map(app => {
+                            const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+                            const name = getExtranjeriaCitizenName(app);
+                            const passport = app.datosPersonales?.pasaporte || app.identificacion || 'N/D';
+                            const boothName = booths.find(b => b.id === meta?.assignedCubiculo)?.name || (meta?.assignedCubiculo ? `Cubículo ${meta.assignedCubiculo}` : '---');
+                            const op = meta?.staffResponsable || 'Sin Asignar';
+                            const isDone = meta?.estadoTicket === 'realizada';
+
+                            return (
+                              <tr key={`report-row-${app.id}`} className="hover:bg-slate-900/50 transition">
+                                <td className="py-2 px-3 text-slate-400">{app.fecha} ({app.hora})</td>
+                                <td className="py-2 px-3 font-bold text-amber-400">{app.codigoTransaccion || app.id}</td>
+                                <td className="py-2 px-3 font-sans font-bold text-white uppercase truncate max-w-[150px]">{name}</td>
+                                <td className="py-2 px-3 text-slate-400">{passport}</td>
+                                <td className="py-2 px-3 text-indigo-300">{boothName}</td>
+                                <td className="py-2 px-3 font-sans text-slate-300 truncate max-w-[140px]">{op}</td>
+                                <td className="py-2 px-3">
+                                  <span className={`text-[8.5px] font-black uppercase px-2 py-0.5 rounded font-sans ${
+                                    isDone
+                                      ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                      : 'bg-amber-950 text-amber-400 border border-amber-800'
+                                  }`}>
+                                    {isDone ? 'Atendida' : 'Pendiente'}
+                                  </span>
+                                </td>
+                                <td className="py-2 px-3 text-right text-slate-400 font-mono text-[10px]">
+                                  {meta?.timestampCompletado ? meta.timestampCompletado.split(' ').pop() : '---'}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+
             </div>
           )}
 
@@ -5412,7 +6196,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">Casilleros & Horarios</span>
                       </h4>
                       <p className="text-xs text-slate-400 font-semibold leading-relaxed mt-1">
-                        Gestione la disponibilidad operativa de los <strong className="text-white">Casilleros de Atención</strong> (4 fijos y 4 de reserva) y regule los parámetros de la jornada oficial de citas (<strong className="text-amber-300">56 cupos reglamentarios de 07:00 AM a 01:45 PM</strong>).
+                        Gestione la disponibilidad operativa de los <strong className="text-white">Casilleros de Atención</strong> (4 fijos y 4 de reserva) y regule los parámetros de la jornada oficial de citas (<strong className="text-amber-300">71 cupos reglamentarios (56 web + extras supervisor de 07:00 AM a 02:45 PM)</strong>).
                       </p>
                     </div>
                   </div>
@@ -5454,14 +6238,35 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           className={`p-3.5 rounded-lg border transition flex flex-col justify-between gap-3 ${
                             b.active 
                               ? 'bg-slate-900/90 border-emerald-500/40 shadow-inner' 
-                              : 'bg-slate-950 border-slate-850 opacity-60'
+                              : 'bg-slate-950 border-rose-900/50'
                           }`}
                         >
                           <div className="space-y-2 text-left">
                             <div className="flex items-center justify-between">
                               <span className="text-[11px] font-black text-slate-250 uppercase">{b.name}</span>
-                              <span className={`w-2.5 h-2.5 rounded-full ${b.active ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700'}`} />
+                              <div className="flex items-center gap-1.5">
+                                {!b.active && (
+                                  <span className="text-[8px] bg-rose-950 text-rose-300 border border-rose-800 font-mono font-bold uppercase px-1.5 py-0.2 rounded">
+                                    Deshabilitado
+                                  </span>
+                                )}
+                                <span className={`w-2.5 h-2.5 rounded-full ${b.active ? 'bg-emerald-500 animate-pulse' : 'bg-rose-600'}`} />
+                              </div>
                             </div>
+
+                            {!b.active && (
+                              <div className="bg-rose-950/40 border border-rose-800/60 rounded px-2.5 py-1.5 text-[9.5px] text-rose-300 space-y-0.5 font-sans">
+                                <div className="font-bold flex items-center gap-1">
+                                  <span>🚫 Deshabilitado por:</span>
+                                  <strong className="text-amber-300 font-mono">{b.disabledBy || 'Supervisor de Extranjería'}</strong>
+                                </div>
+                                {b.disabledAt && (
+                                  <div className="text-[8.5px] text-slate-400 font-mono">
+                                    Hora: {b.disabledAt}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                             
                             {/* Operator / Staff dropdown selection */}
                             <div className="space-y-1 pt-0.5">
@@ -5535,10 +6340,10 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                             className={`w-full py-1.5 rounded text-[9px] font-black uppercase tracking-wider transition cursor-pointer ${
                               b.active 
                                 ? 'bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800' 
-                                : 'bg-amber-600/90 hover:bg-amber-700 text-white shadow-md'
+                                : 'bg-emerald-600/90 hover:bg-emerald-700 text-white shadow-md'
                             }`}
                           >
-                            {b.active ? 'Desactivar' : b.empty ? 'Activar Reserva' : 'Activar Casillero'}
+                            {b.active ? 'Desactivar' : b.empty ? 'Habilitar Reserva' : 'Habilitar Casillero'}
                           </button>
                         </div>
                       ))}
@@ -5555,7 +6360,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           <Clock className="w-4 h-4 text-amber-500" />
                           <span>Control Horarios & Cupos</span>
                         </h4>
-                        <p className="text-[9.5px] text-slate-450 font-bold uppercase">56 cupos oficiales de 07:00 AM a 01:45 PM</p>
+                        <p className="text-[9.5px] text-slate-450 font-bold uppercase">71 cupos oficiales (56 web + extras supervisor) de 07:00 AM a 02:45 PM</p>
                       </div>
                     </div>
 
@@ -5973,11 +6778,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                               </span>
                             </div>
                             <p className="text-[9.5px] text-slate-350 leading-relaxed">
-                              Las citas creadas por supervisores son <strong className="text-amber-200">cupos especiales adicionales (máximo 30 por día)</strong> por encima de los 56 cupos ordinarios de la jornada.
+                              Las citas creadas por supervisores son <strong className="text-amber-200">cupos adicionales para la jornada ampliada (hasta 71 citas de 07:00 AM a 02:45 PM)</strong> por encima de los 56 cupos ordinarios de la web.
                             </p>
                             {isLimitReached && (
                               <p className="text-[9.5px] text-rose-400 font-bold">
-                                ⚠️ Se ha alcanzado el límite reglamentario de 30 cupos especiales autorizados para esta fecha.
+                                ⚠️ Se ha alcanzado el límite reglamentario global de cupos especiales autorizados para esta fecha.
                               </p>
                             )}
                           </div>
@@ -6060,18 +6865,29 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           </div>
 
                           <div className="space-y-1">
-                            <label className="text-[9.5px] font-extrabold uppercase text-slate-450 block">Hora Cita *</label>
+                            <div className="flex items-center justify-between">
+                              <label className="text-[9.5px] font-extrabold uppercase text-slate-450 block">Hora Cita *</label>
+                              <span className="text-[8px] text-emerald-400 font-mono font-bold">Cualquier horario permitido</span>
+                            </div>
                             <select
                               required
                               value={newCitaHora}
                               onChange={(e) => setNewCitaHora(e.target.value)}
                               className="w-full bg-slate-900 border border-slate-800 text-white p-2 rounded text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono text-slate-100 cursor-pointer"
                             >
-                              {SELECT_TIMES_OPTIONS.map((timeOption) => (
-                                <option key={timeOption} value={timeOption}>
-                                  {timeOption}
-                                </option>
-                              ))}
+                              {EXTRANJERIA_SLOTS_OPTIONS.map((timeOption) => {
+                                const isOccupied = Boolean(occupiedHoursForSpecialAppt[timeOption]);
+                                const occName = occupiedHoursForSpecialAppt[timeOption];
+                                return (
+                                  <option 
+                                    key={timeOption} 
+                                    value={timeOption} 
+                                    className="text-emerald-300 bg-slate-900 font-bold"
+                                  >
+                                    {timeOption} {isOccupied ? `— (Horario con cita: ${occName} — Cupo adicional permitido)` : '— (Disponible)'}
+                                  </option>
+                                );
+                              })}
                             </select>
                           </div>
                         </div>
@@ -6136,20 +6952,19 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                               <div className="flex items-center gap-1.5">
                                 <span className={`text-[10px] font-black px-2 py-0.5 rounded font-mono border ${
                                   regCount >= 56
-                                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
                                     : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
                                 }`}>
-                                  {regCount} / 56 Ordinarias
+                                  {regCount} / 56 Web
                                 </span>
                                 {specCount > 0 && (
-                                  <span className={`text-[10px] font-black px-2 py-0.5 rounded font-mono border ${
-                                    specCount >= 30
-                                      ? 'bg-rose-950/80 text-rose-300 border-rose-800 font-bold'
-                                      : 'bg-purple-950/40 text-purple-300 border-purple-500/40'
-                                  }`}>
-                                    +{specCount} / 30 Especiales
+                                  <span className="text-[10px] font-black px-2 py-0.5 rounded font-mono border bg-purple-950/40 text-purple-300 border-purple-500/40">
+                                    +{specCount} Supervisor
                                   </span>
                                 )}
+                                <span className="text-[10px] font-black px-2 py-0.5 rounded font-mono border bg-slate-900 text-slate-300 border-slate-700">
+                                  {regCount + specCount} / 71 Total
+                                </span>
                               </div>
                             </div>
                             <h4 className="text-sm font-black text-white flex items-center gap-1.5">
@@ -6188,11 +7003,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                                       {isSpecial ? (
                                         <span className="text-[9.5px] font-black bg-purple-600/30 border border-purple-400/50 text-purple-200 px-1.5 py-0.5 rounded font-mono flex items-center gap-1">
                                           <Star className="w-2.5 h-2.5 text-purple-300 fill-purple-300" />
-                                          <span>CITA ESPECIAL (N° {app.numeroCitaDia || (appIdx + 1)})</span>
+                                          <span>CITA ESPECIAL (N° {app.numeroCitaDia || (appIdx + 1)} de 71)</span>
                                         </span>
                                       ) : (
                                         <span className="text-[10px] font-black bg-amber-500/20 border border-amber-500/30 text-amber-300 px-1.5 py-0.5 rounded font-mono">
-                                          N° {app.numeroCitaDia || (appIdx + 1)} de 56
+                                          N° {app.numeroCitaDia || (appIdx + 1)} de 71
                                         </span>
                                       )}
                                       <span className="text-amber-500 font-mono font-black text-xs">{app.id}</span>
@@ -6402,22 +7217,25 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                 </div>
               )}
 
-              {/* Banner Regulatorio Oficial: 56 del Día + Cupos Supervisor */}
+              {/* Banner Regulatorio Oficial: 56 Web + Cupos Supervisor (Hasta 71) */}
               <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] bg-slate-950/70 p-2 rounded-lg border border-slate-850">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-blue-400 font-black uppercase tracking-wider">Universo de Búsqueda:</span>
+                  <span className="text-blue-400 font-black uppercase tracking-wider">Universo de Citas:</span>
                   <span className="text-emerald-400 font-mono font-bold bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded">
-                    56 Ordinarias ({atencionDayUniverse.ordinary56.length})
+                    56 Web ({atencionDayUniverse.ordinary56.length})
                   </span>
                   {atencionDayUniverse.supervisorCreated.length > 0 ? (
                     <span className="text-amber-300 font-mono font-bold bg-amber-950/40 border border-amber-800/40 px-2 py-0.5 rounded">
-                      + {atencionDayUniverse.supervisorCreated.length} Creadas por Supervisor
+                      + {atencionDayUniverse.supervisorCreated.length} Supervisor
                     </span>
                   ) : (
                     <span className="text-slate-500 font-mono text-[9px]">
                       (Sin cupos supervisor creados hoy)
                     </span>
                   )}
+                  <span className="text-slate-300 font-mono font-bold bg-slate-900 border border-slate-750 px-2 py-0.5 rounded">
+                    Total: {atencionDayUniverse.totalUniverse.length} / 71
+                  </span>
                 </div>
                 <div className="text-slate-400 font-mono text-[9.5px]">
                   Total activo del día: <strong className="text-white">{atencionDayUniverse.totalUniverse.length}</strong> | En sala: <strong className="text-white">{queueAtencionIn.length}</strong>
@@ -6433,7 +7251,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                       🔍 "{localAtencionSearchQuery || atencionSearchQuery}"
                     </span>
                     <span className="text-slate-500 text-[9.5px]">
-                      (Búsqueda instantánea en las 56 del día + cupos supervisor)
+                      (Búsqueda instantánea en las 71 del día)
                     </span>
                   </div>
 
@@ -6461,7 +7279,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                       Sin resultados en las citas de hoy
                     </span>
                     <p className="text-[10px] max-w-xs mx-auto leading-relaxed text-slate-400">
-                      No se encontraron ciudadanos en las 56 citas del día ({activeAtencionDate}) ni en los cupos del supervisor con "{localAtencionSearchQuery || atencionSearchQuery}".
+                      No se encontraron ciudadanos en las 71 citas del día ({activeAtencionDate}) con "{localAtencionSearchQuery || atencionSearchQuery}".
                     </p>
                     <button
                       type="button"
@@ -6518,11 +7336,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                           </span>
                           {isSupervisorQuota ? (
                             <span className="text-[8.5px] bg-amber-950/80 border border-amber-600/60 text-amber-300 font-black px-1.5 py-0.2 rounded font-mono">
-                              ⭐ Cupo Especial Supervisor
+                              ⭐ Cupo Especial Supervisor (N° {app.numeroCitaDia || (appIdx + 1)} de 71)
                             </span>
                           ) : (
                             <span className="text-[8.5px] bg-emerald-950/80 border border-emerald-600/60 text-emerald-300 font-black px-1.5 py-0.2 rounded font-mono">
-                              Cita N° {app.numeroCitaDia || (appIdx + 1)} de 56
+                              Cita N° {app.numeroCitaDia || (appIdx + 1)} de 71
                             </span>
                           )}
                         </div>
@@ -6537,6 +7355,11 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                         <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded border border-blue-900 bg-blue-950/30 text-blue-400">
                           Sala de Entrada
                         </span>
+                        {(appMetadata[app.id]?.passedToSupervisor || (app.codigoTransaccion && appMetadata[app.codigoTransaccion]?.passedToSupervisor)) && (
+                          <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded border border-emerald-800 bg-emerald-950/40 text-emerald-300">
+                            En Supervisor ✓
+                          </span>
+                        )}
                         <button
                           type="button"
                           onClick={(e) => {
@@ -6857,6 +7680,26 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                             ⚠️ ATENCIÓN: Este casillero figura desactivado por el Supervisor. Cámbiese de cubículo o pida al Supervisor que lo active.
                           </p>
                         )}
+                      </div>
+
+                      {/* Contador de Atenciones Realizadas Hoy en la Estación para el Informe Diario */}
+                      <div className="bg-emerald-950/70 border border-emerald-500/40 rounded-xl p-3 flex items-center justify-between shadow-sm">
+                        <div className="space-y-0.5 text-left">
+                          <span className="text-[9px] font-black uppercase tracking-wider text-emerald-400 block font-mono">
+                            Informe Diario de la Estación
+                          </span>
+                          <span className="text-xs font-bold text-slate-200">
+                            Atenciones Concluidas Hoy:
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xl font-mono font-black text-emerald-300">
+                            {attendedTodayCount}
+                          </span>
+                          <span className="text-[9px] text-emerald-400 font-bold block uppercase">
+                            {attendedTodayCount === 1 ? 'trámite' : 'trámites'}
+                          </span>
+                        </div>
                       </div>
 
                       {b?.active && (
@@ -7363,29 +8206,96 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
 
         // 1. Verificar si hay un evento de llamado activo emitido recientemente
         if (lastCallEvent && (Math.abs(Date.now() - lastCallEvent.timestamp) < 300000)) {
-          const matchingApp = appointments.find(a => a.id === lastCallEvent.appId);
-          const meta = matchingApp ? appMetadata[matchingApp.id] : null;
-          // Si el ciudadano ya pasó a "en_atencion" o "realizada", el llamado se retira de inmediato
-          if (matchingApp && meta?.estadoTicket !== 'en_atencion' && meta?.estadoTicket !== 'realizada') {
-            featuredApp = matchingApp;
-            featuredBooth = booths.find(b => b.id === (meta?.assignedCubiculo || lastCallEvent.boothId));
+          // Descartar llamadas de días anteriores de inmediato en pantalla
+          const callDay = new Date(lastCallEvent.timestamp).toLocaleDateString('en-CA');
+          if (callDay !== todayStr) {
+            featuredApp = null;
+            featuredBooth = null;
+          } else {
+            // Descartar cualquier residuo de demo
+            const rawName = String(lastCallEvent.cleanCitizenName || (lastCallEvent as any).citizenName || '').toUpperCase();
+            if (
+              rawName.includes('CARLOS') ||
+              rawName.includes('SANCHEZ') ||
+              rawName.includes('SÁNCHEZ') ||
+              rawName.includes('ISABEL') ||
+              rawName.includes('WALTER') ||
+              lastCallEvent.appId === 'EXT-8K2P9'
+            ) {
+              featuredApp = null;
+              featuredBooth = null;
+            } else {
+              const matchingApp = appointments.find(a => 
+                (String(a.id) === String(lastCallEvent.appId) || a.codigoTransaccion === lastCallEvent.appId) &&
+                (!a.fecha || standardizeDateString(a.fecha) === todayStr)
+              );
+              if (!matchingApp) {
+                featuredApp = null;
+                featuredBooth = null;
+              } else {
+              const meta = appMetadata[matchingApp.id] || (matchingApp.codigoTransaccion ? appMetadata[matchingApp.codigoTransaccion] : null);
+
+              // Si el agente en el cubículo ya presionó "Iniciar Atención" (en_atencion), el llamado se retira
+              if (meta?.estadoTicket !== 'en_atencion') {
+              const bId = Number(lastCallEvent.boothId) || Number(meta?.assignedCubiculo) || 1;
+              const bName = lastCallEvent.boothName || getBoothDisplayName(bId);
+              const realCitizenName = lastCallEvent.cleanCitizenName || 
+                                      (lastCallEvent as any).citizenName || 
+                                      (matchingApp ? getExtranjeriaCitizenName(matchingApp) : '') ||
+                                      'Ciudadano';
+
+              const displayAppCode = String(
+                (lastCallEvent as any).turnCode ||
+                lastCallEvent.codePart ||
+                matchingApp?.codigoTransaccion ||
+                matchingApp?.codigoCita ||
+                lastCallEvent.appId
+              ).trim().toUpperCase();
+
+              featuredApp = {
+                ...(matchingApp || {}),
+                id: lastCallEvent.appId,
+                codigoTransaccion: displayAppCode,
+                turnCode: displayAppCode,
+                nombre: realCitizenName,
+                creadoPor: matchingApp?.creadoPor || 'Portal del Ciudadano',
+                subServicioNombre: matchingApp?.subServicioNombre || matchingApp?.subTramite || 'Atención de Extranjería',
+                datosPersonales: {
+                  ...(matchingApp?.datosPersonales || {}),
+                  nombreCompleto: realCitizenName
+                }
+              };
+              featuredBooth = { id: bId, name: bName };
+            }
           }
         }
+      }
+    }
 
-        // Helper to format clean, readable ticket code for waiting room screen
-        const getDisplayTurnCode = (app: any) => {
+        // Helper para mostrar el número de cita enviado desde la web o asignado por el sistema
+        const getDisplayAppointmentNumber = (app: any) => {
           if (!app) return '---';
-          if (app.codigoTransaccion && app.codigoTransaccion.trim()) {
-            return app.codigoTransaccion.trim().toUpperCase();
+          if (app.codigoTransaccion && String(app.codigoTransaccion).trim()) {
+            return String(app.codigoTransaccion).trim().toUpperCase();
           }
-          const cleanId = String(app.id || '').trim();
-          const parts = cleanId.split('-');
-          const last = parts[parts.length - 1];
-          if (last && !isNaN(Number(last))) {
-            return `E-${last}`;
+          if (app.codigoCita && String(app.codigoCita).trim()) {
+            return String(app.codigoCita).trim().toUpperCase();
           }
-          return `E-${cleanId.slice(-4).replace(/^-+/, '').toUpperCase()}`;
+          const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null) || appMetadata[String(app.id)];
+          if (meta && (meta as any).codigoTransaccion && String((meta as any).codigoTransaccion).trim()) {
+            return String((meta as any).codigoTransaccion).trim().toUpperCase();
+          }
+          if (meta && (meta as any).turnCode && String((meta as any).turnCode).trim()) {
+            return String((meta as any).turnCode).trim().toUpperCase();
+          }
+          if (app.id && String(app.id).trim() && !String(app.id).startsWith('EXT-CSV-') && !String(app.id).startsWith('temp-')) {
+            return String(app.id).trim().toUpperCase();
+          }
+          return 'CITA EN ATENCIÓN';
         };
+        const getDisplayTurnCode = getDisplayAppointmentNumber;
+
+        const activeBoothsList = booths.filter(b => b.active);
 
         return (
           <div 
@@ -7394,7 +8304,7 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
             className={`animate-fade-in text-left ${
               isFullscreen 
                 ? 'bg-slate-950 p-6 lg:p-10 h-screen min-h-screen w-full flex flex-col justify-between select-none overflow-hidden space-y-6' 
-                : 'space-y-6'
+                : 'space-y-5'
             }`}
           >
             {/* Hover-reveal floating exit button for TV/Touchscreen convenience */}
@@ -7409,162 +8319,461 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
               </button>
             )}
 
-            {/* Header Area styled with Tribunal logo and Real-time clock (HIDDEN IN FULLSCREEN) */}
-            {!isFullscreen && (
-              <div className="bg-slate-950 p-5 lg:p-6 rounded-2xl border-2 border-slate-800 shadow-2xl flex flex-col lg:flex-row items-center justify-between gap-5">
-                {/* Tribunal Electoral Logo & Title Badge */}
-                <div className="flex items-center gap-4 sm:gap-5 w-full lg:w-auto">
-                  <div className="relative shrink-0">
-                    <div className="absolute -inset-1 bg-amber-500/15 rounded-2xl blur" />
-                    <img
-                      src="/images/logo-sede-te-1.png"
-                      alt="Tribunal Electoral Logo"
-                      className="w-16 h-16 sm:w-20 sm:h-20 object-contain rounded-xl bg-white p-2 border border-amber-500/40 relative z-10 shadow-md"
-                      referrerPolicy="no-referrer"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-xs sm:text-sm font-black tracking-widest text-[#d9a74a] uppercase font-mono block">
-                      REPÚBLICA DE PANAMÁ ● TRIBUNAL ELECTORAL
-                    </span>
-                    <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-white uppercase tracking-tight flex items-center gap-2">
-                      SISTEMA DE ASIGNACIÓN DE TURNOS
-                    </h2>
-                    <p className="text-xs sm:text-sm text-slate-300 font-bold uppercase tracking-wider">
-                      DEPARTAMENTO DE EXTRANJERÍA ● MONITOR OFICIAL DE SALA
-                    </p>
-                  </div>
+            {/* Encabezado Institucional Oficial con Título */}
+            <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 p-4 lg:p-5 rounded-2xl shadow-xl select-none">
+              <div className="flex items-center gap-4">
+                <div className="inline-flex relative shrink-0">
+                  <img
+                    src="/images/logo-sede-te-1.png"
+                    alt="Tribunal Electoral Logo"
+                    className="w-14 h-14 sm:w-16 sm:h-16 object-contain rounded-xl bg-white p-1.5 border border-amber-500/40 shadow-md"
+                    referrerPolicy="no-referrer"
+                  />
                 </div>
-   
-                {/* Real-time Clock Info Panel */}
-                <div className="flex flex-wrap items-center justify-center lg:justify-end gap-3 w-full lg:w-auto">
-                  <TurnScreenClock />
-   
-                  <div className="flex items-center gap-2">
-                    {/* Sound Status Indicator for Pantalla */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next = !screenSoundEnabled;
-                        setScreenSoundEnabled(next);
-                        if (next) {
-                          playChimeSound("Audio de pantalla activado.");
-                        }
-                      }}
-                      className={`border px-3.5 py-2.5 rounded-xl transition flex items-center gap-2 cursor-pointer select-none text-xs sm:text-sm font-black uppercase tracking-wider ${
-                        screenSoundEnabled 
-                          ? 'bg-amber-950/80 border-amber-500/60 text-amber-300 hover:bg-amber-900/80 shadow-md shadow-amber-950/40' 
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                      }`}
-                      title={screenSoundEnabled ? "Sonido activado en esta pantalla de turnos" : "Sonido silenciado en esta pantalla"}
-                    >
-                      {screenSoundEnabled ? <Volume2 className="w-4 h-4 text-amber-400" /> : <VolumeX className="w-4 h-4 text-slate-500" />}
-                      <span className="hidden sm:inline">{screenSoundEnabled ? "Audio TV Activo" : "Audio Mute"}</span>
-                    </button>
+                <div className="space-y-0.5 text-left">
+                  <span className="text-[10px] sm:text-xs font-black tracking-widest text-[#d9a74a] uppercase font-mono block">
+                    REPÚBLICA DE PANAMÁ ● TRIBUNAL ELECTORAL
+                  </span>
+                  <h1 className="text-lg sm:text-2xl lg:text-3xl font-black text-white uppercase tracking-tight">
+                    SALA DE ATENCIÓN DE EXTRANJERÍA
+                  </h1>
+                  <span className="text-[10px] sm:text-xs font-bold text-slate-400 block tracking-wide">
+                    DIRECCIÓN NACIONAL DE CEDULACIÓN • SEDE ANCÓN
+                  </span>
+                </div>
+              </div>
 
-                    <button
-                      type="button"
-                      onClick={toggleFullscreen}
-                      className="bg-slate-900 border border-slate-800 hover:border-amber-500/50 hover:bg-slate-850 text-slate-300 hover:text-amber-400 p-2.5 sm:px-3.5 sm:py-2.5 rounded-xl transition flex items-center gap-2 cursor-pointer text-xs sm:text-sm font-black uppercase tracking-wider"
-                      title={isFullscreen ? "Salir de pantalla completa" : "Poner en pantalla completa para TV"}
-                    >
-                      {isFullscreen ? <Minimize className="w-4 h-4 text-amber-500" /> : <Maximize className="w-4 h-4 text-amber-500" />}
-                      <span className="hidden sm:inline">
-                        {isFullscreen ? "Salir" : "Pantalla Completa 📺"}
+              <div className="flex flex-wrap items-center gap-3">
+                <TurnScreenClock />
+
+                <div className="flex items-center gap-2">
+                  {/* Sound Status Indicator for Pantalla */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !screenSoundEnabled;
+                      setScreenSoundEnabled(next);
+                      if (next) {
+                        playChimeSound("Audio de pantalla activado.");
+                      }
+                    }}
+                    className={`border px-3.5 py-1.5 rounded-xl transition flex items-center gap-2 cursor-pointer select-none text-xs font-black uppercase tracking-wider ${
+                      screenSoundEnabled 
+                        ? 'bg-amber-950/80 border-amber-500/60 text-amber-300 hover:bg-amber-900/80 shadow-md shadow-amber-950/40' 
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                    title={screenSoundEnabled ? "Sonido activado en esta pantalla de turnos" : "Sonido silenciado en esta pantalla"}
+                  >
+                    {screenSoundEnabled ? <Volume2 className="w-3.5 h-3.5 text-amber-400" /> : <VolumeX className="w-3.5 h-3.5 text-slate-500" />}
+                    <span>{screenSoundEnabled ? "Audio Activo" : "Audio Mute"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={toggleFullscreen}
+                    className="bg-slate-900 border border-slate-800 hover:border-amber-500/50 hover:bg-slate-850 text-slate-300 hover:text-amber-400 px-3.5 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer text-xs font-black uppercase tracking-wider"
+                    title={isFullscreen ? "Salir de pantalla completa" : "Poner en pantalla completa para TV"}
+                  >
+                    {isFullscreen ? <Minimize className="w-3.5 h-3.5 text-amber-500" /> : <Maximize className="w-3.5 h-3.5 text-amber-500" />}
+                    <span>{isFullscreen ? "Salir" : "Pantalla Completa 📺"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const realApp = appointments.find(a => isExtranjeriaAppointment(a)) || appointments[0];
+                      if (!realApp) {
+                        showStatus("No hay citas de extranjería registradas en la base de datos.", "info");
+                        return;
+                      }
+                      const citizenName = getExtranjeriaCitizenName(realApp) || realApp.nombre || 'Ciudadano';
+                      const appId = String(realApp.codigoTransaccion || realApp.codigoCita || realApp.id);
+                      const targetBooth = booths.find(b => b.active) || booths[0] || { id: 1, name: 'Cubículo 19' };
+                      const boothId = targetBooth.id;
+                      const boothName = getBoothDisplayName(targetBooth);
+                      const announcementText = `${citizenName}. Favor dirigirse al ${boothName}.`;
+                      
+                      setIsCallOverlayMinimized(false);
+                      setCallRemainingSeconds(10);
+                      emitCallToPantalla({
+                        appId,
+                        codePart: appId,
+                        cleanCitizenName: citizenName,
+                        boothId,
+                        boothName,
+                        announcementText,
+                        type: 'cubiculo',
+                        turnCode: appId
+                      });
+                      playChimeSound(announcementText);
+                    }}
+                    className="bg-amber-950/70 border border-amber-500/50 hover:bg-amber-900/80 text-amber-300 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer text-xs font-black uppercase tracking-wider"
+                    title="Emitir llamado con la cita activa de la base de datos para verificar pantalla gigante y voz"
+                  >
+                    <span>🔔 Probar Llamado BD</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={copyTvLink}
+                    className="bg-slate-900 border border-slate-800 hover:border-emerald-500/50 hover:bg-slate-850 text-slate-300 hover:text-emerald-400 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer text-xs font-black uppercase tracking-wider"
+                    title="Copiar URL directa de la pantalla de TV (/tv/extranjeria)"
+                  >
+                    <Download className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Link TV</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetchAppointments();
+                      fetchServerMetadata();
+                    }}
+                    disabled={loading}
+                    className="bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 p-2 rounded-xl transition cursor-pointer"
+                    title="Actualizar Datos"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* FULLSCREEN CALL TAKEOVER OVERLAY (PANTALLA COMPLETA DE CONVOCATORIA) */}
+            {featuredApp && featuredBooth && !isCallOverlayMinimized && (() => {
+              const featuredCitizenName = (featuredApp.nombre && !isGenericPlaceholderName(featuredApp.nombre) && featuredApp.nombre !== 'Ciudadano en Atención') 
+                ? featuredApp.nombre 
+                : (featuredApp.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(featuredApp.datosPersonales.nombreCompleto))
+                  ? featuredApp.datosPersonales.nombreCompleto
+                  : (getExtranjeriaCitizenName(featuredApp) && getExtranjeriaCitizenName(featuredApp) !== 'Ciudadano en Atención')
+                    ? getExtranjeriaCitizenName(featuredApp)
+                    : ((lastCallEvent as any)?.citizenName || lastCallEvent?.cleanCitizenName || 'Ciudadano');
+
+              const appNumber = getDisplayAppointmentNumber(featuredApp);
+
+              return (
+                <div className="fixed inset-0 z-50 bg-slate-950/98 backdrop-blur-md flex flex-col justify-between p-6 sm:p-10 lg:p-12 select-none animate-fade-in text-left">
+                  {/* Encabezado Institucional en Pantalla Completa */}
+                  <div className="flex flex-col md:flex-row items-center justify-between gap-4 pb-6 border-b border-slate-800 shrink-0">
+                    <div className="flex items-center gap-4">
+                      <img
+                        src="/images/logo-sede-te-1.png"
+                        alt="Tribunal Electoral Logo"
+                        className="w-16 h-16 sm:w-20 sm:h-20 object-contain rounded-2xl bg-white p-2 border-2 border-amber-500/60 shadow-xl"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="space-y-1">
+                        <span className="text-xs sm:text-sm font-black tracking-widest text-[#d9a74a] uppercase font-mono block">
+                          REPÚBLICA DE PANAMÁ ● TRIBUNAL ELECTORAL
+                        </span>
+                        <h1 className="text-xl sm:text-3xl lg:text-4xl font-black text-white uppercase tracking-tight">
+                          SALA DE ATENCIÓN DE EXTRANJERÍA
+                        </h1>
+                        <span className="text-xs sm:text-sm font-bold text-slate-400 block tracking-wide">
+                          DIRECCIÓN NACIONAL DE CEDULACIÓN • SEDE ANCÓN
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <TurnScreenClock />
+                      <div className="bg-slate-900 border border-amber-500/40 text-amber-300 px-3 py-1.5 rounded-xl font-mono text-xs font-bold flex items-center gap-1.5 shadow-md">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                        <span>{callRemainingSeconds}s</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsCallOverlayMinimized(true)}
+                        className="bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-300 hover:text-white px-4 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider transition cursor-pointer flex items-center gap-2 shadow-lg"
+                        title="Ver cuadrícula de cubículos"
+                      >
+                        <span>Ver Cubículos</span>
+                        <Minimize className="w-4 h-4 text-amber-400" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Cuerpo Central del Llamado en Pantalla Completa */}
+                  <div className="my-auto py-6 text-center space-y-6 max-w-6xl mx-auto w-full">
+                    {/* Badge de Llamando con halo y pulso */}
+                    <div className="inline-flex items-center gap-3 bg-amber-500 text-slate-950 px-8 py-3 rounded-full font-black text-sm sm:text-base lg:text-lg uppercase tracking-widest shadow-2xl shadow-amber-500/50 animate-bounce">
+                      <span className="w-3.5 h-3.5 rounded-full bg-slate-950 animate-ping" />
+                      <span>🔔 ¡LLAMANDO A CUBÍCULO!</span>
+                    </div>
+
+                    {/* Nombre del Ciudadano en Tamaño Gigante */}
+                    <div className="space-y-2">
+                      <span className="text-sm sm:text-base lg:text-lg font-black uppercase tracking-widest text-slate-400 font-mono block">
+                        CIUDADANO CONVOCADO
                       </span>
-                    </button>
+                      <div className="text-5xl sm:text-7xl lg:text-8xl xl:text-9xl font-black text-[#f8c95c] uppercase tracking-tight leading-none drop-shadow-[0_0_40px_rgba(248,201,92,0.6)] break-words">
+                        {featuredCitizenName}
+                      </div>
+                    </div>
 
+                    {/* Cubículo de Destino y Número de Cita */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 max-w-4xl mx-auto items-stretch">
+                      {/* Cubículo Box Gigante */}
+                      <div className="bg-emerald-950/85 border-4 border-emerald-400 rounded-3xl p-6 lg:p-8 shadow-2xl shadow-emerald-500/30 flex flex-col justify-center items-center space-y-3">
+                        <span className="text-sm sm:text-base font-black tracking-widest text-emerald-300 uppercase block">
+                          FAVOR DIRIGIRSE AL
+                        </span>
+                        <div className="text-5xl sm:text-7xl lg:text-8xl font-black text-emerald-300 uppercase tracking-tight drop-shadow-[0_0_25px_rgba(52,211,153,0.5)]">
+                          {featuredBooth.name}
+                        </div>
+                        <div className="inline-flex items-center gap-2 text-xs sm:text-sm font-black uppercase tracking-widest text-emerald-200 bg-emerald-900/90 px-4 py-1.5 rounded-xl border border-emerald-400/40">
+                          <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-ping" />
+                          <span>PASO HABILITADO</span>
+                        </div>
+                      </div>
+
+                      {/* Número de Cita Box */}
+                      <div className="bg-slate-900/90 border-4 border-slate-700/80 rounded-3xl p-6 lg:p-8 shadow-2xl flex flex-col justify-center items-center space-y-2">
+                        <span className="text-sm sm:text-base font-black tracking-widest text-amber-400 uppercase font-mono block">
+                          NÚMERO DE CITA
+                        </span>
+                        <div className="text-4xl sm:text-5xl lg:text-6xl font-mono font-black tracking-widest text-white drop-shadow-[0_0_20px_rgba(255,255,255,0.4)]">
+                          {appNumber}
+                        </div>
+                        {featuredApp.subServicioNombre && (
+                          <div className="text-xs sm:text-sm text-slate-300 font-bold uppercase tracking-wide truncate max-w-xs pt-1">
+                            {featuredApp.subServicioNombre}
+                          </div>
+                        )}
+                        <span className="text-xs sm:text-sm text-emerald-400 font-semibold block pt-1">
+                          Agendado por: {featuredApp.creadoPor || featuredApp.datosPersonales?.creadoPor || 'Portal del Ciudadano'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Barra de cuenta regresiva de 10 segundos */}
+                  <div className="w-full max-w-4xl mx-auto space-y-1.5 shrink-0 pt-2">
+                    <div className="flex items-center justify-between text-[11px] font-mono font-bold text-slate-400">
+                      <span>Mostrando llamado en grande: <strong className="text-amber-400 font-black">{callRemainingSeconds}s</strong></span>
+                      <span>Volviendo a los cubículos en {callRemainingSeconds}s</span>
+                    </div>
+                    <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-800">
+                      <div 
+                        className="bg-gradient-to-r from-amber-500 via-[#f8c95c] to-emerald-400 h-full transition-all duration-300"
+                        style={{ width: `${Math.min(100, Math.max(0, (callRemainingSeconds / 10) * 100))}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Barra inferior informativa */}
+                  <div className="flex items-center justify-between text-xs text-slate-400 border-t border-slate-800 pt-4 shrink-0">
+                    <span>Sede Central Ancón ● Dirección Nacional de Cedulación</span>
                     <button
                       type="button"
-                      onClick={fetchAppointments}
-                      disabled={loading}
-                      className="bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 p-2.5 sm:p-3 rounded-xl transition"
-                      title="Actualizar Datos"
+                      onClick={() => setIsCallOverlayMinimized(true)}
+                      className="text-amber-400 hover:text-amber-300 font-bold uppercase tracking-wider cursor-pointer underline text-xs"
                     >
-                      <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                      Ver cuadrícula de todos los cubículos
                     </button>
                   </div>
                 </div>
+              );
+            })()}
+
+            {/* COMPACT CALL BANNER (CUANDO EL USUARIO MINIMIZA EL OVERLAY PARA VER LOS CUBÍCULOS) */}
+            {featuredApp && featuredBooth && isCallOverlayMinimized && (
+              <div className="bg-amber-950/80 border-2 border-amber-500/80 p-4 rounded-2xl flex items-center justify-between gap-4 shadow-lg animate-pulse">
+                <div className="flex items-center gap-3">
+                  <span className="text-xl">🔔</span>
+                  <div>
+                    <span className="text-xs font-black text-amber-400 uppercase font-mono">Llamado Activo:</span>
+                    <span className="text-sm sm:text-base font-black text-white ml-2 uppercase">
+                      {(featuredApp.nombre && !isGenericPlaceholderName(featuredApp.nombre) && featuredApp.nombre !== 'Ciudadano en Atención') ? featuredApp.nombre : 'Ciudadano'}
+                    </span>
+                    <span className="text-emerald-400 font-black ml-2 uppercase">➔ {featuredBooth.name}</span>
+                    <span className="text-slate-400 text-xs font-mono ml-2">(Cita: {getDisplayAppointmentNumber(featuredApp)})</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsCallOverlayMinimized(false)}
+                  className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs uppercase px-4 py-2 rounded-xl transition cursor-pointer shadow-md flex items-center gap-1.5"
+                >
+                  <Maximize className="w-3.5 h-3.5" />
+                  <span>Ver Pantalla Completa 📺</span>
+                </button>
               </div>
             )}
 
-            {/* HIGHLIGHTED HERO SPOTLIGHT HEADER: Pulsing called ticket attention box */}
-            {featuredApp && featuredBooth ? (
-              <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-amber-600/35 via-amber-950/45 to-slate-950 border-3 border-amber-400 p-6 lg:p-8 shadow-2xl shadow-amber-500/20 animate-pulse">
-                <div className="absolute top-0 right-0 px-4 py-2 text-xs sm:text-sm bg-amber-500 text-slate-950 rounded-bl-2xl font-black font-mono tracking-widest uppercase shadow-md">
-                  🔔 ¡LLAMANDO CITACIÓN!
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
-                  <div className="md:col-span-5 text-center md:text-left space-y-2 border-b md:border-b-0 md:border-r border-amber-500/35 pb-5 md:pb-0 md:pr-6">
-                    <span className="inline-block px-3 py-1 rounded-md text-xs font-black uppercase tracking-wider text-amber-300 bg-amber-950 border border-amber-500/40">
-                      TRÁMITE DE EXTRANJERÍA
-                    </span>
-                    <div className="text-xs sm:text-sm font-black text-slate-300 uppercase tracking-widest font-mono">
-                      CIUDADANO CONVOCADO:
-                    </div>
-                    <div className="text-2xl sm:text-3xl lg:text-4xl font-black text-white uppercase tracking-tight leading-tight">
-                      {getExtranjeriaCitizenName(featuredApp)}
-                    </div>
-                    <span className="text-xs sm:text-sm text-emerald-400 block font-bold">
-                      Agendado por: {featuredApp.creadoPor || featuredApp.datosPersonales?.creadoPor || 'Portal del Ciudadano'}
-                    </span>
-                  </div>
-
-                  <div className="md:col-span-4 text-center py-2">
-                    <span className="text-xs sm:text-sm font-black uppercase tracking-widest text-amber-300 block mb-1">
-                      CÓDIGO DE TURNO
-                    </span>
-                    <div className="text-5xl sm:text-6xl lg:text-7xl font-mono font-black tracking-widest text-[#f8c95c] drop-shadow-[0_0_18px_rgba(248,201,92,0.6)]">
-                      {getDisplayTurnCode(featuredApp)}
-                    </div>
-                  </div>
-
-                  <div className="md:col-span-3 text-center md:text-right space-y-2">
-                    <span className="text-xs sm:text-sm font-black tracking-widest text-slate-300 block uppercase">
-                      DIRÍJASE AL
-                    </span>
-                    <div className="text-2xl sm:text-3xl lg:text-4xl font-black text-white uppercase tracking-tight">
-                      {featuredBooth.name}
-                    </div>
-                    <div className="pt-2">
-                      <span className="inline-flex items-center gap-2 text-xs sm:text-sm font-black uppercase tracking-widest text-emerald-300 bg-emerald-950/90 px-3.5 py-1.5 rounded-lg border border-emerald-500/40 shadow-md">
-                        <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-ping" />
-                        Paso Habilitado
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-slate-900/80 border-2 border-slate-800/90 p-6 lg:p-8 rounded-2xl text-center space-y-2.5 shadow-xl">
-                <span className="inline-block px-3.5 py-1 rounded-full text-xs sm:text-sm font-black text-amber-400 bg-amber-950/60 border border-amber-500/30 uppercase tracking-widest font-mono">
-                  TRIBUNAL ELECTORAL ● MÓDULO EXTRANJERÍA
+            {!featuredApp && (
+              <div className="bg-slate-900/80 border-2 border-slate-800/90 p-4 lg:p-5 rounded-2xl text-center space-y-1.5 shadow-xl">
+                <span className="inline-block px-3.5 py-1 rounded-full text-xs font-black text-amber-400 bg-amber-950/60 border border-amber-500/30 uppercase tracking-widest font-mono">
+                  SALA DE ESPERA ● MÓDULO EXTRANJERÍA
                 </span>
-                <h3 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-wide uppercase">
-                  SALA DE ESPERA OPERATIVA
-                </h3>
-                <p className="text-sm sm:text-base lg:text-lg text-slate-300 max-w-2xl mx-auto leading-relaxed font-semibold">
-                  No hay turnos activos llamados en este momento. Por favor tome asiento y permanezca atento a su llamado en pantalla.
+                <p className="text-xs sm:text-sm text-slate-300 max-w-2xl mx-auto font-semibold">
+                  Por favor permanezca atento a su llamado en pantalla. Su nombre y cubículo asignado se anunciarán automáticamente.
                 </p>
               </div>
             )}
 
-            {/* Main Monitor Display Grid - High Visibility Booths */}
-            <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 ${isFullscreen ? 'flex-1 items-stretch' : ''}`}>
-              {booths.filter(b => b.active).map(b => {
-                // Find active appointments for this booth (not completed/realizada)
-                const assignedApps = appointments.filter(app => {
-                  const meta = appMetadata[app.id];
-                  return app.fecha === todayStr && meta && meta.assignedCubiculo === b.id && meta.estadoTicket !== 'realizada' && meta.estadoTicket !== 'cancelada';
+            {/* Main Monitor Display Grid - High Visibility Booths (SOLO LOS CUBÍCULOS HABILITADOS POR EL SUPERVISOR) */}
+            <div className={`grid gap-6 ${
+              activeBoothsList.length === 1 
+                ? 'grid-cols-1 max-w-2xl mx-auto w-full' 
+                : activeBoothsList.length === 2 
+                  ? 'grid-cols-1 md:grid-cols-2 max-w-5xl mx-auto w-full' 
+                  : activeBoothsList.length === 3 
+                    ? 'grid-cols-1 md:grid-cols-3' 
+                    : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4'
+            } ${isFullscreen ? 'flex-1 items-stretch' : ''}`}>
+              {activeBoothsList.map(b => {
+                // If the cubicle is in recess, it CANNOT be attending or calling
+                if (b.receso) {
+                  return (
+                    <div 
+                      key={`tv-booth-${b.id}`} 
+                      className={`bg-slate-900 border rounded-2xl p-6 transition-all duration-300 flex flex-col justify-between relative overflow-hidden border-amber-600/45 shadow-lg shadow-amber-950/20 bg-gradient-to-b from-slate-900 via-slate-900/95 to-amber-950/15 ${
+                        isFullscreen ? 'h-full py-8 lg:py-12 xl:py-16' : 'min-h-[340px] lg:min-h-[380px]'
+                      }`}
+                    >
+                      {/* Top Header */}
+                      <div className="border-b border-slate-800 pb-3.5">
+                        <div className="flex items-center justify-between">
+                          <span className={`font-black text-white uppercase tracking-wider ${isFullscreen ? 'text-2xl sm:text-3xl xl:text-4xl' : 'text-lg sm:text-xl'}`}>
+                            {getBoothDisplayName(b)}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className={`bg-amber-950/80 text-amber-400 border border-amber-500/40 rounded-md font-black tracking-wider uppercase shadow-sm animate-pulse ${isFullscreen ? 'text-sm px-3.5 py-1.5' : 'text-xs px-2.5 py-1'}`}>
+                              RECESO ⏸
+                            </span>
+                            <span className={`rounded-full ${isFullscreen ? 'w-4 h-4' : 'w-3.5 h-3.5'} bg-amber-500 animate-pulse`} />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Mid Content - Receso */}
+                      <div className="py-4 my-auto text-center space-y-3 flex flex-col justify-center items-center">
+                        <div className="space-y-2">
+                          <span className={`font-black uppercase tracking-wider block bg-amber-950/80 border border-amber-500/40 text-amber-400 rounded-md mx-auto w-fit animate-pulse ${
+                            isFullscreen ? 'text-sm sm:text-base py-1.5 px-4' : 'text-xs sm:text-sm py-1 px-3'
+                          }`}>
+                            CUBÍCULO EN RECESO ⏸
+                          </span>
+                          <div className={`font-mono font-black text-amber-950/40 tracking-widest select-none py-1 ${
+                            isFullscreen ? 'text-6xl sm:text-7xl lg:text-8xl xl:text-[6.5rem]' : 'text-4xl sm:text-5xl lg:text-6xl'
+                          }`}>
+                            ----
+                          </div>
+                          <p className={`text-amber-400 font-extrabold uppercase mt-1 leading-none ${
+                            isFullscreen ? 'text-sm sm:text-base tracking-widest' : 'text-xs sm:text-sm'
+                          }`}>
+                            En Receso
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Bottom Footer */}
+                      <div className="border-t border-slate-800 pt-3.5 flex items-center justify-between text-xs sm:text-sm">
+                        <span className={`text-slate-450 font-extrabold uppercase ${isFullscreen ? 'text-sm lg:text-base' : 'text-xs sm:text-sm'}`}>Estado:</span>
+                        <span className="text-amber-400 font-mono font-bold text-xs uppercase">En Receso</span>
+                      </div>
+                    </div>
+                  );
+                }
+
+                // Booth is active and available:
+                // An appointment is ONLY shown if an operator is currently attending it in real time
+                // or actively calling it right now (from today's uncancelled appointments)
+                const attendingApp = atencionDayUniverse.totalUniverse.find(app => {
+                  const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+                  return meta && Number(meta.assignedCubiculo) === Number(b.id) && meta.estadoTicket === 'en_atencion';
                 });
 
-                // Current serving: Prioritize the one in 'en_atencion' state (green display) so newly assigned tickets do not override active attention
-                const activeApp = assignedApps.find(app => appMetadata[app.id]?.estadoTicket === 'en_atencion') || assignedApps[0]; 
-                const queueRemaining = activeApp ? assignedApps.filter(app => app.id !== activeApp.id) : [];
+                let callingApp: any = null;
+                if (!attendingApp && lastCallEvent && Number(lastCallEvent.boothId) === Number(b.id) && (Math.abs(Date.now() - lastCallEvent.timestamp) < 30000)) {
+                  callingApp = atencionDayUniverse.totalUniverse.find(a => 
+                    String(a.id) === String(lastCallEvent.appId) || 
+                    a.codigoTransaccion === lastCallEvent.appId
+                  );
+                }
 
-                // Dynamic name sizing for big view
-                const citizenName = activeApp ? getExtranjeriaCitizenName(activeApp) : '';
+                const activeApp = attendingApp || callingApp || null;
+                const isAttending = Boolean(attendingApp);
+
+                // Queue remaining assigned to this booth from today's real appointments
+                const queueRemaining = atencionDayUniverse.totalUniverse.filter(app => {
+                  const meta = appMetadata[app.id] || (app.codigoTransaccion ? appMetadata[app.codigoTransaccion] : null);
+                  if (!meta || Number(meta.assignedCubiculo) !== Number(b.id)) return false;
+                  if (activeApp && (String(app.id) === String(activeApp.id) || app.codigoTransaccion === activeApp.codigoTransaccion)) return false;
+                  return meta.estadoTicket === 'en_espera' || meta.estadoTicket === 'ninguno';
+                });
+
+                if (!activeApp) {
+                  // Agent is not attending or waiting for appointment assignment:
+                  // "si agente no esta disponible no be salir nada debe salir esperando que lo asignen"
+                  return (
+                    <div 
+                      key={`tv-booth-${b.id}`} 
+                      className={`bg-slate-900 border rounded-2xl p-6 transition-all duration-300 flex flex-col justify-between relative overflow-hidden border-slate-800/90 shadow-lg shadow-black/50 ${
+                        isFullscreen ? 'h-full py-8 lg:py-12 xl:py-16' : 'min-h-[340px] lg:min-h-[380px]'
+                      }`}
+                    >
+                      {/* Top Header of booth */}
+                      <div className="border-b border-slate-800 pb-3.5">
+                        <div className="flex items-center justify-between">
+                          <span className={`font-black text-white uppercase tracking-wider ${isFullscreen ? 'text-2xl sm:text-3xl xl:text-4xl' : 'text-lg sm:text-xl'}`}>
+                            {getBoothDisplayName(b)}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className={`bg-emerald-950/60 border border-emerald-500/40 text-emerald-400 rounded-md font-black tracking-wider uppercase shadow-sm ${isFullscreen ? 'text-sm px-3.5 py-1.5' : 'text-xs px-2.5 py-1'}`}>
+                              DISPONIBLE
+                            </span>
+                            <span className={`rounded-full ${isFullscreen ? 'w-4 h-4' : 'w-3.5 h-3.5'} bg-emerald-500`} />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Mid Content - Esperando que lo asignen */}
+                      <div className="py-4 my-auto text-center space-y-3 flex flex-col justify-center items-center">
+                        <div className="space-y-2">
+                          <span className={`font-black uppercase tracking-wider block bg-emerald-950/60 border border-emerald-500/30 text-emerald-400 rounded-md mx-auto w-fit ${
+                            isFullscreen ? 'text-sm sm:text-base py-1.5 px-4' : 'text-xs sm:text-sm py-1 px-3'
+                          }`}>
+                            CUBÍCULO DISPONIBLE
+                          </span>
+                          <div className={`font-mono font-black text-slate-700 tracking-widest select-none py-1 ${
+                            isFullscreen ? 'text-6xl sm:text-7xl lg:text-8xl xl:text-[6.5rem]' : 'text-4xl sm:text-5xl lg:text-6xl'
+                          }`}>
+                            ----
+                          </div>
+                          <p className={`text-slate-300 font-extrabold uppercase mt-1 leading-none ${
+                            isFullscreen ? 'text-sm sm:text-base tracking-widest' : 'text-xs sm:text-sm'
+                          }`}>
+                            Esperando que lo asignen
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Bottom Footer */}
+                      <div className="border-t border-slate-800 pt-3.5 flex items-center justify-between text-xs sm:text-sm">
+                        <span className={`text-slate-450 font-extrabold uppercase ${isFullscreen ? 'text-sm lg:text-base' : 'text-xs sm:text-sm'}`}>Estado:</span>
+                        <span className={`text-emerald-400 font-mono font-bold uppercase ${isFullscreen ? 'text-sm sm:text-base' : 'text-xs'}`}>Esperando que lo asignen</span>
+                      </div>
+                    </div>
+                  );
+                }
+
+                // If activeApp is present (currently being attended or called):
+                const activeMeta = appMetadata[activeApp.id] || (activeApp.codigoTransaccion ? appMetadata[activeApp.codigoTransaccion] : null);
+
+                // Dynamic name resolution for booth view
+                let citizenName = '';
+                if (activeMeta?.citizenName && !isGenericPlaceholderName(activeMeta.citizenName) && activeMeta.citizenName !== 'Ciudadano en Atención') {
+                  citizenName = activeMeta.citizenName;
+                } else if (activeApp.nombre && !isGenericPlaceholderName(activeApp.nombre) && activeApp.nombre !== 'Ciudadano en Atención') {
+                  citizenName = activeApp.nombre;
+                } else if (activeApp.datosPersonales?.nombreCompleto && !isGenericPlaceholderName(activeApp.datosPersonales.nombreCompleto)) {
+                  citizenName = activeApp.datosPersonales.nombreCompleto;
+                } else {
+                  citizenName = getExtranjeriaCitizenName(activeApp) || 'Ciudadano';
+                }
+
                 const getDynamicNameSizeClass = (nameStr: string) => {
                   const len = nameStr.length;
                   if (isFullscreen) {
@@ -7589,129 +8798,78 @@ export default function ExtranjeriaController({ currentRole, forceSubRole, initi
                         ? 'h-full py-8 lg:py-12 xl:py-16' 
                         : 'min-h-[340px] lg:min-h-[380px]'
                     } ${
-                      activeApp 
-                        ? (appMetadata[activeApp.id]?.estadoTicket === 'en_atencion'
-                            ? 'border-emerald-500/80 border-3 shadow-2xl shadow-emerald-950/30 bg-gradient-to-b from-slate-900 via-slate-900/95 to-emerald-950/25'
-                            : 'border-amber-400 border-3 shadow-2xl shadow-amber-500/20 bg-gradient-to-b from-slate-900 via-slate-900/95 to-amber-950/30 scale-[1.01]')
-                        : b.receso
-                          ? 'border-amber-600/45 shadow-lg shadow-amber-950/20 bg-gradient-to-b from-slate-900 via-slate-900/95 to-amber-950/15'
-                          : 'border-slate-800/90 shadow-lg shadow-black/50'
+                      isAttending
+                        ? 'border-emerald-500/80 border-3 shadow-2xl shadow-emerald-950/30 bg-gradient-to-b from-slate-900 via-slate-900/95 to-emerald-950/25'
+                        : 'border-amber-400 border-3 shadow-2xl shadow-amber-500/20 bg-gradient-to-b from-slate-900 via-slate-900/95 to-amber-950/30 scale-[1.01]'
                     }`}
                   >
                     {/* Top Header of booth */}
                     <div className="border-b border-slate-800 pb-3.5">
                       <div className="flex items-center justify-between">
                         <span className={`font-black text-white uppercase tracking-wider ${isFullscreen ? 'text-2xl sm:text-3xl xl:text-4xl' : 'text-lg sm:text-xl'}`}>
-                          {b.name}
+                          {getBoothDisplayName(b)}
                         </span>
                         <div className="flex items-center gap-2">
-                          {activeApp ? (
-                            appMetadata[activeApp.id]?.estadoTicket === 'en_atencion' ? (
-                              <span className={`bg-emerald-950 text-emerald-300 border border-emerald-500/50 rounded-md font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm ${isFullscreen ? 'text-sm px-3.5 py-1.5' : 'text-xs px-2.5 py-1'}`}>
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                                ATENDIENDO
-                              </span>
-                            ) : (
-                              <span className={`bg-amber-950 text-amber-300 border border-amber-500/50 rounded-md font-black tracking-wider uppercase shadow-sm ${isFullscreen ? 'text-sm px-3.5 py-1.5' : 'text-xs px-2.5 py-1'}`}>
-                                LLAMANDO
-                              </span>
-                            )
-                          ) : b.receso ? (
-                            <span className={`bg-amber-950/80 text-amber-400 border border-amber-500/40 rounded-md font-black tracking-wider uppercase shadow-sm animate-pulse ${isFullscreen ? 'text-sm px-3.5 py-1.5' : 'text-xs px-2.5 py-1'}`}>
-                              RECESO ⏸
+                          {isAttending ? (
+                            <span className={`bg-emerald-950 text-emerald-300 border border-emerald-500/50 rounded-md font-black tracking-wider uppercase flex items-center gap-1.5 shadow-sm ${isFullscreen ? 'text-sm px-3.5 py-1.5' : 'text-xs px-2.5 py-1'}`}>
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                              ATENDIENDO
                             </span>
-                          ) : null}
+                          ) : (
+                            <span className={`bg-amber-950 text-amber-300 border border-amber-500/50 rounded-md font-black tracking-wider uppercase shadow-sm ${isFullscreen ? 'text-sm px-3.5 py-1.5' : 'text-xs px-2.5 py-1'}`}>
+                              LLAMANDO
+                            </span>
+                          )}
                           <span className={`rounded-full ${
                             isFullscreen ? 'w-4 h-4' : 'w-3.5 h-3.5'
-                          } ${
-                            b.receso
-                              ? 'bg-amber-500 animate-pulse'
-                              : activeApp 
-                                ? (appMetadata[activeApp.id]?.estadoTicket === 'en_atencion' ? 'bg-emerald-400' : 'bg-amber-400 animate-ping')
-                                : 'bg-emerald-500'
-                          }`} />
+                          } ${isAttending ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'}`} />
                         </div>
                       </div>
                     </div>
 
                     {/* Mid Content - Big High Visibility Ticket Code, Procedure and Name */}
                     <div className="py-4 my-auto text-center space-y-3 flex flex-col justify-center items-center">
-                      {activeApp ? (
-                        <div className="animate-fade-in space-y-2.5 w-full">
-                          {appMetadata[activeApp.id]?.estadoTicket === 'en_atencion' ? (
-                            <div className="text-xs sm:text-sm font-black uppercase text-emerald-300 tracking-wider bg-emerald-950/90 border border-emerald-500/50 py-1 px-3.5 rounded-lg mx-auto w-fit flex items-center gap-2 shadow-sm">
-                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                              <span>EN ATENCIÓN EN CUBÍCULO</span>
-                            </div>
-                          ) : (
-                            <div className="text-xs sm:text-sm font-black uppercase text-amber-300 tracking-widest bg-amber-950/80 border border-amber-500/40 py-1 px-3.5 rounded-lg mx-auto w-fit flex items-center gap-2 shadow-sm">
-                              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                              <span>CONVOCANDO A CUBÍCULO 🔔</span>
-                            </div>
-                          )}
-                          
-                          <div className={`font-black uppercase leading-tight tracking-wide mt-1 px-1 break-words ${
-                            appMetadata[activeApp.id]?.estadoTicket === 'en_atencion'
-                              ? 'text-emerald-300 drop-shadow-[0_0_12px_rgba(52,211,153,0.4)]'
-                              : 'text-[#f5c358] drop-shadow-[0_0_15px_rgba(245,195,88,0.5)]'
-                          } ${nameSizeClass}`}>
-                            {citizenName}
+                      <div className="animate-fade-in space-y-2.5 w-full">
+                        {isAttending ? (
+                          <div className="text-xs sm:text-sm font-black uppercase text-emerald-300 tracking-wider bg-emerald-950/90 border border-emerald-500/50 py-1 px-3.5 rounded-lg mx-auto w-fit flex items-center gap-2 shadow-sm">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>EN ATENCIÓN EN CUBÍCULO</span>
                           </div>
-                          
-                          <div className={`font-mono font-black text-slate-300 bg-slate-950/60 border border-slate-800/80 rounded-lg px-4 py-1.5 mx-auto w-fit uppercase tracking-widest ${
-                            isFullscreen ? 'text-lg sm:text-xl lg:text-2xl' : 'text-xs sm:text-sm'
-                          }`}>
-                            Cita: <span className="text-amber-400 select-all">{getDisplayTurnCode(activeApp)}</span>
+                        ) : (
+                          <div className="text-xs sm:text-sm font-black uppercase text-amber-300 tracking-widest bg-amber-950/80 border border-amber-500/40 py-1 px-3.5 rounded-lg mx-auto w-fit flex items-center gap-2 shadow-sm">
+                            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                            <span>CONVOCANDO A CUBÍCULO 🔔</span>
                           </div>
+                        )}
+                        
+                        <div className={`font-black uppercase leading-tight tracking-wide mt-1 px-1 break-words ${
+                          isAttending
+                            ? 'text-emerald-300 drop-shadow-[0_0_12px_rgba(52,211,153,0.4)]'
+                            : 'text-[#f5c358] drop-shadow-[0_0_15px_rgba(245,195,88,0.5)]'
+                        } ${nameSizeClass}`}>
+                          {citizenName}
+                        </div>
+                        
+                        <div className={`font-mono font-black text-slate-300 bg-slate-950/60 border border-slate-800/80 rounded-lg px-4 py-1.5 mx-auto w-fit uppercase tracking-widest ${
+                          isFullscreen ? 'text-lg sm:text-xl lg:text-2xl' : 'text-xs sm:text-sm'
+                        }`}>
+                          N° Cita: <span className="text-amber-400 select-all">{getDisplayAppointmentNumber(activeApp)}</span>
+                        </div>
 
-                          <span className={`text-emerald-400 block font-bold truncate px-1 mt-0.5 ${
-                            isFullscreen ? 'text-sm lg:text-base' : 'text-xs sm:text-sm'
+                        {(activeApp.subServicioNombre || activeApp.categoriaNombre) && (
+                          <div className={`text-slate-300 font-bold uppercase tracking-wide truncate max-w-xs mx-auto px-1 ${
+                            isFullscreen ? 'text-xs sm:text-sm' : 'text-[11px]'
                           }`}>
-                            Agendado por: {activeApp.creadoPor || activeApp.datosPersonales?.creadoPor || 'Portal del Ciudadano'}
-                          </span>
+                            {activeApp.subServicioNombre || activeApp.categoriaNombre}
+                          </div>
+                        )}
 
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {b.receso ? (
-                            <>
-                              <span className={`font-black uppercase tracking-wider block bg-amber-950/80 border border-amber-500/40 text-amber-400 rounded-md mx-auto w-fit animate-pulse ${
-                                isFullscreen ? 'text-sm sm:text-base py-1.5 px-4' : 'text-xs sm:text-sm py-1 px-3'
-                              }`}>
-                                CUBÍCULO EN RECESO ⏸
-                              </span>
-                              <div className={`font-mono font-black text-amber-950/40 tracking-widest select-none py-1 ${
-                                isFullscreen ? 'text-6xl sm:text-7xl lg:text-8xl xl:text-[6.5rem]' : 'text-4xl sm:text-5xl lg:text-6xl'
-                              }`}>
-                                ----
-                              </div>
-                              <p className={`text-amber-500/80 font-extrabold uppercase mt-1 leading-none ${
-                                isFullscreen ? 'text-sm sm:text-base tracking-widest' : 'text-xs sm:text-sm'
-                              }`}>
-                                En Descanso Temporal
-                              </p>
-                            </>
-                          ) : (
-                            <>
-                              <span className={`font-black uppercase tracking-wider block bg-emerald-950/60 border border-emerald-500/30 text-emerald-450 rounded-md mx-auto w-fit ${
-                                isFullscreen ? 'text-sm sm:text-base py-1.5 px-4' : 'text-xs sm:text-sm py-1 px-3'
-                              }`}>
-                                CUBÍCULO DISPONIBLE
-                              </span>
-                              <div className={`font-mono font-black text-slate-700 tracking-widest select-none py-1 ${
-                                isFullscreen ? 'text-6xl sm:text-7xl lg:text-8xl xl:text-[6.5rem]' : 'text-4xl sm:text-5xl lg:text-6xl'
-                              }`}>
-                                ----
-                              </div>
-                              <p className={`text-slate-450 font-extrabold uppercase mt-1 leading-none ${
-                                isFullscreen ? 'text-sm sm:text-base tracking-widest' : 'text-xs sm:text-sm'
-                              }`}>
-                                Esperando Ciudadano
-                              </p>
-                            </>
-                          )}
-                        </div>
-                      )}
+                        <span className={`text-emerald-400 block font-bold truncate px-1 mt-0.5 ${
+                          isFullscreen ? 'text-sm lg:text-base' : 'text-xs sm:text-sm'
+                        }`}>
+                          Agendado por: {activeApp.creadoPor || activeApp.datosPersonales?.creadoPor || 'Portal del Ciudadano'}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Bottom Footer - Queue counts */}
